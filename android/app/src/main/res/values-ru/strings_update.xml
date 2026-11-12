@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="upd_title">Обновления</string>
+    <string name="upd_check_title">Проверять обновления</string>
+    <string name="upd_check_sub">При открытии приложения проверять выпуски HSD на GitHub</string>
+    <string name="upd_status_never">Ещё не проверялось</string>
+    <string name="upd_status_latest">Установлена последняя версия</string>
+    <string name="upd_status_checking">Проверяю…</string>
+    <string name="upd_status_available">Доступна версия %1$s</string>
+    <string name="upd_btn_check">Проверить</string>
+    <string name="upd_btn_update_now">Посмотреть обновление</string>
+    <string name="upd_banner_sub">Нажмите, чтобы посмотреть обновление HSD</string>
+    <string name="upd_later">Позже</string>
+    <string name="upd_download">Скачать APK</string>
+    <string name="upd_open_browser">Скачать %1$s из выпуска HSD на GitHub? Файл будет загружен через браузер.</string>
+    <string name="upd_err_check">Не удалось проверить обновления: %1$s</string>
+    <string name="upd_err_no_release">Нет опубликованных выпусков с APK HSD</string>
+    <string name="upd_no_browser">Нет приложения, которое может открыть ссылку для скачивания</string>
+</resources>

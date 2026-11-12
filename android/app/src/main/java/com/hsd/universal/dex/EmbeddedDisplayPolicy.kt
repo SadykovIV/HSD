@@ -1,0 +1,103 @@
+package com.hsd.universal.dex
+
+/** Limits for the two navigator tiles. Independent of phone display settings and parent geometry. */
+internal object EmbeddedDisplayPolicy {
+    const val MAX_CHILDREN = 2
+    @JvmOverloads fun displayFlags(sdkInt: Int, independentLock: Boolean = false): Int =
+        DesktopModePolicy.displayFlags(DesktopModePolicy.DRIVEDECK, sdkInt, independentLock)
+    private const val LONG_EDGE = com.hsd.universal.shared.DesktopRenderPolicy.LONG_EDGE
+    private const val SHORT_EDGE = com.hsd.universal.shared.DesktopRenderPolicy.SHORT_EDGE
+    const val MAX_DENSITY = 1280
+    // One 2x navigator plus one ordinary tile, even at the full parent dimensions.
+    const val MAX_TOTAL_PIXELS = com.hsd.universal.shared.DesktopRenderPolicy.TILE_PIXEL_BUDGET
+    private val packagePattern = Regex("[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z][a-zA-Z0-9_]*)+")
+    private val classPattern = Regex("\\.?[a-zA-Z_$][a-zA-Z0-9_$]*(\\.[a-zA-Z_$][a-zA-Z0-9_$]*)*")
+
+    fun supportsChildren(mode: Int): Boolean =
+        mode == DesktopModePolicy.ANDROID_DESKTOP || mode == DesktopModePolicy.DRIVEDECK
+
+    /** Tile component launches remain Android Desktop-only; host fullscreen is shared by both profiles. */
+    fun canTrackHostLaunch(mode: Int, fullscreen: Boolean): Boolean =
+        mode == DesktopModePolicy.ANDROID_DESKTOP || (mode == DesktopModePolicy.DRIVEDECK && fullscreen)
+
+    fun requireParent(mode: Int, displayId: Int) {
+        check(displayId > 0 && supportsChildren(mode)) {
+            "Окно доступно только на активном Android Desktop или DriveDeck"
+        }
+    }
+
+    fun requireSize(width: Int, height: Int, density: Int) {
+        requireDimensions(width, height)
+        require(density in 96..MAX_DENSITY) { "Плотность виджета должна быть от 96 до $MAX_DENSITY DPI" }
+    }
+
+    fun requireDimensions(width: Int, height: Int) {
+        require(minOf(width, height) >= 128 && com.hsd.universal.shared.DesktopRenderPolicy.fitsBuffer(width, height)) {
+            "Размер виджета должен быть от 128 пикселей по каждой стороне до ${LONG_EDGE}×${SHORT_EDGE} в любой ориентации"
+        }
+    }
+
+    /** Excludes the tile being resized; admission must precede producer or input changes. */
+    fun requirePixelBudget(otherPixels: Long, width: Int, height: Int, fullscreen: Boolean = false) {
+        requireDimensions(width, height)
+        val budget = if (fullscreen) LONG_EDGE.toLong() * SHORT_EDGE else MAX_TOTAL_PIXELS
+        require(otherPixels in 0..budget && width.toLong() * height <= budget - otherPixels) {
+            "Превышен общий размер встроенных экранов"
+        }
+    }
+
+    fun requireCapacity(existing: Int, fullscreen: Boolean = false) {
+        if (fullscreen) check(existing == 0) { "Полноэкранное окно уже открыто" }
+        else check(existing in 0 until MAX_CHILDREN) { "Одновременно доступны не более двух виджетов" }
+    }
+
+    fun requireChildId(id: Int, parentId: Int) {
+        check(parentId > 0 && id > 0 && id != parentId) { "Виджет не получил собственный дополнительный экран" }
+    }
+
+    fun requirePackage(packageName: String) {
+        require(packagePattern.matches(packageName)) { "Неверный пакет приложения виджета" }
+    }
+
+    fun launchCommand(id: Int, parentId: Int, userId: Int, packageName: String, className: String,
+        desktopPane: Boolean = false): Array<String> {
+        requireChildId(id, parentId)
+        require(userId >= 0)
+        requirePackage(packageName)
+        require(classPattern.matches(className)) { "Неверный компонент приложения виджета" }
+        return arrayOf("/system/bin/am", "start", "--user", userId.toString(), "--display", id.toString(),
+            "--windowingMode", "1", "-f", if (desktopPane) "0x10200000" else "0x34000000", "-a", "android.intent.action.MAIN",
+            "-c", "android.intent.category.LAUNCHER", "-n", "$packageName/$className")
+    }
+}
+
+/** One gesture per tile; malformed/orphaned events cannot become input on another display. */
+internal class EmbeddedTouchState(private val width: Int, private val height: Int) {
+    data class Event(val action: Int, val x: Float, val y: Float)
+    private var pressed = false
+    private var lastX = 0f
+    private var lastY = 0f
+
+    fun events(action: Int, x: Float, y: Float): List<Event> {
+        require(action in 0..3) { "Виджет принимает только одиночное касание" }
+        require(x.isFinite() && y.isFinite() && x >= 0 && y >= 0 && x < width && y < height) {
+            "Координаты за пределами виджета"
+        }
+        val out = ArrayList<Event>(2)
+        if (action == 0) {
+            cancel()?.let(out::add)
+            pressed = true
+        } else if (!pressed) return emptyList()
+        out.add(Event(action, x, y))
+        lastX = x
+        lastY = y
+        if (action == 1 || action == 3) pressed = false
+        return out
+    }
+
+    fun cancel(): Event? {
+        if (!pressed) return null
+        pressed = false
+        return Event(3, lastX, lastY)
+    }
+}

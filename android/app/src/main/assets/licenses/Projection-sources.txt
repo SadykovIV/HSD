@@ -1,0 +1,14 @@
+CarDeck
+Copyright (c) 2026 lizhihua. MIT. See CarDeck-MIT.txt.
+https://github.com/shaonialife/cardeck/tree/503ed3730d5a9365272294b79306cea5fcce115b
+HSD uses and adapts the iAP2 link and framing, AirPlay pairing, binary property list,
+timing, media cryptography and HID descriptor implementations.
+
+Apple Security trust fixtures
+Copyright (c) 2018 Apple Inc. All Rights Reserved. Apple Public Source License 2.0.
+See Apple-APSL-2.0.txt.
+https://github.com/apple-oss-distributions/Security/blob/db15acbe6a7f257a859ad9a3bb86097bfe0679d9/tests/TrustTests/EvaluationTests/iAPTests_data.h
+HSD converted the four public accessory issuer certificates (_iAP1CA, _iAP2CA,
+_root_AACA2 and _v3ca) from DER to PEM in carplay/apple-accessory-ca.pem.
+
+Android Auto transport and message definitions are attributed in AARE-NOTICE.txt.

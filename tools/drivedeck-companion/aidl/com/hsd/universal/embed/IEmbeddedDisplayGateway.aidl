@@ -1,0 +1,34 @@
+package com.hsd.universal.embed;
+
+import android.view.Surface;
+import android.os.Bundle;
+
+/** Signature-protected companion API. Handles never identify arbitrary Android displays. */
+@Descriptor(value="com.headswap.desk.embed.IEmbeddedDisplayGateway")
+interface IEmbeddedDisplayGateway {
+    int version() = 0;
+    int create(in Surface surface, IBinder ownerToken, int parentDisplayId, int width, int height, int density) = 1;
+    void resize(int handle, int width, int height, int density) = 2;
+    boolean launch(int handle, String packageName) = 3;
+    void touch(int handle, int action, float x, float y) = 4;
+    void back(int handle) = 5;
+    /** Returns after the shell producer has released the Surface. */
+    void release(int handle) = 6;
+    /** -1 unknown, 0 absent, 1 present, 2 top, scoped to the handle's selected package. */
+    int taskState(int handle, String packageName) = 7;
+    /** Optional bitmask. Bit 0: bounded child buffers up to 2x size and density.
+     * Bit 3: base geometry up to 1920x1080 / 96..640 DPI; 2x child up to 3840x2160 / 1280 DPI. */
+    int capabilities() = 8;
+    /** Capability bit 1: up to two contacts in acknowledged child buffer coordinates. */
+    void touchPoints(int handle, int action, int actionIndex, in int[] pointerIds, in float[] xs, in float[] ys) = 9;
+    /** Capability bit 2: empty Binder whose death proves this child producer process exited. */
+    IBinder producerLifetime(int handle) = 10;
+    /** Capability bit 4: [session logical DPI, compact map symbols 0 or 1] for the active parent. */
+    int[] desktopRenderConfig(int parentDisplayId) = 11;
+    /** Capability bit 5: [session logical DPI, apply correction 0 or 1] for this exact package. */
+    int[] appRenderConfig(int parentDisplayId, String packageName) = 12;
+    /** Capability bit 6: native notification entry. No text, intents or private display IDs. */
+    Bundle notificationStatus(int parentDisplayId, IBinder ownerToken, boolean visible) = 13;
+    boolean showNotifications(int parentDisplayId) = 14;
+    boolean openNotification(int parentDisplayId, String key, String packageName) = 15;
+}

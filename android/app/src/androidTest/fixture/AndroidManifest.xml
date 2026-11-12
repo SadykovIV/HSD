@@ -1,0 +1,5 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.hsd.universal.fixture">
+    <uses-sdk android:minSdkVersion="33" android:targetSdkVersion="37" />
+    <application android:label="DriveDeck emulator fixture" />
+    <instrumentation android:name="com.hsd.universal.DriveDeckFixture" android:targetPackage="ru.drivedeck.headswap" />
+</manifest>

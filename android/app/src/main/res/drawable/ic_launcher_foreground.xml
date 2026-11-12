@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Preserve the supplied artwork; keep both devices inside adaptive icon masks. -->
+<inset xmlns:android="http://schemas.android.com/apk/res/android" android:inset="22.22%">
+    <bitmap android:src="@drawable/hsd_brand" android:gravity="fill"
+        android:filter="true" android:dither="true" />
+</inset>

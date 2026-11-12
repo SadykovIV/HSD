@@ -1,0 +1,6 @@
+<resources>
+    <usb-accessory manufacturer="Android" model="Android Auto" />
+    <usb-accessory manufacturer="Android" model="Android Open Automotive Protocol" />
+    <usb-accessory manufacturer="Baidu" model="CarLife" />
+    <usb-accessory manufacturer="Mac HU Lab" model="CarLife HU" />
+</resources>

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="upd_title">Updates</string>
+    <string name="upd_check_title">Check for updates</string>
+    <string name="upd_check_sub">Check GitHub for HSD releases when the app opens</string>
+    <string name="upd_status_never">Not checked yet</string>
+    <string name="upd_status_latest">You have the latest version</string>
+    <string name="upd_status_checking">Checking…</string>
+    <string name="upd_status_available">Version %1$s is available</string>
+    <string name="upd_btn_check">Check</string>
+    <string name="upd_btn_update_now">View update</string>
+    <string name="upd_banner_sub">Tap to view the HSD download</string>
+    <string name="upd_later">Later</string>
+    <string name="upd_download">Download APK</string>
+    <string name="upd_open_browser">Download %1$s from the HSD GitHub release? Your browser will handle the download.</string>
+    <string name="upd_err_check">Could not check for updates: %1$s</string>
+    <string name="upd_err_no_release">No published release with an HSD APK was found</string>
+    <string name="upd_no_browser">No app is available to open the download link</string>
+</resources>

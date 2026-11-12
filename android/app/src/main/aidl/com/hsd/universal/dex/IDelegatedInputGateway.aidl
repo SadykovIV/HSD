@@ -1,0 +1,20 @@
+package com.hsd.universal.dex;
+
+import android.view.InputEvent;
+import com.hsd.universal.dex.IVdmDesktopSession;
+
+/** Private capability passed only to HSD's non-exported producer service. */
+interface IDelegatedInputGateway {
+    void registerParent(int displayId, IBinder token, int width, int height);
+    void registerChild(int parentId, int displayId, IBinder token, int width, int height);
+    void resizeDisplay(int displayId, IBinder token, int width, int height);
+    void unregisterDisplay(int displayId, IBinder token);
+    void injectInput(int displayId, IBinder token, in InputEvent event, int actionButton);
+    int childTaskState(int displayId, IBinder token, String packageName);
+    void setPhonePanelOff(int parentId, IBinder token, boolean off);
+    void registerFullscreenChild(int parentId, int displayId, IBinder token, int width, int height);
+    /** Only the IME visibility bit on a registered child: -1 unknown, 0 hidden, 1 shown. */
+    int childImeVisibility(int displayId, IBinder token);
+    /** Protocol 18: one authenticated native display family for this producer generation. */
+    IVdmDesktopSession openVdmSession(IBinder producerLifetime, IBinder parentToken);
+}

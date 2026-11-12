@@ -1,0 +1,38 @@
+# Generated output and local tooling
+**/build/
+.gradle/
+.kotlin/
+.idea/
+.venv/
+__pycache__/
+*.pyc
+*.iml
+.DS_Store
+/local.properties
+**/local.properties
+/dist/
+*.apk
+*.aab
+*.idsig
+*.h264
+*.h265
+
+# Machine-specific signing and pairing material
+.env
+.env.*
+*.properties.local
+*signing.properties
+key.properties
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.pk8
+*.key
+*.pem
+!android/app/src/main/assets/carplay/apple-accessory-ca.pem
+/android/app/src/main/assets/aa/
+
+# Only the small, synthetic diagnostic examples belong in source control.
+*.log
+!tools/logdiag_cases/*.log
