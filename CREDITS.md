@@ -2,8 +2,7 @@
 
 | Project | Contribution to HSD |
 | --- | --- |
-| [HeadSwap Desktop](https://github.com/SadykovIV/headswap_desk) by SadykovIV | Parent project. Desktop projection, DriveDeck integration and phone activation. |
-| [HeadSwap](https://github.com/YegorkaPomidorka/headswap) by YegorkaPomidorka | Original Baidu CarLife bridge and reference head unit. |
+| [HeadSwap](https://github.com/YegorkaPomidorka/headswap) by YegorkaPomidorka | Baidu CarLife implementation and reference head unit. Реализация Baidu CarLife и эталонное головное устройство. |
 | [DriveDeck](https://github.com/RotkivKiv/DriveDeck-Updates) by RotkivKiv | The car launcher. The companion adapts the author's DriveDeck 0.6.9 for use on an external display. |
 | [AARE](https://github.com/prototux/AARE) by prototux and contributors | Android Auto transport and session implementation. |
 | [aasdk](https://github.com/opencardev/aasdk) by Michal Szwaj, f1x.studio and OpenCarDev contributors | Android Auto message definitions. |

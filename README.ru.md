@@ -14,6 +14,8 @@ HSD — развитие **HeadSwap Desktop**. Приложение выводи
 
 ![Два приложения телефона рядом на экране магнитолы в DriveDeck](docs/drivedeck.png)
 
+На схемах показано, как телефон передаёт изображение и звук, как касания возвращаются с магнитолы и где искать реализацию. [Схемы и карта проекта](docs/architecture.ru.md)
+
 ## Как подключиться
 
 1. Для подключения через Android Auto отключите штатное приложение **Android Auto** на телефоне в **Настройки → Приложения → Android Auto**. Это позволит магнитоле открыть HSD.
@@ -24,4 +26,4 @@ HSD — развитие **HeadSwap Desktop**. Приложение выводи
 
 ## Благодарности
 
-Спасибо SadykovIV за HeadSwap Desktop, RotkivKiv за DriveDeck и авторам реализаций CarLife, Android Auto и CarPlay. [Проекты и авторы](CREDITS.md) · [Сборка из исходников](BUILDING.md) · [Лицензия](LICENSE)
+Спасибо YegorkaPomidorka за реализацию Baidu CarLife, RotkivKiv за DriveDeck и разработчикам Android Auto и CarPlay. [Проекты и авторы](CREDITS.md) · [Сборка из исходников](BUILDING.md) · [Лицензия](LICENSE)

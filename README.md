@@ -14,6 +14,8 @@ HSD runs on Android 13 and later. You can also select Android Desktop or, on com
 
 ![DriveDeck displaying two phone apps side by side on a head unit](docs/drivedeck.png)
 
+See how the phone, launcher and head unit exchange video, audio and input. [System diagrams and project map](docs/architecture.md)
+
 ## Connect your phone
 
 1. For an Android Auto connection, disable Google’s **Android Auto** app on your phone under **Settings → Apps → Android Auto** so the head unit can open HSD.
@@ -24,4 +26,4 @@ HSD runs on Android 13 and later. You can also select Android Desktop or, on com
 
 ## Credits
 
-Thanks to SadykovIV for HeadSwap Desktop, RotkivKiv for DriveDeck, and the developers of the original CarLife, Android Auto and CarPlay implementations. [Projects and contributors](CREDITS.md) · [Build from source](BUILDING.md) · [License](LICENSE)
+Thanks to YegorkaPomidorka for the Baidu CarLife implementation, RotkivKiv for DriveDeck, and the Android Auto and CarPlay contributors. [Projects and contributors](CREDITS.md) · [Build from source](BUILDING.md) · [License](LICENSE)

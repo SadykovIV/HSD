@@ -17,4 +17,4 @@ Phone and computer activation use Android’s package-scoped `run-as`, so HSD’
 
 ## Publish a release
 
-Set the version name and increment the version code in `android/app/build.gradle.kts`. Use a tag of the form `vX.Y.Z`. Attach `HSD-X.Y.Z.apk` and the matching `DriveDeck-HSD-X.Y.Z-codeNNN.apk` to the GitHub release using each app’s own version. Keep the release notes to a short paragraph describing the features and one line naming the APKs to install. [0.7.0 release notes](docs/releases/0.7.0.md)
+Set the version name and increment the version code in `android/app/build.gradle.kts`. Use a tag of the form `vX.Y.Z`. Attach exactly two signed APKs, `HSD-X.Y.Z.apk` and `DriveDeck-HSD-X.Y.Z-codeNNN.apk`, using each app’s own version. GitHub supplies the source archives (ZIP and tar.gz) from the tag. Write short release notes in English and Russian and link to the system diagrams. [Release notes](docs/releases/) · [System diagrams and project map](docs/architecture.md)
