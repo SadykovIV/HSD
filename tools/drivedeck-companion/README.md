@@ -1,6 +1,6 @@
 # DriveDeck companion
 
-DriveDeck-HSD 0.7.0 (code349) uses the author’s HeadSwap edition of DriveDeck 0.7.0 (code348). It preserves the embedded renderer, saved layouts and package identity. HSD and HeadSwap Desktop can open separate desktops. Install the companion over the HSD release signed by the same publisher. [Upstream HeadSwap release](https://github.com/RotkivKiv/DriveDeck-Updates/releases/tag/headswap-code348)
+DriveDeck-HSD 0.7.0 (code350) uses the author’s HeadSwap edition of DriveDeck 0.7.0 (code348). It preserves the embedded renderer, saved layouts and package identity. HSD and HeadSwap Desktop can open separate desktops. Install it over code349 to fix the launcher settings and keep your layout. [Upstream HeadSwap release](https://github.com/RotkivKiv/DriveDeck-Updates/releases/tag/headswap-code348)
 
 ## Build
 

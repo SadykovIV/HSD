@@ -117,6 +117,40 @@ for reg in ("v6", "v12"):
     source = once(source, old, new)
 fullscreen.write_text(source)
 
+# The HeadSwap edition omits the rollback card. Its settings layout still tries to
+# distribute four children by position, so opening the dialog adds a null view.
+# Reparent the cards actually built, preserving their order and callbacks.
+def distribute_update_cards(body):
+    lookup = "    iget-object v2, v0, Lru/drivedeck/launcher/N3;->G:Landroid/widget/LinearLayout;"
+    start = body.index(lookup, body.index(":cond_3c\n    iget-object"))
+    # The first card (v1) has its own layout. Remove it before accessing the others.
+    start = body.index(lookup, body.index("->removeView(Landroid/view/View;)V", start))
+    end = body.index("    const/4 v15, 0x0", start)
+    body = once(body, body[start:end], """    iget-object v5, v0, Lru/drivedeck/launcher/N3;->G:Landroid/widget/LinearLayout;
+    invoke-virtual {v5, v14}, Landroid/view/ViewGroup;->getChildAt(I)Landroid/view/View;
+    move-result-object v2
+    invoke-virtual {v5, v2}, Landroid/view/ViewGroup;->removeView(Landroid/view/View;)V
+
+""")
+    start = body.index("    invoke-virtual {v0, v1, v3, v2, v14}, Lru/drivedeck/launcher/N3;->r0", start)
+    end = body.index("    new-instance v2, Lru/drivedeck/launcher/m9;", start)
+    return once(body, body[start:end], """    :hsd_next_update_card
+    invoke-virtual {v5}, Landroid/view/ViewGroup;->getChildCount()I
+    move-result v3
+    if-eqz v3, :hsd_update_cards_done
+    invoke-virtual {v5, v14}, Landroid/view/ViewGroup;->getChildAt(I)Landroid/view/View;
+    move-result-object v3
+    invoke-virtual {v5, v3}, Landroid/view/ViewGroup;->removeView(Landroid/view/View;)V
+    invoke-virtual {v0, v1, v3, v2, v14}, Lru/drivedeck/launcher/N3;->r0(Landroid/widget/LinearLayout;Landroid/view/View;II)V
+    invoke-static {v3}, Lru/drivedeck/launcher/N3;->j(Landroid/view/View;)V
+    goto :hsd_next_update_card
+    :hsd_update_cards_done
+
+""")
+
+settings = launcher / "N3.smali"
+settings.write_text(method(settings.read_text(), "public final b0()V", distribute_update_cards))
+
 # Upstream's app updates use its own signing key. HSD supplies the matching companion.
 updater = launcher / "Y9.smali"
 updater.write_text(method(updater.read_text(),
@@ -156,7 +190,7 @@ for intent_filter in dedicated.findall("intent-filter"):
 app.append(dedicated)
 tree.write(manifest, encoding="utf-8", xml_declaration=True)
 yml = root / "apktool.yml"
-yml.write_text(once(yml.read_text(), "versionCode: 348", "versionCode: 349"))
+yml.write_text(once(yml.read_text(), f"versionCode: {AUTHOR_070.upstream_code}", f"versionCode: {AUTHOR_070.code}"))
 (root.parent / "patch-report.json").write_text(json.dumps({
     "original_sha256": AUTHOR_070.original_sha256, "version_code": AUTHOR_070.code,
     "renderer": "upstream HeadSwap edition", "entry": "ru.drivedeck.launcher.HsdActivity",
