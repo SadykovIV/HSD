@@ -102,7 +102,7 @@ class PhonePairingService : Service() {
                     replyToken = UUID.randomUUID().toString()
                     codeGate = PhonePairingAttemptGate(checkNotNull(replyToken))
                 }
-                startForeground(PROGRESS_ID, progress(status.ifBlank { "Подготовка активации…" }), ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+                startForeground(PROGRESS_ID, progress(status.ifBlank { getString(R.string.desktop_preparing_activation) }), ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
                 if (finished || destroyed) {
                     // A queued START may still reach this instance between finish and onDestroy.
                     // It needs an FGS acknowledgement but cannot reopen a terminal attempt.
@@ -115,19 +115,19 @@ class PhonePairingService : Service() {
                 val forcePair = intent.getBooleanExtra(FORCE_PAIR, false)
                 resumingCommitted = intent.getBooleanExtra(RESUME_COMMITTED, false)
                 if (resumingCommitted && !DelegatedDesktopAccess.isReady(this)) {
-                    finish("Доступ ${DesktopTransport.shortName} завершён. Нажмите «Активировать», чтобы выдать его снова.")
+                    finish(getString(R.string.desktop_access_click_activate_to_give_it_back, DesktopTransport.shortName))
                     return START_NOT_STICKY
                 }
                 val step = DesktopActivationCoordinator.currentStep(this)
                 if (!prefs.useDelegated || ((BridgeService.alive || DexState.running) &&
                     (forcePair || step in setOf(DesktopReadinessPolicy.Step.ACQUIRE_GRANTS,
                         DesktopReadinessPolicy.Step.APPLY_MODE, DesktopReadinessPolicy.Step.RECONFIGURATION_REQUIRED)))) {
-                    finish("Остановите соединение перед изменением активации.")
+                    finish(getString(R.string.desktop_stop_the_connection_before_changing_the_activation))
                     return START_NOT_STICKY
                 }
                 inAppOnly = intent.getBooleanExtra(IN_APP_ONLY, false)
                 if (!inAppOnly && !DesktopActivationCoordinator.isReady(this) && notificationBlock(this, forcePair || !prefs.hasPaired) != null) {
-                    finish("Уведомления активации отключены. Откройте ${DesktopTransport.shortName} и выберите ввод в приложении.")
+                    finish(getString(R.string.desktop_activation_notifications_are_offline_and_select_the_input_in, DesktopTransport.shortName))
                     return START_NOT_STICKY
                 }
                 cancelled = false
@@ -136,7 +136,7 @@ class PhonePairingService : Service() {
                     if (it.activationBinding == PhoneCommittedActivationPolicy.Binding.CURRENT) it.startedElapsedMs else Long.MIN_VALUE
                 }
                 PhoneActivationStatus.clearFinished(this)
-                publish(Phase.CHECKING, "Проверяю готовность ${DesktopTransport.shortName}…")
+                publish(Phase.CHECKING, getString(R.string.desktop_checking_readiness, DesktopTransport.shortName))
                 if (PhonePairingPromptPolicy.offer(DesktopActivationCoordinator.isReady(this), forcePair,
                         step == DesktopReadinessPolicy.Step.RECONFIGURATION_REQUIRED)) {
                     showCode(null, optional = true)
@@ -152,13 +152,13 @@ class PhonePairingService : Service() {
                     token != null && value != null && acceptCode(token, value) -> Unit
                     token != null && value != null && resumeReply(token, value) -> Unit
                     token != null && token == codeGate?.token() && value == null ->
-                        showCode("Нужны ровно 6 цифр из открытого окна сопряжения.", reopen = false)
+                        showCode(getString(R.string.desktop_enter_the_6_digits_from_the_open_pairing_dialog), reopen = false)
                     worker == null || finished || cancelled || destroyed -> {
                         AppLog.i("PHONE notification reply expired: activation attempt no longer active", false)
                         notifications.cancel(CODE_ID)
                         notifyResult(this, if (DesktopActivationCoordinator.isReady(this))
-                            "${DesktopTransport.shortName} уже активирован. Можно подключать ${DesktopTransport.name}."
-                        else "Попытка активации прервалась или истекла. Откройте ${DesktopTransport.shortName} и нажмите «Активировать» ещё раз.")
+                            getString(R.string.desktop_it_s_already_activated, DesktopTransport.shortName, DesktopTransport.name)
+                        else getString(R.string.desktop_attempt_to_activate_interrupted_or_expired_and_press_activate, DesktopTransport.shortName))
                     }
                     else -> {
                         AppLog.i("PHONE notification reply ignored: stale prompt or code already in progress", false)
@@ -192,10 +192,10 @@ class PhonePairingService : Service() {
         codeGate = PhonePairingAttemptGate(saved.attempt, saved.prompt)
         check(codeGate?.offer(token, value) == true)
         try {
-            startForeground(PROGRESS_ID, progress("Продолжаю активацию…"), ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+            startForeground(PROGRESS_ID, progress(getString(R.string.desktop_resuming_activation)), ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
         } catch (_: RuntimeException) {
             codeGate?.cancel()
-            notifyResult(this, "Android остановил службу. Откройте ${DesktopTransport.shortName} и повторите активацию; сохранённое сопряжение осталось.")
+            notifyResult(this, getString(R.string.desktop_android_has_stopped_service_open_up_and_re_activate, DesktopTransport.shortName))
             return false
         }
         active = true
@@ -205,7 +205,7 @@ class PhonePairingService : Service() {
             if (it.activationBinding == PhoneCommittedActivationPolicy.Binding.CURRENT) it.startedElapsedMs else Long.MIN_VALUE
         }
         PhoneActivationStatus.clearFinished(this)
-        publish(Phase.PAIRING, "Код принят. Продолжаю сопряжение…")
+        publish(Phase.PAIRING, getString(R.string.desktop_code_accepted_continuing_pairing))
         notifications.notify(CODE_ID, codeNotification(status, allowReply = false))
         AppLog.i("PHONE notification reply resumed interrupted input", false)
         worker = Thread({ activate(false) }, "${com.hsd.universal.BuildConfig.BRAND}-desk-activation").also { it.start() }
@@ -258,10 +258,10 @@ class PhonePairingService : Service() {
                         try {
                             request.ensureReady({ connection }, ::ensureDiscovery, { stage ->
                                 when (stage) {
-                                    DesktopActivationCoordinator.Stage.CHECKING -> update("Проверяю сохранённый доступ…", Phase.CHECKING)
-                                    DesktopActivationCoordinator.Stage.PREPARING_RECOVERY -> update("Подготавливаю восстановление без Wi-Fi…", Phase.PREPARING_RECOVERY)
-                                    DesktopActivationCoordinator.Stage.RECOVERING_DESKTOP -> update("Подготавливаю рабочий стол…", Phase.RECOVERING_DESKTOP)
-                                    DesktopActivationCoordinator.Stage.DISPATCHED -> update("Включаю доступ. ${DesktopTransport.shortName} сейчас перезапустится…", Phase.DISPATCHED)
+                                    DesktopActivationCoordinator.Stage.CHECKING -> update(getString(R.string.desktop_checking_the_saved_access), Phase.CHECKING)
+                                    DesktopActivationCoordinator.Stage.PREPARING_RECOVERY -> update(getString(R.string.desktop_preparing_recovery_without_wi_fi), Phase.PREPARING_RECOVERY)
+                                    DesktopActivationCoordinator.Stage.RECOVERING_DESKTOP -> update(getString(R.string.desktop_preparing_the_desk), Phase.RECOVERING_DESKTOP)
+                                    DesktopActivationCoordinator.Stage.DISPATCHED -> update(getString(R.string.desktop_enable_access_it_s_about_to_restart, DesktopTransport.shortName), Phase.DISPATCHED)
                                 }
                                 if (stage != DesktopActivationCoordinator.Stage.DISPATCHED) showCode(null, optional = true)
                             }, {
@@ -280,14 +280,14 @@ class PhonePairingService : Service() {
                         val completed = synchronized(attemptLock) {
                             checkActive()
                             if (codeGate?.complete() != true) false else {
-                                check(DesktopActivationCoordinator.isReady(this)) { "Готовность рабочего стола изменилась. Повторите активацию." }
+                                check(DesktopActivationCoordinator.isReady(this)) { getString(R.string.desktop_desktop_readiness_has_changed_reactivate) }
                                 completeCommittedActivation(this, completionReceiptStarted)
                                 true
                             }
                         }
                         if (!completed) continue
                         waitingCode = false
-                        update("${DesktopTransport.shortName} готов к подключению.", Phase.READY)
+                        update(getString(R.string.desktop_ready_to_connect_0a85, DesktopTransport.shortName), Phase.READY)
                         return
                     }
                     val deadline = SystemClock.elapsedRealtime() + PhoneActivationPolicy.DEADLINE_MS
@@ -300,17 +300,17 @@ class PhonePairingService : Service() {
                                             checkActive()
                                             completeCommittedActivation(this, completionReceiptStarted)
                                         }
-                                        update("${DesktopTransport.shortName} готов к подключению.", Phase.READY)
+                                        update(getString(R.string.desktop_ready_to_connect_0a85, DesktopTransport.shortName), Phase.READY)
                                         return
                                     }
-                                    throw DesktopPreparationException("Доступ получен, но рабочий стол ещё не готов. Повторите активацию.")
+                                    throw DesktopPreparationException(getString(R.string.desktop_access_is_available_but_the_desktop_is_not_ready))
                                 }
                                 PhoneActivationStatus.Phase.FAILED -> throw DesktopPreparationException(state.message)
                                 else -> Thread.sleep(250)
                             }
                         }
                     }
-                    throw DesktopPreparationException("Результат запуска пока не подтверждён. Откройте ${DesktopTransport.shortName}.")
+                    throw DesktopPreparationException(getString(R.string.desktop_the_launch_result_has_not_yet_been_confirmed, DesktopTransport.shortName))
                 } catch (error: Exception) {
                     checkActive()
                     // Closing the current request only interrupts its probe. The same worker then pairs.
@@ -319,7 +319,7 @@ class PhonePairingService : Service() {
                         error is DesktopActivationCoordinator.PairingRequired -> pairWithNotification()
                         error is DexAccessException && !dispatched && PhonePairingPromptPolicy.canRetryWithCode(error.reason) ->
                             if (error.reason in setOf(DexAccessReason.AUTHORIZATION_REJECTED, DexAccessReason.PAIR_REJECTED))
-                                pairWithNotification("Сохранённый ключ не принят. Откройте новое окно сопряжения и введите код.")
+                                pairWithNotification(getString(R.string.desktop_the_saved_key_is_not_accepted_open_a_new))
                             else waitForSavedConnectionOrCode()
                         error is DesktopPreparationException && error.canPair && !dispatched ->
                             waitForSavedConnectionOrCode()
@@ -333,7 +333,7 @@ class PhonePairingService : Service() {
             AppLog.i("PHONE notification activation failed: ${DexAccessDiagnostics.safeTrace(error)}")
             failure = when (error) {
                 is DexAccessException, is DesktopPreparationException -> error.message
-                else -> "Не удалось подготовить ${DesktopTransport.shortName}. Проверьте Wi-Fi и беспроводную отладку, затем повторите активацию."
+                else -> getString(R.string.desktop_couldn_t_get_ready_check_wi_fi_and_wireless, DesktopTransport.shortName)
             }
         } finally {
             coordinator = null
@@ -404,7 +404,7 @@ class PhonePairingService : Service() {
             } else savedRetry.markTried(emptyList(), environment)
             Thread.sleep(100)
         }
-        throw DesktopPreparationException("Беспроводная отладка не появилась. Включите её и повторите активацию; сохранённое сопряжение не удалено.")
+        throw DesktopPreparationException(getString(R.string.desktop_wireless_debugging_didn_t_show_up_turn_it_on))
     }
 
     private fun pairWithNotification(initialProblem: String? = null, initialCode: String? = null) {
@@ -413,7 +413,7 @@ class PhonePairingService : Service() {
         var suppliedCode = initialCode
         while (true) {
             checkActive()
-            if (SystemClock.elapsedRealtime() >= deadline) throw DesktopPreparationException("Время ввода кода истекло. Повторите активацию.")
+            if (SystemClock.elapsedRealtime() >= deadline) throw DesktopPreparationException(getString(R.string.desktop_the_code_entry_time_has_expired_reactivate))
             if (suppliedCode == null) {
                 showCode(problem)
                 while (suppliedCode == null && SystemClock.elapsedRealtime() < deadline) {
@@ -427,11 +427,11 @@ class PhonePairingService : Service() {
             suppliedCode = null
             checkActive()
             try {
-                update("Код принят. Ищу открытое окно сопряжения Android…", Phase.PAIRING)
+                update(getString(R.string.desktop_i_m_looking_for_an_open_pairing_window_for), Phase.PAIRING)
                 refreshPairingDiscovery()
                 val endpoint = awaitEndpoint(20_000) { pairing }
                 if (endpoint == null) {
-                    problem = "Окно сопряжения не найдено. Включите Wi-Fi и «Беспроводную отладку», откройте «Подключить устройство с помощью кода» и введите новый код, оставив это окно открытым."
+                    problem = getString(R.string.desktop_no_pairing_window_found_turn_on_wi_fi_and)
                     continue
                 }
                 PairingRequest().use { request ->
@@ -446,7 +446,7 @@ class PhonePairingService : Service() {
                 return
             } catch (e: DexAccessException) {
                 if (!PhonePairingPromptPolicy.canRetryWithCode(e.reason)) throw e
-                problem = "Сопряжение не принято. Откройте новое окно с кодом и повторите."
+                problem = getString(R.string.desktop_open_a_new_code_window_and_repeat)
             } finally { codeGate?.pairingFinished() }
         }
     }
@@ -491,18 +491,18 @@ class PhonePairingService : Service() {
         val blocked = notificationBlock(this, needsCode = true) != null
         if (blocked) inAppOnly = true
         val prompt = if (savedRetryAllowed)
-            "Сохранённое сопряжение не удалено. Включите Wi-Fi и «Беспроводную отладку» — проверка продолжится автоматически. Новый код необязателен; введите его, только если открыли окно нового сопряжения Android."
+            getString(R.string.desktop_the_saved_pairing_is_not_removed_turn_on_wi)
         else if (inAppOnly)
-            "Откройте в беспроводной отладке окно сопряжения. Введите 6 цифр в приложении ${DesktopTransport.shortName}."
-        else "Откройте в беспроводной отладке окно сопряжения. Введите 6 цифр здесь или в уведомлении ${DesktopTransport.shortName}."
-        val message = listOfNotNull(problem, if (blocked) "Уведомление с вводом кода отключено." else null, prompt).joinToString("\n")
+            getString(R.string.desktop_open_the_pairing_window_in_wireless_debugging_enter_6, DesktopTransport.shortName)
+        else getString(R.string.desktop_open_the_pairing_window_in_wireless_debugging_enter_6_e26c, DesktopTransport.shortName)
+        val message = listOfNotNull(problem, if (blocked) getString(R.string.desktop_the_code_entry_notification_is_disabled) else null, prompt).joinToString("\n")
         if (!optional) {
             publish(Phase.WAITING_CODE, message)
             notifications.notify(PROGRESS_ID, progress(status))
         }
         if (inAppOnly) notifications.cancel(CODE_ID) else {
             val token = codeGate?.token() ?: return@postAttempt
-            val text = if (optional) "Сохранённый доступ проверяется автоматически. Если вы уже открыли окно с новым кодом Android, его можно ввести сейчас." else message
+            val text = if (optional) getString(R.string.desktop_saved_access_is_verified_automatically_if_you_have_already) else message
             if (postedPrompt != token || postedPromptMessage != text) {
                 PairingContinuationStore.save(this, checkNotNull(replyToken), token, attemptStarted)
                 notifications.notify(CODE_ID, codeNotification(text))
@@ -520,18 +520,18 @@ class PhonePairingService : Service() {
         }
         // This request owns only verification/recovery. Never interrupt the committed bootstrap.
         AppLog.i("PHONE pairing code accepted for the current attempt", false)
-        postAttempt { if (!inAppOnly) notifications.notify(CODE_ID, codeNotification("Код принят. Подготавливаю сопряжение…", allowReply = false)) }
+        postAttempt { if (!inAppOnly) notifications.notify(CODE_ID, codeNotification(getString(R.string.desktop_code_accepted_preparing_pairing), allowReply = false)) }
         closeOffMain(interrupted)
         return true
     }
     private fun progress(text: String): Notification = Notification.Builder(this, PROGRESS_CHANNEL)
         .setSmallIcon(R.drawable.ic_stat_hsd)
         .setLargeIcon(BrandArtwork.bitmap(resources))
-        .setContentTitle("Активация ${DesktopTransport.appName}")
+        .setContentTitle(getString(R.string.desktop_activate_6a11, DesktopTransport.appName))
         .setContentText(text).setStyle(Notification.BigTextStyle().bigText(text))
         .setContentIntent(openApp(this)).setOnlyAlertOnce(true).setOngoing(true)
         .setVisibility(Notification.VISIBILITY_SECRET)
-        .apply { if (!dispatched) addAction(Notification.Action.Builder(null, "Отменить", serviceAction(CANCEL, 2, false)).build()) }
+        .apply { if (!dispatched) addAction(Notification.Action.Builder(null, getString(R.string.desktop_cancel), serviceAction(CANCEL, 2, false)).build()) }
         .build()
 
     private fun codeNotification(text: String, allowReply: Boolean = true): Notification {
@@ -540,16 +540,16 @@ class PhonePairingService : Service() {
         return Notification.Builder(this, CODE_CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_hsd)
             .setLargeIcon(BrandArtwork.bitmap(resources))
-            .setContentTitle("${DesktopTransport.shortName} · введите код сопряжения")
+            .setContentTitle(getString(R.string.desktop_enter_the_pairing_code, DesktopTransport.shortName))
             .setContentText(text).setStyle(Notification.BigTextStyle().bigText(text))
             .setContentIntent(settings).setOngoing(true).setOnlyAlertOnce(true)
             .setVisibility(Notification.VISIBILITY_SECRET)
             .apply {
                 if (allowReply && promptToken != null) {
-                    val reply = RemoteInput.Builder(CODE).setLabel("6 цифр, например 123456")
+                    val reply = RemoteInput.Builder(CODE).setLabel(getString(R.string.desktop_6_digits_such_as_123456))
                         .setAllowFreeFormInput(true).build()
                     addAction(Notification.Action.Builder(Icon.createWithResource(this@PhonePairingService, android.R.drawable.ic_menu_edit),
-                        "Ввести 6 цифр", serviceAction(REPLY, 1, true, promptToken)).addRemoteInput(reply)
+                        getString(R.string.desktop_enter_6_digits), serviceAction(REPLY, 1, true, promptToken)).addRemoteInput(reply)
                         .setAllowGeneratedReplies(false).setAuthenticationRequired(true).build())
                 }
             }.build()
@@ -569,13 +569,13 @@ class PhonePairingService : Service() {
         active = false
         val cancelledMessage = if (cancelled) when (IndependentRecoveryAccess.snapshot(this).kind) {
             IndependentRecoveryAccess.Kind.PENDING, IndependentRecoveryAccess.Kind.RESTORE_REQUIRED ->
-                "Подготовка остановлена. Настройка отладки не завершена; в разделе «Активация» выберите «Исправить настройку активации»."
+                getString(R.string.desktop_preparation_stopped_debugging_setup_is_incomplete_in_activation_select)
             IndependentRecoveryAccess.Kind.OWNED, IndependentRecoveryAccess.Kind.REUSED ->
-                "Подготовка остановлена. Режим восстановления без Wi-Fi сохранён; активацию можно повторить."
-            IndependentRecoveryAccess.Kind.DISABLED -> "Подготовка отменена."
+                getString(R.string.desktop_preparation_stopped_recovery_mode_without_wi_fi_saved_activation)
+            IndependentRecoveryAccess.Kind.DISABLED -> getString(R.string.desktop_preparations_are_cancelled)
         } else null
         publish(if (cancelled) Phase.CANCELLED else if (failure != null) Phase.FAILED else Phase.READY,
-            cancelledMessage ?: failure ?: "${DesktopTransport.shortName} готов к подключению.")
+            cancelledMessage ?: failure ?: getString(R.string.desktop_ready_to_connect_0a85, DesktopTransport.shortName))
         codeGate?.cancel()
         waitingCode = false
         notifications.cancel(CODE_ID)
@@ -676,14 +676,14 @@ class PhonePairingService : Service() {
                 context.startForegroundService(Intent(context, PhonePairingService::class.java).setAction(START)
                     .putExtra(IN_APP_ONLY, true).putExtra(RESUME_COMMITTED, true)) != null
             } catch (_: Exception) {
-                status = "Не удалось продолжить проверку рабочего стола. Нажмите «Активировать»."
+                status = context.getString(R.string.desktop_couldn_t_continue_checking_the_desktop_click_activate)
                 snapshot = Snapshot(Phase.FAILED, status, null, true)
                 false
             }
         }
         fun start(context: Context, forcePair: Boolean = false, allowWithoutNotification: Boolean = false): android.content.ComponentName? {
             if (!allowWithoutNotification && !DesktopActivationCoordinator.isReady(context) && notificationBlock(context, forcePair || !DexPrefs(context).hasPaired) != null) {
-                status = "Уведомления активации отключены. Откройте ${DesktopTransport.shortName} и выберите ручной ввод или настройку уведомлений."
+                status = context.getString(R.string.desktop_activation_notifications_are_offline_and_select_manually_entering_or, DesktopTransport.shortName)
                 return null
             }
             return context.startForegroundService(
@@ -704,8 +704,8 @@ class PhonePairingService : Service() {
                 .putExtra(Settings.EXTRA_CHANNEL_ID, if (block == PairingNotificationBlock.CODE_CHANNEL) CODE_CHANNEL else PROGRESS_CHANNEL)
         private fun createChannels(context: Context) {
             val manager = context.getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(NotificationChannel(PROGRESS_CHANNEL, "Активация ${DesktopTransport.shortName}", NotificationManager.IMPORTANCE_LOW))
-            manager.createNotificationChannel(NotificationChannel(CODE_CHANNEL, "Ввод кода сопряжения", NotificationManager.IMPORTANCE_HIGH))
+            manager.createNotificationChannel(NotificationChannel(PROGRESS_CHANNEL, context.getString(R.string.desktop_activate_6a11, DesktopTransport.shortName), NotificationManager.IMPORTANCE_LOW))
+            manager.createNotificationChannel(NotificationChannel(CODE_CHANNEL, context.getString(R.string.desktop_enter_pairing_code), NotificationManager.IMPORTANCE_HIGH))
         }
         private fun openApp(context: Context) = PendingIntent.getActivity(context, 7,
             Intent(context, DexSetupActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE)
@@ -724,7 +724,7 @@ class PhonePairingService : Service() {
             if (manager.activeNotifications.none { it.id in setOf(PROGRESS_ID, CODE_ID) }) return
             manager.cancel(PROGRESS_ID)
             manager.cancel(CODE_ID)
-            notifyResult(context, "Доступ активен. Можно подключать ${DesktopTransport.name}.")
+            notifyResult(context, context.getString(R.string.desktop_access_is_active_we_can_plug_in, DesktopTransport.name))
         }
     }
 }

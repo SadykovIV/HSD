@@ -25,7 +25,7 @@ internal class DelegatedDesktopRuntime(private val context: Context, private val
 
     override fun createDisplay(surface: Surface, width: Int, height: Int, density: Int, mode: Int,
         producerLifetime: IBinder, sessionToken: IBinder): OwnedDesktopDisplay {
-        DelegatedDesktopPolicy.requireMode(mode)
+        DesktopModePolicy.requireMode(mode)
         val name = DesktopModePolicy.displayName(mode)
         val flags = DesktopModePolicy.displayFlags(mode, Build.VERSION.SDK_INT, independentLock)
         if (DesktopDisplayBackendPolicy.requiresVdm(Build.VERSION.SDK_INT, mode)) {
@@ -90,7 +90,8 @@ internal class DelegatedDesktopRuntime(private val context: Context, private val
 
     override fun launchDesktop(mode: Int, id: Int) {
         val component = DelegatedDesktopPolicy.desktopComponent(mode, id, context.packageName)
-        launch(id, ComponentName(component.packageName, component.className), component.ownActivity, requireLauncher = false)
+        launch(id, ComponentName(component.packageName, component.className), component.ownActivity, requireLauncher = false,
+            secondaryHome = mode == DesktopModePolicy.SAMSUNG_DEX)
     }
 
     override fun launchChild(parentId: Int, id: Int, packageName: String, className: String, desktopPane: Boolean) {
@@ -100,7 +101,8 @@ internal class DelegatedDesktopRuntime(private val context: Context, private val
         launch(id, ComponentName(packageName, fullClassName), ownActivity = false, requireLauncher = true, desktopPane = desktopPane)
     }
 
-    private fun launch(id: Int, component: ComponentName, ownActivity: Boolean, requireLauncher: Boolean, desktopPane: Boolean = false) {
+    private fun launch(id: Int, component: ComponentName, ownActivity: Boolean, requireLauncher: Boolean, desktopPane: Boolean = false,
+                      secondaryHome: Boolean = false) {
         require(id > 0) { "Запуск на основном экране запрещён" }
         val pm = context.packageManager
         val info = pm.getActivityInfo(component, 0)
@@ -120,6 +122,7 @@ internal class DelegatedDesktopRuntime(private val context: Context, private val
         val taskFlags = if (desktopPane) Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED
             else Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
         val intent = Intent(Intent.ACTION_MAIN).setComponent(component).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or taskFlags)
+        if (secondaryHome) intent.addCategory(Intent.CATEGORY_SECONDARY_HOME)
         if (!requireLauncher && component.packageName == DesktopModePolicy.DRIVEDECK_PACKAGE) {
             intent.putExtra(ProjectionHost.PACKAGE, context.packageName).putExtra(ProjectionHost.DISPLAY, id)
         }

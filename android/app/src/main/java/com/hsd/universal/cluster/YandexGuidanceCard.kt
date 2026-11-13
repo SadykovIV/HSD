@@ -27,10 +27,10 @@ internal class YandexGuidanceCard(private val context: Context) {
         @Suppress("DEPRECATION")
         val cards = listOfNotNull(note.bigContentView, note.contentView, note.headsUpContentView)
         val guidance = cards.filter { it.`package` == pkg && knownLayout(entry(app, it.layoutId)) }
-        for (card in guidance) {
-            val parsed = runCatching { custom(app, card, smallTurn, includeRoad) }.getOrNull()
-            if (parsed != null) return parsed
+        val variants = guidance.asSequence().mapNotNull { card ->
+            runCatching { custom(app, card, smallTurn, includeRoad) }.getOrNull()
         }
+        NavigationHintParser.fromCardVariants(variants, includeRoad)?.let { return it }
         if (guidance.isEmpty() && note.category != Notification.CATEGORY_NAVIGATION &&
             !note.channelId.orEmpty().contains("guidance", ignoreCase = true)) return null
         val title = note.extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()

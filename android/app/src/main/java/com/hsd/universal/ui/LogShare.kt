@@ -248,7 +248,7 @@ object LogShare {
             appendLine("  метаданные: музыка ${aa.metaMusic}, навигация ${aa.metaNavi}, поле 6 NAVI_NEXT_TURN_INFO: ${aa.naviField6}, прогресс в ${if (aa.progressSeconds) "с" else "мс"}")
             appendLine()
             appendLine("Данные ГУ и состояние")
-            appendLine(CarLifeState.summary())
+            appendLine(CarLifeState.summary(ctx))
             appendLine(AaState.summary())
             appendLine()
             appendLine("Беспровод")

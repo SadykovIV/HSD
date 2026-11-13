@@ -2,10 +2,10 @@ package com.hsd.universal.dex
 
 /** A ready access grant or a running helper alone is not a connected CarLife desktop. */
 internal object DesktopConnectionButtonPolicy {
-    enum class State(val label: String, val stopsSession: Boolean) {
-        IDLE("Подключить", false),
-        CONNECTING("Остановить ожидание", true),
-        CONNECTED("Отключить", true),
+    enum class State(val labelRes: Int, val stopsSession: Boolean) {
+        IDLE(com.hsd.universal.R.string.desktop_connect, false),
+        CONNECTING(com.hsd.universal.R.string.projection_stop_waiting, true),
+        CONNECTED(com.hsd.universal.R.string.projection_disconnect, true),
     }
 
     fun state(stopped: Boolean, detached: Boolean, serviceAlive: Boolean,

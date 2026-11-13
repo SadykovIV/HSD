@@ -1,9 +1,9 @@
 package com.hsd.universal.dex
 
 /** Only used while the desktop is actively delivered to CarLife. */
-internal enum class PhoneIdleTimeout(val label: String) {
-    TEN_SECONDS("10 секунд"),
-    SYSTEM("Как в телефоне");
+internal enum class PhoneIdleTimeout(val labelRes: Int) {
+    TEN_SECONDS(com.hsd.universal.R.string.phone_seconds_ten),
+    SYSTEM(com.hsd.universal.R.string.phone_system_timeout);
 
     fun effectiveMs(systemTimeoutMs: Long): Long = when (this) {
         TEN_SECONDS -> 10_000L

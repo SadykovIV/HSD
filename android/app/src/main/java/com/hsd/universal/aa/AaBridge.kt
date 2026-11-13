@@ -329,6 +329,12 @@ class AaBridgeCore(
     // --- звук AA -> CarLife ---
     /** Переключатель UI «Звук по USB». */
     @Volatile var usbAudioEnabled = true
+        @Synchronized set(value) {
+            if (field == value) return
+            val wasCarLifeAudio = audioViaUsb
+            field = value
+            if (wasCarLifeAudio != audioViaUsb) onAudioRouteChanged()
+        }
 
     /** Ждать ли FEATURE_CONFIG ГУ перед подключением к AA (чтобы решить, объявлять ли аудио-синки). */
     @Volatile var expectFeatureConfig = false
@@ -458,9 +464,6 @@ class AaBridgeCore(
     /** MEDIA инициализирован на ГУ и играет (для ответа на MODULE_CONTROL MUSIC). */
     val isMediaInited: Boolean @Synchronized get() = audioInited[CarlifeAudio.CH_MEDIA] == true
 
-    /** Ответ на MODULE_CONTROL MUSIC: звук по USB - по MEDIA INIT, иначе по состоянию плеера AA (ch9). */
-    val musicActive: Boolean @Synchronized get() = isMediaInited || (!audioViaUsb && meta.playing)
-
     // --- метаданные AA (ch9/ch10) -> CarLife MEDIA_INFO / PROGRESS / NAVI_NEXT_TURN_INFO ---
     private val meta = MetaRelay(
         log = log,
@@ -548,6 +551,8 @@ class AaBridgeCore(
         active = Source.PLACEHOLDER
         carlifeStarted = false
         carlifePaused = false
+        btAudio = false
+        featureConfigSeen = false
         exitPending = false
         huPausedAa = false
         callPausedAa = false
@@ -660,6 +665,8 @@ class AaBridgeCore(
      */
     @Synchronized
     fun onCarlifeMusicControl(status: Int?): Boolean {
+        // MUSIC controls the CarLife input. The same phone player can be audible on another input.
+        if (!audioViaUsb) return false
         if (HU_MUSIC_FOLLOW_ENABLED && status == 0 && carlifeStarted) {
             val p = peer
             if (meta.playing && !huPausedAa && p != null) {
@@ -689,7 +696,7 @@ class AaBridgeCore(
             }
             if (now - lastHuResumeMs < HU_RESUME_ANSWER_MS) return true   // пачка MUSIC=1, пока AA раскачивается
         }
-        return musicActive
+        return isMediaInited
     }
 
     private fun sendPauseKey(p: AaPeer) {
@@ -790,14 +797,13 @@ class AaBridgeCore(
     }
 
     /** FEATURE_CONFIG ГУ разобран; mode = значение AUDIO_TRANSMISSION_MODE (null - ключа нет). */
-    fun onHuFeatureConfig(audioTransmissionMode: Int?) {
+    @Synchronized fun onHuFeatureConfig(audioTransmissionMode: Int?) {
+        val wasCarLifeAudio = audioViaUsb
+        if (audioTransmissionMode != null) btAudio = audioTransmissionMode == CarlifeAudio.AUDIO_MODE_BT
+        if (wasCarLifeAudio != audioViaUsb) onAudioRouteChanged()
         featureConfigSeen = true
-        if (audioTransmissionMode == CarlifeAudio.AUDIO_MODE_BT) {
-            btAudio = true
-            log("BRIDGE !!!!!! ГУ: AUDIO_TRANSMISSION_MODE=1 (звук по Bluetooth). Звук по USB НЕ шлю, AA-звук остаётся на телефоне (синки MEDIA/SPEECH не объявляю)", true)
-        } else {
-            log("BRIDGE AUDIO_TRANSMISSION_MODE=${audioTransmissionMode ?: "нет в списке"}: звук по USB ${if (usbAudioEnabled) "включён" else "выключен в UI"}", true)
-        }
+        val route = if (btAudio) "Bluetooth по запросу ГУ" else if (audioViaUsb) "CarLife" else "внешний источник"
+        log("BRIDGE AUDIO_TRANSMISSION_MODE=${audioTransmissionMode ?: "нет в списке"}, звук: $route", true)
     }
 
     /**
@@ -1193,16 +1199,20 @@ class AaBridgeCore(
             val (ax, ay) = mode.mapTouch(f.x, f.y)
             TouchPoint(f.id, ax, ay)
         }
-        val ui = act != AapMessages.TOUCH_MOVE
+        if (act == AapMessages.TOUCH_MOVE) {
+            // MOVE can arrive at trackpad sampling rate. The input diagnostics already aggregate it.
+            p.sendTouch(act, index, points)
+            return
+        }
         if (points.size == 1) {
             val f = fingers[0]
             val a = points[0]
-            if (a.x == f.x && a.y == f.y) log("BRIDGE тач $name ${f.x},${f.y} -> AA", ui)
-            else log("BRIDGE тач $name ГУ ${f.x},${f.y} -> AA ${a.x},${a.y} (${mode.label})", ui)
+            if (a.x == f.x && a.y == f.y) log("BRIDGE тач $name ${f.x},${f.y} -> AA", true)
+            else log("BRIDGE тач $name ГУ ${f.x},${f.y} -> AA ${a.x},${a.y} (${mode.label})", true)
         } else {
             val gu = fingers.joinToString(" ") { "#${it.id} ${it.x},${it.y}" }
             val aa = points.joinToString(" ") { "#${it.id} ${it.x},${it.y}" }
-            log("BRIDGE тач $name[$index] пальцев ${points.size}: ГУ $gu -> AA $aa (${mode.label})", ui)
+            log("BRIDGE тач $name[$index] пальцев ${points.size}: ГУ $gu -> AA $aa (${mode.label})", true)
         }
         p.sendTouch(act, index, points)
     }
@@ -1321,6 +1331,7 @@ class AaBridgeCore(
 
     @Synchronized
     override fun onAudioStart(chan: Int) {
+        if (!audioViaUsb) return
         log("BRIDGE AA audio START ch$chan (${AapMessages.channelName(chan)}) -> CarLife ${carlifeChannel(chan)?.let { chName(it) } ?: "не пересылается"}", true)
         if (carlifeChannel(chan) == CarlifeAudio.CH_MEDIA) releaseHuPause("AA MEDIA START")
         if (carlifeChannel(chan) == CarlifeAudio.CH_TTS) ttsPendingStop = false
@@ -1660,6 +1671,7 @@ class AaBridgeCore(
 
     /** Ядро [muteMediaOnCall]: звонок уже признан; хвост MEDIA_DATA из очереди USB выбрасываем, пока он не забил ГУ. */
     private fun muteMedia(call: PhoneCall, why: String) {
+        if (!audioViaUsb) return
         huPausedAa = true
         callPausedAa = true
         resumeOnHuMusic = false
@@ -1723,16 +1735,27 @@ class AaBridgeCore(
         if (MODULE_MUSIC_ENABLED) link.sendModuleStatus(CarlifeAudio.MODULE_MUSIC, status)
     }
 
-    /** Плеер AA сменил состояние (ch9). MUSIC по нему - только когда звук не по USB: иначе им владеет MEDIA INIT/PAUSE. */
+    /** MEDIA INIT/PAUSE/STOP own MUSIC. Player notifications alone do not select a head-unit input. */
     private fun musicByState(playing: Boolean) {
+        if (!audioViaUsb) return
         if (playing) releaseHuPause("AA заиграл")
         else {
             log("BRIDGE AA плеер остановился: наш KEYCODE $KEYCODE_MEDIA_PAUSE ${ago(lastPauseKeyMs)}, ввод пользователя ${ago(lastUserInputMs)}, BT HFP ${ago(lastHfpConnectMs)}", true)
             muteMediaOnCall("плеер AA остановился")
         }
-        if (audioViaUsb || !MODULE_MUSIC_ENABLED || !carlifeStarted) return
-        if (link.sendModuleStatus(CarlifeAudio.MODULE_MUSIC, if (playing) 1 else 0)) {
-            log("BRIDGE CarLife MODULE_STATUS MUSIC=${if (playing) 1 else 0} (плеер AA, звук не по USB)", true)
+    }
+
+    private fun onAudioRouteChanged() {
+        huPausedAa = false
+        callPausedAa = false
+        resumeOnHuMusic = false
+        lastHuResumeMs = NEVER
+        if (!carlifeStarted) return
+        if (audioViaUsb) {
+            meta.replayActiveMusic("звук вернулся в CarLife")
+        } else {
+            link.dropQueuedMedia()
+            stopAllAudio("внешний источник звука")
         }
     }
 
@@ -1814,6 +1837,7 @@ class AaBridgeCore(
     }
 
     private fun stopAllAudio(why: String) {
+        dropTtsPending()
         ttsStopTimer.cancel()
         mediaReleaseTimer.cancel()
         voiceExitTimer.cancel()
@@ -1823,6 +1847,11 @@ class AaBridgeCore(
         if (audioInited.values.any { it } || mediaPaused) log("BRIDGE останавливаю звук CarLife: $why", true)
         stopAudio(CarlifeAudio.CH_MEDIA)
         stopAudio(CarlifeAudio.CH_TTS)
+        if (vrReply) {
+            vrReply = false
+            link.sendAudio(CarlifeAudio.CH_VR, CarlifeAudio.VR_STOP, ByteArray(0))
+            vrModuleOff(why)
+        }
         ttsNaviHeld = false
         if (naviSent && !routeNaviHeld) {
             naviSent = false
@@ -1851,7 +1880,7 @@ class AaBridgeCore(
     override fun onNavDistance(d: AaNavDistance) = meta.onNavDistance(d)
 
     @Synchronized fun onMusicSourceSelected(from: CarlifeLink) {
-        if (link === from && huHonda && carlifeStarted) meta.replayActiveMusic()
+        if (link === from && huHonda && carlifeStarted && audioViaUsb) meta.replayActiveMusic("выбор музыки на Honda")
     }
 
     @Synchronized fun onDesktopMedia(from: CarlifeLink, status: AaMediaStatus?, metadata: AaMediaMetadata?) {

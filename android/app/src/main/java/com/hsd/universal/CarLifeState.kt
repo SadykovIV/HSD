@@ -1,11 +1,17 @@
 package com.hsd.universal
 
+import android.content.Context
 import com.hsd.universal.aa.AaDensity
 import com.hsd.universal.aa.VideoGeometry
 
 /** Состояние для экрана; пишут сервис и сессия, читает activity (один процесс). */
 object CarLifeState {
-    @Volatile var status: String = "не запущено"
+    @Volatile private var statusText: (Context) -> String = { it.getString(R.string.projection_idle) }
+    fun status(context: Context): String = statusText(context)
+    fun setStatus(message: String) { statusText = { message } }
+    fun setStatus(resource: Int, vararg arguments: Any) {
+        statusText = { context -> context.getString(resource, *arguments) }
+    }
     @Volatile var accessory: String = "-"
     @Volatile var protocol: String = "-"
     @Volatile var auth: String = "-"
@@ -41,7 +47,7 @@ object CarLifeState {
         touch = "-"
     }
 
-    fun summary(): String =
-        "статус: $status\nаксессуар: $accessory\nпротокол: $protocol\nauth: $auth\nвидео: $video\nтач: $touch" +
-            (wireless?.let { "\nбеспровод: $it" } ?: "")
+    fun summary(context: Context): String =
+        context.getString(R.string.projection_diagnostics, status(context), accessory, protocol, auth, video, touch) +
+            (wireless?.let { "\n" + context.getString(R.string.projection_wireless_diagnostics, it) } ?: "")
 }

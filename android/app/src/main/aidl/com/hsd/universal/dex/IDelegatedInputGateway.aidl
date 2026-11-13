@@ -17,4 +17,5 @@ interface IDelegatedInputGateway {
     int childImeVisibility(int displayId, IBinder token);
     /** Protocol 18: one authenticated native display family for this producer generation. */
     IVdmDesktopSession openVdmSession(IBinder producerLifetime, IBinder parentToken);
+    void configureSamsungDesktop(int displayId, IBinder parentToken);
 }

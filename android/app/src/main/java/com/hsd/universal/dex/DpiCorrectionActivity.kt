@@ -1,5 +1,6 @@
 package com.hsd.universal.dex
 
+import com.hsd.universal.R
 import com.hsd.universal.DesktopTransport
 
 import android.app.Activity
@@ -38,16 +39,16 @@ class DpiCorrectionActivity : Activity() {
             setPadding(ui.dp(16), ui.dp(16), ui.dp(16), ui.dp(24))
         }
         setContentView(ScrollView(this).apply { setBackgroundColor(ui.background); addView(page) })
-        ui.button(page, "Назад") { finish() }
-        ui.text(page, "Исправить DPI приложения", 23f, true)
+        ui.button(page, getString(R.string.set_back)) { finish() }
+        ui.text(page, getString(R.string.desktop_adjust_app_dpi), 23f, true)
         val settings = ui.section(page)
-        val correction = ui.toggle(settings, "Включить исправление DPI", prefs.compactMapSymbols) { prefs.compactMapSymbols = it }
-        ui.help(correction.row, "Включить исправление DPI") {
-            "Для приложений в списке ${DesktopTransport.shortName} увеличивает внутреннее разрешение и выводит изображение в исходном размере окна ГУ. Выбор применяется при следующем подключении Android Desktop или DriveDeck."
+        val correction = ui.toggle(settings, getString(R.string.desktop_enable_dpi_adjustment), prefs.compactMapSymbols) { prefs.compactMapSymbols = it }
+        ui.help(correction.row, getString(R.string.desktop_enable_dpi_adjustment)) {
+            getString(R.string.desktop_for_applications_on_the_list_increases_the_internal_resolution, DesktopTransport.shortName)
         }
-        val apps = ui.section(page, "Приложения")
+        val apps = ui.section(page, getString(R.string.desktop_apps))
         rows = ui.group(apps)
-        add = ui.button(apps, "Добавить приложение") { chooseApp() }
+        add = ui.button(apps, getString(R.string.desktop_add_app)) { chooseApp() }
         renderRows()
     }
 
@@ -75,15 +76,15 @@ class DpiCorrectionActivity : Activity() {
     override fun onDestroy() { loader.shutdownNow(); super.onDestroy() }
 
     private fun label(pkg: String): String = installed[pkg] ?: when (pkg) {
-        "ru.yandex.yandexmaps" -> "Яндекс Карты"
-        "ru.yandex.yandexnavi" -> "Яндекс Навигатор"
+        "ru.yandex.yandexmaps" -> getString(R.string.desktop_yandex_maps)
+        "ru.yandex.yandexnavi" -> getString(R.string.desktop_yandex_navigator)
         else -> pkg
     }
 
     private fun renderRows() {
         rows.removeAllViews()
         val selected = prefs.dpiCorrectionPackages
-        if (selected.isEmpty()) ui.text(rows, "Список пуст. Добавьте приложение для коррекции DPI.")
+        if (selected.isEmpty()) ui.text(rows, getString(R.string.desktop_the_list_is_blank_add_the_dpi_correction_app))
         for (pkg in selected.sortedBy(::label)) {
             val row = LinearLayout(this).apply {
                 gravity = Gravity.CENTER_VERTICAL
@@ -98,7 +99,7 @@ class DpiCorrectionActivity : Activity() {
             ui.text(labels, label(pkg), 16f, true)
             ui.text(labels, pkg, 12f)
             row.addView(ImageButton(this).apply {
-                contentDescription = "Убрать ${label(pkg)} из списка"
+                contentDescription = getString(R.string.desktop_remove_from_the_list, label(pkg))
                 setImageResource(android.R.drawable.ic_menu_delete)
                 setOnClickListener {
                     prefs.dpiCorrectionPackages = prefs.dpiCorrectionPackages - pkg
@@ -111,9 +112,9 @@ class DpiCorrectionActivity : Activity() {
     private fun chooseApp() {
         val available = installed.keys.filterNot(prefs.dpiCorrectionPackages::contains)
         val content = ui.column().apply { setPadding(ui.dp(16), 0, ui.dp(16), 0) }
-        val search = EditText(this).apply { hint = "Поиск по названию или пакету"; setSingleLine(true) }
+        val search = EditText(this).apply { hint = getString(R.string.desktop_search_by_app_or_package_name); setSingleLine(true) }
         val list = ListView(this)
-        val empty = android.widget.TextView(this).apply { text = "Приложения не найдены"; gravity = Gravity.CENTER }
+        val empty = android.widget.TextView(this).apply { text = getString(R.string.desktop_no_apps_found); gravity = Gravity.CENTER }
         content.addView(search)
         content.addView(list, LinearLayout.LayoutParams(-1, ui.dp(280)))
         content.addView(empty)
@@ -133,8 +134,8 @@ class DpiCorrectionActivity : Activity() {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
         })
-        val dialog = AlertDialog.Builder(this).setTitle("Добавить приложение").setView(content)
-            .setNegativeButton("Отмена", null).create()
+        val dialog = AlertDialog.Builder(this).setTitle(getString(R.string.desktop_add_app)).setView(content)
+            .setNegativeButton(getString(R.string.mock_cancel), null).create()
         list.setOnItemClickListener { _, _, position, _ ->
             prefs.dpiCorrectionPackages = prefs.dpiCorrectionPackages + visible[position]
             renderRows()

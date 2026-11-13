@@ -19,7 +19,7 @@ class DesktopAvTimelineTest {
         written(400_000, true)
         now += 40_000; written(405_000, false)
     }
-    @Test fun stalledVideoCannotReplayAnOldGopOrLetPcmRunAhead() {
+    @Test fun aStalledVideoWriterCannotMuteOrReplayLiveAudio() {
         var now = 1_000_000L
         val heard = mutableListOf<Int>()
         val t = DesktopAvTimeline({ now }) { _, bytes, ttl -> assertTrue(ttl > 0); heard += bytes[0].toInt() }
@@ -29,7 +29,7 @@ class DesktopAvTimelineTest {
         assertTrue(blocked.begin())
         val waiting = t.frame(now, false, 30)!!
         repeat(60) { now += 20_000; t.pcm(3, byteArrayOf(it.toByte()), now) }
-        assertTrue(heard.all { it < 2 })
+        assertEquals((0 until 60).toList(), heard)
         blocked.written()
         assertFalse(waiting.begin())
         assertNull(t.frame(now, false, 30))
@@ -38,7 +38,7 @@ class DesktopAvTimelineTest {
         now += 10_000
         assertTrue(idr.begin()) // even a fragmented access unit makes one admission decision
         idr.written()
-        assertTrue(heard.last() >= 58 && heard.none { it in 2..49 })
+        assertEquals((0 until 60).toList(), heard)
         assertTrue(t.frame(now, false, 30)!!.begin())
     }
     @Test fun steadyStreamUsesMeasuredVideoLatencyAndStaticPictureDoesNotMuteMusic() {
@@ -69,6 +69,21 @@ class DesktopAvTimelineTest {
         assertTrue(heard.isEmpty()); t.pcm(3, byteArrayOf(75), now); assertEquals(listOf(0), heard)
         trim = 0; now += 20_000
         t.pcm(3, byteArrayOf(76), now); assertEquals(listOf(0, 76), heard)
+    }
+    @Test fun audioDeadlineFiresWithNoFurtherPictureOrCaptureBlock() {
+        var now = 1_000_000L
+        val sent = mutableListOf<Int>()
+        val timeline = DesktopAvTimeline({ now }, { 100 }) { _, bytes, _ -> sent += bytes[0].toInt() }
+        timeline.reset(true)
+        timeline.frame(now, true, 30)!!.apply { assertTrue(begin()); written() }
+        timeline.pcm(3, byteArrayOf(7), now)
+        now += 99_000
+        timeline.drainDueAudio()
+        assertTrue(sent.isEmpty())
+        now += 1_000
+        timeline.drainDueAudio()
+        timeline.drainDueAudio()
+        assertEquals(listOf(7), sent)
     }
     @Test fun pauseAndReplacementCancelOldFragmentsAndPcm() {
         var now = 1_000_000L; val sent = mutableListOf<Int>()

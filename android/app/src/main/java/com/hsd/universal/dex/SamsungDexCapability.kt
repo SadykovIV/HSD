@@ -5,7 +5,7 @@ import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.os.Build
 
-/** Shows the existing Shizuku profile only; this does not authorize or launch DeX. */
+/** A native desktop profile requires the system's exported secondary launcher. */
 object SamsungDexCapability {
     fun isAvailable(context: Context): Boolean = runCatching {
         val pm = context.packageManager
@@ -16,7 +16,7 @@ object SamsungDexCapability {
             pm.hasSystemFeature("com.sec.feature.desktopmode") || context.getSystemService("desktopmode") != null,
             pm.hasSystemFeature("android.software.freeform_window_management"),
             pm.hasSystemFeature("android.software.activities_on_secondary_displays"))
-        val info = pm.getActivityInfo(ComponentName("com.sec.android.app.launcher", "com.honeyspace.dexservice.SecondaryLauncher"), 0)
+        val info = pm.getActivityInfo(ComponentName(DesktopModePolicy.SAMSUNG_PACKAGE, DesktopModePolicy.SAMSUNG_HOME_CLASS), 0)
         SamsungDexCapabilityPolicy.available(samsung, feature, info.enabled && info.applicationInfo.enabled,
             info.exported, info.applicationInfo.flags and (ApplicationInfo.FLAG_SYSTEM or ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0)
     }.getOrDefault(false)

@@ -53,8 +53,8 @@ class DesktopConnectionButtonPolicyTest {
         assertEquals(DesktopConnectionButtonPolicy.State.IDLE, state())
         assertFalse(DesktopConnectionButtonPolicy.State.IDLE.stopsSession)
         assertTrue(DesktopConnectionButtonPolicy.State.CONNECTED.stopsSession)
-        assertEquals("Подключить", DesktopConnectionButtonPolicy.State.IDLE.label)
-        assertEquals("Остановить ожидание", DesktopConnectionButtonPolicy.State.CONNECTING.label)
-        assertEquals("Отключить", DesktopConnectionButtonPolicy.State.CONNECTED.label)
+        assertEquals(com.hsd.universal.R.string.desktop_connect, DesktopConnectionButtonPolicy.State.IDLE.labelRes)
+        assertEquals(com.hsd.universal.R.string.projection_stop_waiting, DesktopConnectionButtonPolicy.State.CONNECTING.labelRes)
+        assertEquals(com.hsd.universal.R.string.projection_disconnect, DesktopConnectionButtonPolicy.State.CONNECTED.labelRes)
     }
 }

@@ -10,7 +10,7 @@ internal interface ProjectionSession {
 
     fun panel(off: Boolean)
 
-    fun stop(message: String = "Проекция остановлена")
+    fun stop(message: String)
 }
 
 /** Tracks blocking Bluetooth, listening and data sockets even when a stop races a connection. */

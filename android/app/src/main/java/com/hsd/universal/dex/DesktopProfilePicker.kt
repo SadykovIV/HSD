@@ -1,5 +1,6 @@
 package com.hsd.universal.dex
 
+import com.hsd.universal.R
 import com.hsd.universal.compat.PublishedDesktop
 import com.hsd.universal.BuildConfig
 
@@ -37,42 +38,42 @@ internal object DesktopProfilePicker {
             if (!unlocked()) return
             if (entry == selected && !entry.dashboard) return
             val media = if (entry.dashboard) CheckBox(activity).apply {
-                text = "Разрешить показывать текущий трек и обложку и управлять воспроизведением"
+                text = activity.getString(R.string.desktop_allow_current_track_and_cover_to_be_shown_and)
                 isChecked = DesktopComponents.mediaAllowed(activity, entry)
             } else null
-            val dialog = AlertDialog.Builder(activity).setTitle("Использовать профиль ${name(entry)}?")
-                .setMessage("Приложение: ${entry.appLabel}\nПакет: ${entry.packageName}\nActivity: ${entry.componentName.className}\nВерсия: ${entry.versionName} (${entry.versionCode})\nSHA-256 сертификата:\n${entry.signerSha256.sorted().joinToString("\n")}\n\nПрофиль сможет показывать свой интерфейс и запрашивать открытие обычных приложений в окне ГУ.")
-                .setPositiveButton("Использовать") { _, _ -> if (unlocked()) apply(DesktopModePolicy.ANDROID_DESKTOP, entry, media?.isChecked == true) }
-                .setNegativeButton("Отмена", null)
+            val dialog = AlertDialog.Builder(activity).setTitle(activity.getString(R.string.desktop_use_profile, name(entry)))
+                .setMessage(activity.getString(R.string.desktop_app_package_activity_version_certificate_sha_256_this_profile, entry.appLabel, entry.packageName, entry.componentName.className, entry.versionName, entry.versionCode, entry.signerSha256.sorted().joinToString("\n")))
+                .setPositiveButton(activity.getString(R.string.desktop_use_profile_7e5d)) { _, _ -> if (unlocked()) apply(DesktopModePolicy.ANDROID_DESKTOP, entry, media?.isChecked == true) }
+                .setNegativeButton(activity.getString(R.string.mock_cancel), null)
             if (media != null) dialog.setView(media)
             dialog.show()
         }
         builtin("Android Desktop", DesktopModePolicy.ANDROID_DESKTOP)
         val carBridgeTitle = when (carBridge.size) {
-            0 -> "CarBridge · не установлен"
+            0 -> activity.getString(R.string.desktop_carbridge_fixed)
             1 -> name(carBridge.single())
             else -> "CarBridge"
         }
         row(carBridgeTitle, selected?.modeId == "carbridge") {
             when (carBridge.size) {
-                0 -> AlertDialog.Builder(activity).setTitle("Профиль CarBridge")
-                    .setMessage("Для этого профиля нужен совместимый APK панели от автора CarBridge. Самостоятельное приложение CarBridge Offline v0.43 не объявляет интерфейс панелей ${BuildConfig.BRAND}.")
-                    .setPositiveButton("Понятно", null).show()
+                0 -> AlertDialog.Builder(activity).setTitle(activity.getString(R.string.desktop_profile_of_carbridge))
+                    .setMessage(activity.getString(R.string.desktop_this_profile_requires_an_apk_compatible_panel_from_the, BuildConfig.BRAND))
+                    .setPositiveButton(activity.getString(R.string.apps_warn_ok), null).show()
                 1 -> choose(carBridge.single())
-                else -> AlertDialog.Builder(activity).setTitle("Профиль CarBridge · выбрать компонент")
+                else -> AlertDialog.Builder(activity).setTitle(activity.getString(R.string.desktop_profile_of_carbridge_select))
                     .setItems(carBridge.map { "${it.appLabel}\n${it.componentName.flattenToShortString()}" }.toTypedArray()) { _, index -> choose(carBridge[index]) }
-                    .setNegativeButton("Отмена", null).show()
+                    .setNegativeButton(activity.getString(R.string.mock_cancel), null).show()
             }
         }
         builtin("DriveDeck", DesktopModePolicy.DRIVEDECK)
-        if (SamsungDexCapability.isAvailable(activity)) builtin("Samsung DeX · Shizuku", DesktopModePolicy.SAMSUNG_DEX)
+        if (SamsungDexCapability.isAvailable(activity)) builtin("Samsung DeX", DesktopModePolicy.SAMSUNG_DEX)
         for (entry in installed.filterNot { it.modeId == "carbridge" }) {
             row("${name(entry)} · ${entry.packageName}", selected?.componentName == entry.componentName) { choose(entry) }
         }
-        AlertDialog.Builder(activity).setTitle("Профиль рабочего стола")
+        AlertDialog.Builder(activity).setTitle(activity.getString(R.string.desktop_desktop_profile))
             .setSingleChoiceItems(labels.toTypedArray(), checked) { dialog, index ->
                 dialog.dismiss()
                 if (unlocked()) actions[index]()
-            }.setNegativeButton("Отмена", null).show()
+            }.setNegativeButton(activity.getString(R.string.mock_cancel), null).show()
     }
 }

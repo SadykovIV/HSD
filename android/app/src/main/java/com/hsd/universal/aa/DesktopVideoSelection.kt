@@ -53,6 +53,12 @@ enum class DesktopResolution(val title: String, val width: Int, val height: Int,
     R1080_1920("1080 × 1920", 1080, 1920, 7),
     R1440_2560("1440 × 2560", 1440, 2560, 8),
     R2160_3840("2160 × 3840", 2160, 3840, 9);
+    fun displayTitle(context: android.content.Context): String = when (this) {
+        AUTO -> context.getString(com.hsd.universal.R.string.projection_auto_resolution)
+        CUSTOM -> context.getString(com.hsd.universal.R.string.dev_custom_res_title)
+        else -> title
+    }
+
     companion object {
         val DEFAULT = R1280_720
         val aapModes = entries.filter { it.aapId > 0 }.sortedBy { it.aapId }

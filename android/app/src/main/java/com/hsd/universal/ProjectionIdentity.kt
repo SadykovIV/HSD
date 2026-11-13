@@ -63,9 +63,9 @@ internal class ProjectionIdentity(private val context: Context) : PinStore {
         usedAlias = null
         if (!alias.isNullOrEmpty()) {
             try {
-                val key = KeyChain.getPrivateKey(context, alias) ?: error("ключ недоступен")
+                val key = KeyChain.getPrivateKey(context, alias) ?: error(context.getString(R.string.aa_key_unavailable))
                 val chain = KeyChain.getCertificateChain(context, alias)
-                check(!chain.isNullOrEmpty()) { "цепочка сертификатов недоступна" }
+                check(!chain.isNullOrEmpty()) { context.getString(R.string.aa_chain_unavailable) }
                 usedAlias = alias
                 return@synchronized PhoneIdentity(chain.first(), key, chain.drop(1))
             } catch (e: InterruptedException) {
@@ -73,7 +73,7 @@ internal class ProjectionIdentity(private val context: Context) : PinStore {
                 throw e
             } catch (e: Exception) {
                 if (selected != null) throw IllegalStateException(
-                    "Выбранный сертификат Android недоступен. Откройте «Сертификаты Android Auto» и выберите его повторно.", e)
+                    context.getString(R.string.aa_reselect_key), e)
             }
         }
         val store = KeyStore.getInstance("PKCS12")
@@ -105,10 +105,10 @@ internal class ProjectionIdentity(private val context: Context) : PinStore {
     }
     fun receiverName(id: String): String = devices.getString("name.$id", null)?.takeIf { it.isNotBlank() }
         ?: when {
-            id.startsWith("usb|") -> "Магнитола USB"
-            id.startsWith("bt|") -> "Магнитола Bluetooth"
-            id.startsWith("lan|") -> "Магнитола Wi-Fi"
-            else -> id.split('|').filter(String::isNotBlank).take(2).joinToString(" ").ifBlank { "Магнитола USB" }
+            id.startsWith("usb|") -> context.getString(R.string.aa_usb_receiver)
+            id.startsWith("bt|") -> context.getString(R.string.aa_bt_receiver)
+            id.startsWith("lan|") -> context.getString(R.string.aa_wifi_receiver)
+            else -> id.split('|').filter(String::isNotBlank).take(2).joinToString(" ").ifBlank { context.getString(R.string.aa_usb_receiver) }
         }
     fun connectionLabel(id: String) = when {
         id.startsWith("bt|") -> "Bluetooth · " + id.substringAfter('|')
@@ -140,8 +140,8 @@ internal class ProjectionIdentity(private val context: Context) : PinStore {
     }
     override fun add(peerKey: String, sha256: String) = synchronized(lock) {
         val trusted = get(peerKey)
-        check(trusted.isEmpty() || sha256 in trusted) { "Сертификат магнитолы изменился во время подключения" }
-        check(peers.edit().putStringSet(peerKey, trusted + sha256).commit()) { "Не удалось сохранить сертификат магнитолы" }
+        check(trusted.isEmpty() || sha256 in trusted) { context.getString(R.string.aa_identity_changed) }
+        check(peers.edit().putStringSet(peerKey, trusted + sha256).commit()) { context.getString(R.string.aa_identity_save_error) }
     }
 
     companion object {

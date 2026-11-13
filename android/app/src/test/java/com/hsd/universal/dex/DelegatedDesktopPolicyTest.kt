@@ -42,7 +42,9 @@ class DelegatedDesktopPolicyTest {
             DelegatedDesktopPolicy.desktopComponent(DesktopModePolicy.ANDROID_DESKTOP, 42, app))
         assertEquals(DelegatedDesktopPolicy.Component(DesktopModePolicy.DRIVEDECK_PACKAGE, DesktopModePolicy.DRIVEDECK_HOME_CLASS, false),
             DelegatedDesktopPolicy.desktopComponent(DesktopModePolicy.DRIVEDECK, 42, app))
-        for (mode in listOf(-1, DesktopModePolicy.SAMSUNG_DEX, 3)) {
+        assertEquals(DelegatedDesktopPolicy.Component(DesktopModePolicy.SAMSUNG_PACKAGE, DesktopModePolicy.SAMSUNG_HOME_CLASS, false),
+            DelegatedDesktopPolicy.desktopComponent(DesktopModePolicy.SAMSUNG_DEX, 42, app))
+        for (mode in listOf(-1, 3)) {
             try { DelegatedDesktopPolicy.desktopComponent(mode, 42, app); fail("Accepted unsupported mode") }
             catch (_: IllegalArgumentException) { }
         }

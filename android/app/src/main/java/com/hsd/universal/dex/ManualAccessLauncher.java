@@ -286,7 +286,7 @@ public final class ManualAccessLauncher {
     }
 
     private static void ensureIndependentDisplay(int uid, JSONObject status) throws Exception {
-        if (Build.VERSION.SDK_INT < 37) return;
+        if (Build.VERSION.SDK_INT < 37 || Boolean.FALSE.equals(status.opt("needsIndependentHost"))) return;
         DisplayHelperRendezvous record = liveRecovery(uid);
         check(record != null && record.matchesHeartbeat(number(status.opt("pid")), number(status.opt("elapsedRealtimeMs")),
             status.optString("helperSession")), "Не удалось подтвердить владельца независимого экрана. Повторите активацию.");

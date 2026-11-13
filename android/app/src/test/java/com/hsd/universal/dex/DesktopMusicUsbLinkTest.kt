@@ -1,5 +1,6 @@
 package com.hsd.universal.dex
 
+import android.media.AudioDeviceInfo
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -12,11 +13,11 @@ class DesktopMusicUsbLinkTest {
     @Test fun failedActiveOutputPausesBeforeSamsungDetachAndDoesNotRepeatAfterARetry() {
         gate.attach(service, first, 0)
         gate.markReady()
-        assertTrue(gate.consumeTransportLoss(service, first, hadPicture = false))
-        assertFalse(gate.consumeTransportLoss(service, first, hadPicture = true))
+        assertTrue(gate.consumeTransportLoss(service, first, hadPicture = false, carriedAudio = true))
+        assertFalse(gate.consumeTransportLoss(service, first, hadPicture = true, carriedAudio = true))
         gate.close(first, 130_000)
         gate.attach(service, retry, 130_521)
-        assertFalse(gate.consumeTransportLoss(service, retry, hadPicture = false))
+        assertFalse(gate.consumeTransportLoss(service, retry, hadPicture = false, carriedAudio = true))
         assertFalse(gate.consumePhysicalDetach(service, 133_191))
         // The next physical connection can independently acquire its own proof.
         gate.attach(service, Any(), 140_000)
@@ -26,12 +27,23 @@ class DesktopMusicUsbLinkTest {
 
     @Test fun aFirstCompletedPictureBeforeTheReadinessPollQualifiesOnlyItsOwnFd() {
         gate.attach(service, first, 0)
-        assertFalse(gate.consumeTransportLoss(service, first, hadPicture = false))
+        assertFalse(gate.consumeTransportLoss(service, first, hadPicture = false, carriedAudio = true))
         assertFalse(gate.consumePhysicalDetach(service, 1))
-        assertFalse(gate.consumeTransportLoss(service, retry, hadPicture = true))
-        assertFalse(gate.consumeTransportLoss(Any(), first, hadPicture = true))
-        assertTrue(gate.consumeTransportLoss(service, first, hadPicture = true))
+        assertFalse(gate.consumeTransportLoss(service, retry, hadPicture = true, carriedAudio = true))
+        assertFalse(gate.consumeTransportLoss(Any(), first, hadPicture = true, carriedAudio = true))
+        assertTrue(gate.consumeTransportLoss(service, first, hadPicture = true, carriedAudio = true))
         assertFalse(gate.consumePhysicalDetach(service, 2_150))
+    }
+
+    @Test fun videoOnlyLossDoesNotPauseThePlayerOrConsumeARealPhysicalDetach() {
+        gate.attach(service, first, 100)
+        assertFalse(gate.consumeTransportLoss(service, first, hadPicture = true, carriedAudio = false))
+        gate.close(first, 200)
+        assertTrue(gate.consumePhysicalDetach(service, 250))
+        assertFalse(gate.consumePhysicalDetach(service, 251))
+        assertTrue(isBluetoothPlaybackDevice(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP))
+        assertTrue(isBluetoothPlaybackDevice(AudioDeviceInfo.TYPE_BLE_SPEAKER))
+        assertFalse(isBluetoothPlaybackDevice(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER))
     }
 
     @Test fun samsungReadErrorThenShortRetryStillPausesExactlyOnce() {

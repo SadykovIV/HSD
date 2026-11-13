@@ -50,7 +50,7 @@ internal class AutoProjection(private val context: Context, transport: Transport
                     audioEncoderFailed = true
                     audioEncoder.close()
                     com.hsd.universal.AppLog.i("Android Auto AAC: ${error.message}", false)
-                    publish("Android Auto · кодировщик AAC недоступен, изображение передаётся")
+                    publish(context.getString(R.string.desktop_android_auto_aac_encoder_is_not_available_the_image))
                 }
             }
         }
@@ -106,7 +106,7 @@ internal class AutoProjection(private val context: Context, transport: Transport
     private var retiringSource = false
     private var pendingConfiguration: VideoConfiguration? = null
     private var finishAfterRetirement: (() -> Unit)? = null
-    private val deadline = Runnable { if (!submitted) stop("За 55 секунд магнитола не получила первый кадр рабочего стола") }
+    private val deadline = Runnable { if (!submitted) stop(context.getString(R.string.desktop_in_55_seconds_the_radio_did_not_receive_the)) }
 
     override fun home() { source?.home() }
     override fun panel(off: Boolean) { source?.setPhoneScreenOff(off) }
@@ -136,10 +136,10 @@ internal class AutoProjection(private val context: Context, transport: Transport
         val display = displays.firstOrNull { ch ->
             val sink = ch.mediaSinkService
             choose(sink.videoConfigsList, emptyList(), sink) >= 0
-        } ?: error("У экрана магнитолы и кодировщика телефона нет общего видеорежима H.264/H.265. " +
+        } ?: error(context.getString(R.string.desktop_the_radio_and_phone_encoder_screens_do_not_share) +
             displays.flatMap { it.mediaSinkService.videoConfigsList }.joinToString { c ->
                 val layout = layoutOf(c)
-                if (layout == null) "режим ${c.codecResolution}" else "${layout.mode.title} @ ${layout.fps}"
+                if (layout == null) context.getString(R.string.desktop_regime, c.codecResolution) else "${layout.mode.title} @ ${layout.fps}"
             })
         val sink = display.mediaSinkService
         val offers = sink.videoConfigsList.mapIndexed { i, c ->
@@ -157,13 +157,13 @@ internal class AutoProjection(private val context: Context, transport: Transport
         input = panel?.let { InputChannel(it, this) }
         com.hsd.universal.CarLifeState.auth = "TLS"
         com.hsd.universal.CarLifeState.protocol = "Android Auto (AAP)"
-        com.hsd.universal.CarLifeState.touch = if (input?.touchScreen != null) "сенсорный экран" else "нет сенсорного экрана"
+        com.hsd.universal.CarLifeState.touch = if (input?.touchScreen != null) context.getString(R.string.desktop_touchscreen) else context.getString(R.string.desktop_no_touch_screen)
         playback = response.channelsList.firstOrNull { ch ->
             val sink = ch.mediaSinkService
             ch.hasMediaSinkService() && sink.audioType.number == 3 &&
                 sink.availableType in audioCodecs && sink.audioConfigsList.any(::supportsAudio)
         }?.let { AudioChannel(it, supports = ::supportsAudio) }
-        publish("Android Auto · соединение установлено, согласуем экран $profile")
+        publish(context.getString(R.string.desktop_android_auto_connected_negotiating_the_display, profile))
         return listOfNotNull(videoChannel, input, playback) + cluster.channels(response.channelsList)
     }
 
@@ -203,7 +203,7 @@ internal class AutoProjection(private val context: Context, transport: Transport
     private fun applyVideoConfiguration() {
         val config = pendingConfiguration ?: return
         if (retiringSource || stopping) return
-        val layout = layoutOf(config) ?: return stop("Магнитола предложила пустую область рабочего стола")
+        val layout = layoutOf(config) ?: return stop(context.getString(R.string.desktop_the_head_unit_offered_an_empty_desktop_area))
         val w = layout.mode.width
         val h = layout.mode.height
         val type = videoChannel.codec
@@ -244,7 +244,7 @@ internal class AutoProjection(private val context: Context, transport: Transport
         width = w
         height = h
         runCatching {
-            val encoding = requireNotNull(encoder(layout, type)) { "Кодировщик для ${layout.mode.title} @ $fps недоступен" }
+            val encoding = requireNotNull(encoder(layout, type)) { context.getString(R.string.desktop_mode_encoder_unavailable, layout.mode.title, fps) }
             val desktop = DesktopProjectionSource(context, this, type == h265, ::stop)
             activeLayout = layout
             activeCodec = type
@@ -252,12 +252,12 @@ internal class AutoProjection(private val context: Context, transport: Transport
             source = desktop
             com.hsd.universal.AppLog.i("AAP VIDEO ${encoding.name} · frame=${w}x${h} · desktop=${layout.desktopWidth}x${layout.desktopHeight}" +
                 " · viewport=${layout.content} · dpi=${layout.density}", false)
-            status("Запускаем $profile · $w × $h")
+            status(context.getString(R.string.desktop_starting_6b56, profile, w, h))
             desktop.open(layout.desktopWidth, layout.desktopHeight, fps, layout, encoding)
             frameRate = fps
             lastSampleMs = SystemClock.elapsedRealtime()
             main.postDelayed(sample, 1000)
-        }.onFailure { stop(it.message ?: "Не удалось открыть $profile") }
+        }.onFailure { stop(it.message ?: context.getString(R.string.desktop_failed_to_open, profile)) }
     }
 
     override fun onVideoFocus(projected: Boolean) {
@@ -410,12 +410,12 @@ internal class AutoProjection(private val context: Context, transport: Transport
             if (session.pinRefusal != null || session.certificateRejected || session.closedDuring == AapSession.State.AUTH)
                 (pins as? ProjectionIdentity)?.rejected(peer, session.pinRefusal?.fingerprint)
             val message = endMessage ?: if (oldUsb)
-                "Магнитола продолжила предыдущий USB-сеанс без нового VERSION_REQUEST. Завершите проекцию на магнитоле и подключитесь заново."
+                context.getString(R.string.desktop_the_head_unit_continued_the_previous_usb_session_without)
             else if (session.pinRefusal != null)
-                "Сертификат магнитолы изменился. Сверьте отпечаток в разделе «Сертификаты Android Auto»."
+                context.getString(R.string.desktop_the_stereo_certificate_has_changed_check_the_fingerprint_under)
             else if (session.certificateRejected || session.closedDuring == AapSession.State.AUTH)
-                "Магнитола закрыла соединение во время авторизации. Если она требует сертификат телефона, выберите его в разделе «Сертификаты Android Auto»."
-            else "Android Auto завершён · ${session.closedDuring} · ${error?.message ?: reason}"
+                context.getString(R.string.desktop_the_head_unit_closed_the_connection_during_authorization_if)
+            else context.getString(R.string.desktop_android_auto_is_completed, session.closedDuring, error?.message ?: reason)
             val cleanup = source
             source = null
             when {

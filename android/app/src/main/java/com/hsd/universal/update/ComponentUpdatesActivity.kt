@@ -1,5 +1,6 @@
 package com.hsd.universal.update
 
+import com.hsd.universal.R
 import com.hsd.universal.DesktopTransport
 
 import android.app.Activity
@@ -49,14 +50,14 @@ class ComponentUpdatesActivity : Activity() {
             gravity = android.view.Gravity.CENTER_VERTICAL
             root.addView(this, LinearLayout.LayoutParams(-1, -2))
         }
-        ui.button(header, "Назад") { finish() }.layoutParams = LinearLayout.LayoutParams(-2, -2)
-        ui.text(header, "Компоненты ${DesktopTransport.appName}", 22f, true).apply {
+        ui.button(header, getString(R.string.set_back)) { finish() }.layoutParams = LinearLayout.LayoutParams(-2, -2)
+        ui.text(header, getString(R.string.desktop_components, DesktopTransport.appName), 22f, true).apply {
             layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
             setPadding(ui.dp(12), 0, 0, 0)
         }
         val mainApp = ui.section(root, "${DesktopTransport.appName}")
-        ui.text(mainApp, "Основное приложение · ${BuildConfig.VERSION_NAME} (код ${BuildConfig.VERSION_CODE})", 15f)
-        ui.button(mainApp, "Проверить обновления ${DesktopTransport.appName}") { Updater.check(this, manual = true) }
+        ui.text(mainApp, getString(R.string.desktop_main_app_code, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE), 15f)
+        ui.button(mainApp, getString(R.string.desktop_check_for_updates, DesktopTransport.appName)) { Updater.check(this, manual = true) }
         val savedCards = state?.getBundle("components")
         DesktopComponent.entries.forEachIndexed { index, spec ->
             // Retain a pending installer/picker from the former single-card screen on recreation.
@@ -100,29 +101,29 @@ class ComponentUpdatesActivity : Activity() {
             val card = ui.section(root, spec.title)
             fun button(value: String, click: () -> Unit) = ui.button(card, value, click)
             version = ui.text(card, "", 15f)
-            check = button("Проверить версии компонента") { query() }
+            check = button(getString(R.string.desktop_check_component_versions)) { query() }
             remote = button("") {
                 val asset = available ?: return@button
-                work("Загружаю и проверяю APK…", {
+                work(getString(R.string.desktop_downloading_and_checking_apk), {
                     ComponentPackages.download(this@ComponentUpdatesActivity, spec, asset)
                 }, ::prepared)
             }
-            pick = button("Установить из файла…") {
+            pick = button(getString(R.string.desktop_install_from_file)) {
                 launchSystem(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
                     .setType(APK_TYPE), PICK)
             }
-            install = button("Продолжить установку") { installPrepared() }
-            remove = button("Удалить компонент…") {
-                work("Проверяю установленный компонент…", {
-                    check(!componentInUse()) { "Остановите сеанс компонента и повторите действие." }
+            install = button(getString(R.string.desktop_continue_installation)) { installPrepared() }
+            remove = button(getString(R.string.desktop_uninstall_component)) {
+                work(getString(R.string.desktop_checking_the_installed_component), {
+                    check(!componentInUse()) { getString(R.string.desktop_stop_the_component_session_and_repeat_the_action) }
                     ComponentPackages.builtinRemoval(this@ComponentUpdatesActivity, spec)
                 }) { launchSystem(it, REMOVE) }
             }
             permissions = if (spec == DesktopComponent.DRIVEDECK)
-                button("Разрешения DriveDeck") { DriveDeckPermissions.open(this@ComponentUpdatesActivity) }
+                button(getString(R.string.desktop_drivedeck_permissions)) { DriveDeckPermissions.open(this@ComponentUpdatesActivity) }
             else null
             status = ui.text(card, state?.getString("status")
-                ?: "APK загружается из проверенного репозитория компонента. Проверяются подпись и контрольная сумма. Установку подтверждает Android.", 15f)
+                ?: getString(R.string.desktop_the_apk_is_downloaded_from_a_verified_component_repository), 15f)
         }
 
         fun save() = Bundle().apply {
@@ -132,9 +133,9 @@ class ComponentUpdatesActivity : Activity() {
 
         fun refresh() {
             val current = ComponentPackages.installed(this@ComponentUpdatesActivity, spec)
-            version.text = if (current == null) "Не установлен" else "Установлен: ${current.versionName} (код ${current.longVersionCode})"
+            version.text = if (current == null) getString(R.string.desktop_not_installed) else getString(R.string.desktop_installed_build, current.versionName, current.longVersionCode)
             val next = available?.takeIf { current == null || it.code > current.longVersionCode }
-            remote.text = "${if (current == null) "Скачать" else "Обновить до"} ${next?.version} (код ${next?.code})"
+            remote.text = getString(R.string.desktop_build_5760, if (current == null) getString(R.string.apps_download) else getString(R.string.desktop_update_to), next?.version, next?.code)
             remote.visibility = if (next != null) View.VISIBLE else View.GONE
             install.visibility = if (pending != null) View.VISIBLE else View.GONE
             remove.visibility = if (current == null) View.GONE else View.VISIBLE
@@ -154,7 +155,7 @@ class ComponentUpdatesActivity : Activity() {
                     if (isDestroyed || isFinishing) return@runOnUiThread
                     busy = false
                     working = false
-                    result.fold(done) { status.text = it.message ?: "Не удалось проверить компонент." }
+                    result.fold(done) { status.text = it.message ?: getString(R.string.desktop_couldn_t_verify_the_component) }
                     this@ComponentUpdatesActivity.refresh()
                 }
             }
@@ -162,7 +163,7 @@ class ComponentUpdatesActivity : Activity() {
 
         private fun query() {
             available = null
-            work("Проверяю выпуски ${spec.title}…", {
+            work(getString(R.string.desktop_checking_releases, spec.title), {
                 var latest: ComponentAsset? = null
                 ReleaseFeed.pages(spec.repository) { latest = ComponentCatalog.newest(it, spec, latest) }
                 latest
@@ -170,24 +171,24 @@ class ComponentUpdatesActivity : Activity() {
                 available = newest
                 val current = ComponentPackages.installed(this@ComponentUpdatesActivity, spec)
                 status.text = when {
-                    newest == null -> "Совместимый выпуск компонента не найден."
-                    current == null -> "Доступна установка."
-                    current.longVersionCode >= newest.code -> "Обновление не требуется."
-                    else -> "Доступна новая версия."
+                    newest == null -> getString(R.string.desktop_compatible_release_of_the_component_was_not_found)
+                    current == null -> getString(R.string.desktop_available_to_install)
+                    current.longVersionCode >= newest.code -> getString(R.string.desktop_up_to_date)
+                    else -> getString(R.string.desktop_a_new_version_is_available)
                 }
             }
         }
 
         private fun prepared(apk: PreparedComponent) {
             pending = apk.file
-            status.text = "Проверен ${spec.title} ${apk.version} (код ${apk.code})."
+            status.text = getString(R.string.desktop_proven_code, spec.title, apk.version, apk.code)
             // If the user left the screen during the download, wait for another explicit tap.
             if (hasWindowFocus()) handoff(apk)
         }
 
         private fun installPrepared() {
             val file = pending ?: return
-            work("Проверяю APK…", { ComponentPackages.validate(this@ComponentUpdatesActivity, spec, file) }, ::handoff)
+            work(getString(R.string.desktop_checking_apk), { ComponentPackages.validate(this@ComponentUpdatesActivity, spec, file) }, ::handoff)
         }
 
         private fun componentInUse(): Boolean = CarLifeState.running && (
@@ -196,22 +197,22 @@ class ComponentUpdatesActivity : Activity() {
 
         private fun handoff(apk: PreparedComponent) {
             if (componentInUse()) {
-                status.text = "Остановите сеанс компонента и нажмите «Продолжить установку»."
+                status.text = getString(R.string.desktop_stop_the_component_session_and_click_continue_installation)
                 return
             }
             if (!packageManager.canRequestPackageInstalls()) {
-                status.text = "Разрешите установку из источника ${DesktopTransport.shortName} и вернитесь сюда."
+                status.text = getString(R.string.desktop_allow_installation_from_the_source_and_come_back_here, DesktopTransport.shortName)
                 launchSystem(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")), SOURCE)
                 return
             }
             val intent = runCatching { ComponentPackages.installerIntent(this@ComponentUpdatesActivity, apk) }
-                .getOrElse { status.text = it.message ?: "Системный установщик APK недоступен."; return }
+                .getOrElse { status.text = it.message ?: getString(R.string.desktop_the_apk_system_installer_is_not_available); return }
             launchSystem(intent, INSTALL)
         }
 
         private fun launchSystem(intent: Intent, request: Int) {
             try { startActivityForResult(intent, requestBase + request) }
-            catch (e: RuntimeException) { status.text = "Не удалось открыть системное окно: ${e.message}"; refresh() }
+            catch (e: RuntimeException) { status.text = getString(R.string.desktop_failed_to_open_the_system_window, e.message); refresh() }
         }
 
         fun action(request: Int): Int? = (request - requestBase).takeIf { it in PICK..REMOVE }
@@ -220,20 +221,20 @@ class ComponentUpdatesActivity : Activity() {
             when (action) {
                 PICK -> if (resultCode == RESULT_OK) data?.data?.let { uri ->
                     pending = null
-                    work("Проверяю выбранный APK…", {
-                        checkNotNull(contentResolver.openInputStream(uri)) { "Не удалось открыть файл." }.use {
+                    work(getString(R.string.desktop_checking_the_selected_apk), {
+                        checkNotNull(contentResolver.openInputStream(uri)) { getString(R.string.desktop_couldn_t_open_the_file) }.use {
                             ComponentPackages.stage(this@ComponentUpdatesActivity, spec, it)
                         }
                     }, ::prepared)
                 }
                 SOURCE -> if (packageManager.canRequestPackageInstalls()) installPrepared()
-                    else status.text = "Установка не разрешена. Можно продолжить позже."
+                    else status.text = getString(R.string.desktop_installation_is_not_allowed_we_can_continue_later)
                 INSTALL -> if (resultCode == RESULT_OK) {
-                    pending = null; status.text = "Компонент установлен."
-                } else status.text = "Установка не завершена. Можно повторить."
+                    pending = null; status.text = getString(R.string.desktop_component_installed)
+                } else status.text = getString(R.string.desktop_installation_is_incomplete_we_can_do_it_again)
                 REMOVE -> if (resultCode == RESULT_OK) {
-                    pending = null; available = null; status.text = "Компонент удалён."
-                } else status.text = "Компонент остался установлен."
+                    pending = null; available = null; status.text = getString(R.string.desktop_component_removed)
+                } else status.text = getString(R.string.desktop_the_component_remained_installed)
             }
         }
     }

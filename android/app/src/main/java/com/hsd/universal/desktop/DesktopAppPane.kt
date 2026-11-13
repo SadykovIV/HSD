@@ -1,5 +1,6 @@
 package com.hsd.universal.desktop
 
+import com.hsd.universal.R
 import com.hsd.universal.BuildConfig
 
 import android.app.Activity
@@ -36,7 +37,7 @@ internal class DesktopAppPane(
 ) : TextureView.SurfaceTextureListener {
     val view = TextureView(activity).apply {
         surfaceTextureListener = this@DesktopAppPane
-        contentDescription = "Окно приложения"
+        contentDescription = activity.getString(R.string.desktop_app_window)
         setOnTouchListener { _, event -> forwardTouch(event) }
     }
     private val motionQueue = com.hsd.universal.shared.MotionDispatchBuffer(work)
@@ -324,7 +325,7 @@ internal class DesktopAppPane(
                 main.post {
                     if (!output.retired && request == serial) {
                         if (fullscreenDriveDeck) { wanted = null; request++ } else home()
-                        onError("«${entry.label}» не удалось открыть на рабочем столе.")
+                        onError(activity.getString(R.string.desktop_it_was_not_possible_to_open_it_on_the, entry.label))
                     }
                 }
             }
@@ -339,7 +340,7 @@ internal class DesktopAppPane(
         } else if (SystemClock.elapsedRealtime() >= deadline) {
             main.post { if (!output.retired && request == serial) {
                 wanted = null; request++
-                onError("Приложение уведомления не появилось на экране магнитолы.")
+                onError(activity.getString(R.string.desktop_the_notification_app_did_not_appear_on_the_head))
             } }
         } else work.schedule({ awaitNotificationPlacement(output, entry, serial, deadline) }, 200, TimeUnit.MILLISECONDS)
     }
@@ -356,7 +357,7 @@ internal class DesktopAppPane(
             main.post {
                 if (!output.retired && request == serial) {
                     home()
-                    onError("Компонент «${entry.label}» завершился или не появился в своём окне.")
+                    onError(activity.getString(R.string.desktop_component_it_ended_or_didn_t_appear_in_your, entry.label))
                 }
             }
             return

@@ -3,6 +3,7 @@ package com.hsd.universal
 import com.hsd.universal.aa.AaBridgeCore
 import com.hsd.universal.aa.NaviField6
 import com.hsd.universal.cluster.ClusterNavigationHint
+import com.hsd.universal.cluster.ClusterNowPlaying
 import com.hsd.universal.cluster.ForegroundGuidance
 import com.hsd.universal.cluster.ForegroundGuidancePoller
 import com.hsd.universal.cluster.GuidanceInterest
@@ -61,6 +62,36 @@ class NavigationHintsSessionTest {
         }
     }
 
+    @Test fun bluetoothPlaybackOnlySendsTrackDataToAnExplicitMusicSubscriber() {
+        val peer = WirePeer()
+        val bridge = AaBridgeCore(log = { _, _ -> }).apply { usbAudioEnabled = false }
+        val session = CarLifeSession(peer, SessionConfig(), bridge, onClosed = {})
+        val track = ClusterNowPlaying("Track", "", "", true, positionSeconds = 12)
+        try {
+            session.start()
+            bridge.onCarlifeStart()
+            session.onClusterMedia(track)
+            fun musicRequest() {
+                val body = PbWriter().int32(1, 3).int32(2, 1).toByteArray()
+                peer.sink(Ch.CMD, Wire.cmdInner(Msg.MODULE_CONTROL, body))
+                val list = PbReader.parse(peer.until(Msg.MODULE_STATUS).body)!!
+                val module = PbReader.parse(PbReader.all(list, 2).single().data!!)!!
+                assertEquals(3, PbReader.int(module, 1))
+                assertEquals(0, PbReader.int(module, 2))
+            }
+            musicRequest()
+            assertFalse(session.sendMediaProgress(1000))
+            peer.subscription(Msg.CARLIFE_DATA_SUBSCRIBE_START, 2)
+            assertEquals("Track", PbReader.str(PbReader.parse(peer.until(Msg.MEDIA_INFO).body)!!, 2))
+            peer.until(Msg.MEDIA_PROGRESS_BAR)
+            musicRequest()
+            peer.subscription(Msg.CARLIFE_DATA_SUBSCRIBE_STOP, 2)
+            assertFalse(session.sendMediaProgress(2000))
+            bridge.usbAudioEnabled = true
+            assertFalse(session.sendMediaProgress(3000))
+        } finally { session.close("test") }
+    }
+
     @Test fun onlyNavigationInterestArmsForegroundSamplingAndExplicitStopRetiresItsEpoch() {
         val peer = WirePeer()
         val states = mutableListOf<GuidanceInterest>()
@@ -92,7 +123,8 @@ class NavigationHintsSessionTest {
 
     @Test fun hondaWaitsForNaviStatusWhenTheForegroundRouteStartsAfterTheSubscriptionRequest() {
         val peer = WirePeer()
-        val bridge = AaBridgeCore(log = { _, _ -> })
+        var now = 1_000_000L
+        val bridge = AaBridgeCore(log = { _, _ -> }, clockMs = { now })
         lateinit var session: CarLifeSession
         var visible: ForegroundGuidance = ForegroundGuidance.Unavailable
         var reads = 0
@@ -103,7 +135,7 @@ class NavigationHintsSessionTest {
         var tick: (() -> Unit)? = null
         var interval = 0L
         val polling = ForegroundGuidancePoller(
-            schedule = { delay, action -> interval = delay; tick = action; { tick = null } },
+            schedule = { delay, action -> interval = delay; tick = { now += delay; action() }; { tick = null } },
             canRead = { it === session.guidanceInterest }, poll = coordinator::poll,
         )
         session = CarLifeSession(peer, SessionConfig(naviField6 = NaviField6.TIME), bridge,
@@ -124,7 +156,7 @@ class NavigationHintsSessionTest {
             requestedTick() // still no route when the first interval expires
             assertEquals(2, reads)
 
-            visible = ForegroundGuidance.Maneuver(ClusterNavigationHint(3, "", 180))
+            visible = ForegroundGuidance.Maneuver(ClusterNavigationHint(3, "улица Мира", 180))
             requestedTick() // a maneuver now exists, but Yandex did not post a notification
             val status = PbReader.parse(peer.until(Msg.MODULE_STATUS, forbidden = Msg.NAVI_NEXT_TURN_INFO).body)!!
             val module = PbReader.parse(PbReader.all(status, 2).single().data!!)!!
@@ -135,14 +167,16 @@ class NavigationHintsSessionTest {
             val show = PbReader.parse(peer.until(Msg.NAVI_NEXT_TURN_INFO).body)!!
             assertEquals(1, PbReader.int(show, 1))
             assertEquals(3, PbReader.int(show, 2))
+            assertEquals("ул Мира", PbReader.str(show, 3))
             assertEquals(180, PbReader.int(show, 5))
             assertEquals(2_000L, interval)
             val activeTick = checkNotNull(tick)
-            visible = ForegroundGuidance.Maneuver(ClusterNavigationHint(3, "", 120))
+            visible = ForegroundGuidance.Maneuver(ClusterNavigationHint(3, "улица Мира", 120))
             activeTick() // The same live maneuver must refresh distance without a new notification/unlock.
             val closer = PbReader.parse(peer.until(Msg.NAVI_NEXT_TURN_INFO).body)!!
             assertEquals(2, PbReader.int(closer, 1))
             assertEquals(3, PbReader.int(closer, 2))
+            assertEquals("ул Мира", PbReader.str(closer, 3))
             assertEquals(120, PbReader.int(closer, 5))
             visible = ForegroundGuidance.Maneuver(ClusterNavigationHint(7, "", 120))
             activeTick()
@@ -150,6 +184,7 @@ class NavigationHintsSessionTest {
             // A new maneuver uses SHOW, matching Baidu/Honda; UPDATE is for its distance only.
             assertEquals(1, PbReader.int(nextTurn, 1))
             assertEquals(7, PbReader.int(nextTurn, 2))
+            assertEquals("", PbReader.str(nextTurn, 3))
             assertEquals(120, PbReader.int(nextTurn, 5))
             peer.subscription(Msg.CARLIFE_DATA_SUBSCRIBE_STOP, 0)
             assertNull(tick)

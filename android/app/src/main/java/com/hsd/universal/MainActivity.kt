@@ -248,7 +248,7 @@ class MainActivity : Activity() {
         }
         if (intent?.action == UsbManager.ACTION_USB_ACCESSORY_ATTACHED) {
             val acc = accessoryFromIntent(intent)
-            AppLog.i("== USB_ACCESSORY_ATTACHED, в intent: ${if (acc != null) describe(acc) else "аксессуара нет"}")
+            AppLog.i("== USB_ACCESSORY_ATTACHED, в intent: ${if (acc != null) describe(this, acc) else "аксессуара нет"}")
         }
         Actions.scan(this, reason)
     }
@@ -268,8 +268,8 @@ class MainActivity : Activity() {
         private const val STATE_SCREENS = "screens"
 
         /** Все поля аксессуара одной строкой. Серийник без разрешения на аксессуар бросает SecurityException. */
-        fun describe(a: UsbAccessory): String {
-            val serial = try { "\"${a.serial}\"" } catch (_: SecurityException) { "(нет разрешения)" }
+        fun describe(context: android.content.Context, a: UsbAccessory): String {
+            val serial = try { "\"${a.serial}\"" } catch (_: SecurityException) { context.getString(R.string.desktop_no_permission) }
             return "manufacturer=\"${a.manufacturer}\" model=\"${a.model}\" description=\"${a.description}\" " +
                 "version=\"${a.version}\" uri=\"${a.uri}\" serial=$serial"
         }

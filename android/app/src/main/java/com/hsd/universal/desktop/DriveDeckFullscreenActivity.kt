@@ -63,7 +63,7 @@ class DriveDeckFullscreenActivity : Activity() {
         pane = DesktopAppPane(this, onOpened = { message.visibility = View.GONE }, onHome = ::goHome,
             onError = { error ->
                 if (tryNativeLaunch()) {
-                    Toast.makeText(this, "Приложение открыто напрямую на магнитоле", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this, getString(R.string.desktop_the_application_is_open_directly_on_the_head_unit), Toast.LENGTH_SHORT).show()
                 } else {
                     Toast.makeText(this, error, Toast.LENGTH_SHORT).show()
                     goHome()
@@ -74,11 +74,11 @@ class DriveDeckFullscreenActivity : Activity() {
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
             setBackgroundColor(Color.BLACK)
-            text = "Открывается приложение…"
+            text = getString(R.string.desktop_opening_app)
         }
         root.addView(message, FrameLayout.LayoutParams(-1, -1))
-        back = button("Назад", R.drawable.desktop_back) { pane.back() }
-        home = button("Домой в DriveDeck", R.drawable.desktop_home) { goHome() }
+        back = button(getString(R.string.set_back), R.drawable.desktop_back) { pane.back() }
+        home = button(getString(R.string.desktop_drivedeck_home), R.drawable.desktop_home) { goHome() }
         root.addView(back, buttonPosition(aboveHome = false))
         root.addView(home, buttonPosition(aboveHome = false))
         setContentView(root)

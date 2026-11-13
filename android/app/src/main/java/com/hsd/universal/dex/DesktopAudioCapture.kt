@@ -1,5 +1,6 @@
 package com.hsd.universal.dex
 
+import com.hsd.universal.R
 import com.hsd.universal.DesktopTransport
 
 import android.content.Context
@@ -20,7 +21,12 @@ object DesktopAudioAccess {
 }
 
 object DesktopAudioState {
-    @Volatile var status = "Звук ${DesktopTransport.name} выключен"
+    @Volatile var statusRes = R.string.desktop_sound_switched_off
+    fun status(context: Context): String {
+        val message = statusRes
+        val name = if (message == R.string.desktop_for_sound_activate_access) DesktopTransport.shortName else DesktopTransport.name
+        return context.getString(message, name)
+    }
     @Volatile var running = false
     @Volatile var error: String? = null
     @Volatile var pcmBytes = 0L
@@ -74,7 +80,7 @@ class DesktopAudioCapture(context: Context) {
         canCaptureOutput = null
         usb = false
         DesktopAudioState.running = false
-        DesktopAudioState.status = if (DexPrefs(context).usbPlaybackAudio) "Звук: ожидаю подключение ${DesktopTransport.name}" else "Звук ${DesktopTransport.name} выключен"
+        DesktopAudioState.statusRes = if (DexPrefs(context).usbPlaybackAudio) R.string.desktop_sound_i_m_waiting_to_connect else R.string.desktop_sound_switched_off
     }
 
     fun close() { detach(); closed = true }
@@ -97,16 +103,16 @@ class DesktopAudioCapture(context: Context) {
             worker?.cancelled?.set(true)
             failed = false // a user setting/access/session transition allows a fresh attempt
             DesktopAudioState.running = false
-            DesktopAudioState.status = when {
-                !enabled -> "Звук ${DesktopTransport.name} выключен"
-                !delegated -> "Звук ${DesktopTransport.name} доступен в режиме «Доступ с компьютера»"
-                !ready -> "Для звука активируйте доступ ${DesktopTransport.shortName}"
-                !permission -> "Для звука повторно активируйте доступ с параметром --audio"
-                !usb -> "Звук: ожидаю подключение ${DesktopTransport.name}"
-                !current.isCarlifeStarted -> "Звук: ожидаю запуск ${DesktopTransport.name}"
-                !current.audioViaUsb -> "Магнитола запросила звук по Bluetooth"
-                !outputFresh -> "Звук приостановлен: магнитола не принимает поток"
-                else -> "Звук: соединение закрыто"
+            DesktopAudioState.statusRes = when {
+                !enabled -> R.string.desktop_sound_switched_off
+                !delegated -> R.string.desktop_sound_available_in_computer_access_mode
+                !ready -> R.string.desktop_for_sound_activate_access
+                !permission -> R.string.desktop_for_sound_re_activate_access_with_the_audio_parameter
+                !usb -> R.string.desktop_sound_i_m_waiting_to_connect
+                !current.isCarlifeStarted -> R.string.desktop_sound_awaiting_launch
+                !current.audioViaUsb -> R.string.desktop_head_unit_requested_bluetooth_audio
+                !outputFresh -> R.string.desktop_audio_waiting_for_receiver
+                else -> R.string.desktop_audio_connection_closed
             }
         } else if (worker == null && !failed) {
             val capture = Capture(current, generation)
@@ -114,7 +120,7 @@ class DesktopAudioCapture(context: Context) {
             DesktopAudioState.error = null
             DesktopAudioState.pcmBytes = 0
             DesktopAudioState.nonSilentBuffers = 0
-            DesktopAudioState.status = "Подключаю звук ${DesktopTransport.name}…"
+            DesktopAudioState.statusRes = R.string.desktop_connecting_audio
             Thread({ runCapture(capture) }, "${com.hsd.universal.BuildConfig.BRAND}-playback-audio").start()
         }
     }
@@ -122,8 +128,8 @@ class DesktopAudioCapture(context: Context) {
     private fun updateSignalStatus(capture: Capture, hasSignal: Boolean) {
         main.post {
             if (worker === capture && !capture.cancelled.get()) {
-                DesktopAudioState.status = if (hasSignal) "Звук передаётся в ${DesktopTransport.name}"
-                    else "Звук ${DesktopTransport.name} подключён. Ожидаю музыку или подсказку"
+                DesktopAudioState.statusRes = if (hasSignal) R.string.desktop_sending_audio_over
+                    else R.string.desktop_sound_i_m_waiting_for_music_or_a_hint
             }
         }
     }
@@ -142,14 +148,14 @@ class DesktopAudioCapture(context: Context) {
             val audio = checkNotNull(mix).record
             if (capture.cancelled.get()) return
             audio.startRecording()
-            check(audio.recordingState == AudioRecord.RECORDSTATE_RECORDING) { "Android не запустил передачу звука" }
+            check(audio.recordingState == AudioRecord.RECORDSTATE_RECORDING) { context.getString(R.string.desktop_android_has_not_launched_the_transmission_of_sound) }
             started = true
             sessions.runIfCurrent(capture.generation) {
                 if (!capture.cancelled.get()) capture.core.onAudioStart(DesktopAudioPolicy.MEDIA_CHANNEL)
             }
             main.post { if (worker === capture && !capture.cancelled.get()) {
                 DesktopAudioState.running = true
-                DesktopAudioState.status = "Звук ${DesktopTransport.name} подключён. Ожидаю музыку или подсказку"
+                DesktopAudioState.statusRes = R.string.desktop_sound_i_m_waiting_for_music_or_a_hint
             } }
             AppLog.i("DESKTOP AUDIO: registered AudioMix LOOP_BACK media/navigation/assistant; PCM 48000 Hz stereo16 started")
             var nextReport = SystemClock.elapsedRealtime() + 10_000L
@@ -162,7 +168,7 @@ class DesktopAudioCapture(context: Context) {
             val stamp = android.media.AudioTimestamp()
             while (!capture.cancelled.get()) {
                 val count = audio.read(input, 0, input.size, AudioRecord.READ_NON_BLOCKING)
-                check(count >= 0) { "Ошибка чтения звука Android: $count" }
+                check(count >= 0) { context.getString(R.string.desktop_android_sound_reading_error, count) }
                 val now = SystemClock.elapsedRealtime()
                 if (now >= nextReport) {
                     AppLog.i("DESKTOP AUDIO: PCM bytes=${DesktopAudioState.pcmBytes} " +
@@ -217,7 +223,7 @@ class DesktopAudioCapture(context: Context) {
                     if (error != null && core === capture.core && !capture.cancelled.get()) {
                         failed = true
                         DesktopAudioState.error = "${error.javaClass.simpleName}: ${error.message}"
-                        DesktopAudioState.status = "Android не открыл звук ${DesktopTransport.name}. Повторите активацию с включённым звуком и подключитесь снова."
+                        DesktopAudioState.statusRes = R.string.desktop_android_didn_t_open_the_sound_repeat_activation_with
                     }
                 }
             }

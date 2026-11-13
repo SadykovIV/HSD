@@ -1,5 +1,6 @@
 package com.hsd.universal.dex
 
+import com.hsd.universal.R
 import com.hsd.universal.BuildConfig
 
 import com.hsd.universal.DesktopTransport
@@ -71,42 +72,42 @@ class DesktopOnboardingActivity : Activity() {
         }
         ui.brand(header, 64)
         ui.text(header, "${DesktopTransport.appName}", 27f, true).layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
-        ui.text(body, "Первоначальная настройка · ${step + 1} из 3", 15f)
-        ui.text(body, "Компоненты → Разрешения → Активация", 13f)
+        ui.text(body, getString(R.string.desktop_initial_setup_of_3, step + 1), 15f)
+        ui.text(body, getString(R.string.desktop_components_permissions_activation), 13f)
         when (step) {
             0 -> components(body)
             1 -> permissions(body)
             else -> return
         }
-        if (step < 2) ui.button(body, "Далее") { moveTo(step + 1) }
+        if (step < 2) ui.button(body, getString(R.string.desktop_next)) { moveTo(step + 1) }
             .isEnabled = step != 0 || profileAvailable()
-        if (step > 0) ui.button(body, "Назад") { moveTo(step - 1) }
-        ui.button(body, "Закрыть настройку") { closeSetup() }
+        if (step > 0) ui.button(body, getString(R.string.set_back)) { moveTo(step - 1) }
+        ui.button(body, getString(R.string.desktop_close_setup)) { closeSetup() }
     }
     private fun permissions(parent: LinearLayout) {
         val list = DesktopPermissionList(this, ui)
-        list.hsd(ui.section(parent, "Разрешения ${DesktopTransport.appName}"))
-        list.drivedeck(ui.section(parent, "Разрешения DriveDesk"))
+        list.hsd(ui.section(parent, getString(R.string.desktop_permissions, DesktopTransport.appName)))
+        list.drivedeck(ui.section(parent, getString(R.string.desktop_drivedesk_permissions)))
     }
     private fun components(parent: LinearLayout) {
-        val card = ui.section(parent, "1. Компоненты")
+        val card = ui.section(parent, getString(R.string.desktop_1_components))
         val selected = DesktopComponents.selected(this).takeIf { prefs.desktopMode == DesktopModePolicy.ANDROID_DESKTOP }
         val name = selected?.let(DesktopProfilePicker::name) ?: when (prefs.desktopMode) {
             DesktopModePolicy.DRIVEDECK -> "DriveDeck"
             DesktopModePolicy.SAMSUNG_DEX -> "Samsung DeX"
             else -> "Android Desktop"
         }
-        ui.text(card, "Рабочий стол: $name", 18f, true)
+        ui.text(card, getString(R.string.desktop_desktop_32f4, name), 18f, true)
         ui.text(card, when (prefs.desktopMode) {
-            DesktopModePolicy.DRIVEDECK -> "Для выбранного рабочего стола установите DriveDeck · ${BuildConfig.BRAND} из комплекта или каталога ниже. Он показывает карту и музыку рядом. Обычная сборка DriveDeck не заменяет адаптированный компонент."
-            DesktopModePolicy.SAMSUNG_DEX -> "Используется рабочий стол Samsung. Для него отдельный компонент не нужен; способ доступа будет выбран на шаге активации."
-            else -> if (selected != null) "Выбран установленный совместимый компонент. Его обновления и разрешения доступны в каталоге."
-                else "Android Desktop уже встроен. Дополнительные компоненты устанавливать не обязательно."
+            DesktopModePolicy.DRIVEDECK -> getString(R.string.desktop_for_the_selected_desktop_install_drivedeck_it_shows_the, BuildConfig.BRAND)
+            DesktopModePolicy.SAMSUNG_DEX -> getString(R.string.desktop_it_uses_a_samsung_desktop_which_does_not_require)
+            else -> if (selected != null) getString(R.string.desktop_the_installed_compatible_component_is_selected_and_its_updates)
+                else getString(R.string.desktop_android_desktop_is_already_built_in_you_don_t)
         })
-        ui.button(card, "Компоненты ${DesktopTransport.appName}") { startActivity(Intent(this, ComponentUpdatesActivity::class.java)) }
-        ui.button(card, "Выбрать рабочий стол") { chooseProfile() }
-        ui.text(card, if (profileAvailable()) "Рабочий стол готов к настройке ✓"
-            else "Установите выбранный компонент или выберите встроенный Android Desktop, чтобы продолжить.", 14f)
+        ui.button(card, getString(R.string.desktop_components, DesktopTransport.appName)) { startActivity(Intent(this, ComponentUpdatesActivity::class.java)) }
+        ui.button(card, getString(R.string.desktop_choose_desktop)) { chooseProfile() }
+        ui.text(card, if (profileAvailable()) getString(R.string.desktop_desktop_ready_for_setup)
+            else getString(R.string.desktop_install_the_selected_component_or_select_the_built_in), 14f)
     }
 
     private fun profileAvailable() = profileAvailable(this, prefs)
@@ -118,17 +119,17 @@ class DesktopOnboardingActivity : Activity() {
         DesktopProfilePicker.show(this, prefs.desktopMode, ::choiceUnlocked) { mode, entry, media ->
             if (DesktopBackendTransitionPolicy.requiresActivationEnd(DelegatedDesktopAccess.ownsActivation,
                     prefs.accessMode, prefs.accessModeFor(mode))) {
-                AlertDialog.Builder(this).setTitle("Смена способа доступа")
-                    .setMessage("Сначала завершите действующую активацию на экране «Активация», затем выберите этот рабочий стол.")
-                    .setPositiveButton("Открыть активацию") { _, _ -> openActivation() }
-                    .setNegativeButton("Отмена", null).show()
+                AlertDialog.Builder(this).setTitle(getString(R.string.desktop_changing_access_method))
+                    .setMessage(getString(R.string.desktop_first_complete_the_current_activation_on_the_activation_screen))
+                    .setPositiveButton(getString(R.string.desktop_open_activation)) { _, _ -> openActivation() }
+                    .setNegativeButton(getString(R.string.mock_cancel), null).show()
                 return@show
             }
             if (entry == null) DesktopComponents.clear(this)
             else if (!DesktopComponents.select(this, entry, media)) {
-                AlertDialog.Builder(this).setTitle("Компонент изменился")
-                    .setMessage("Откройте список профилей заново и проверьте установленный компонент.")
-                    .setPositiveButton("Понятно", null).show()
+                AlertDialog.Builder(this).setTitle(getString(R.string.desktop_component_has_changed))
+                    .setMessage(getString(R.string.desktop_open_the_profile_list_again_and_check_the_installed))
+                    .setPositiveButton(getString(R.string.apps_warn_ok), null).show()
                 return@show
             }
             prefs.desktopMode = mode
@@ -177,9 +178,9 @@ class DesktopOnboardingActivity : Activity() {
                 Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${activity.packageName}")))) {
                 try { activity.startActivity(intent); return } catch (_: RuntimeException) { }
             }
-            AlertDialog.Builder(activity).setTitle("Работа в фоне")
-                .setMessage("Откройте настройки телефона → Приложения → ${DesktopTransport.appName} → Батарея и разрешите работу без ограничений.")
-                .setPositiveButton("Понятно", null).show()
+            AlertDialog.Builder(activity).setTitle(activity.getString(R.string.step_background_short))
+                .setMessage(activity.getString(R.string.desktop_open_your_phone_settings_applications_battery_and_allow_work, DesktopTransport.appName))
+                .setPositiveButton(activity.getString(R.string.apps_warn_ok), null).show()
         }
     }
 }

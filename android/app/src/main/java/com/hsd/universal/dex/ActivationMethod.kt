@@ -1,18 +1,22 @@
 package com.hsd.universal.dex
 
 /** A way to obtain access, independent of the process that supplies it. */
-enum class ActivationMethod(val label: String) {
-    WIFI("Wi-Fi"), SHIZUKU("Shizuku"), COMPUTER("С компьютера");
+enum class ActivationMethod(val labelRes: Int) {
+    WIFI(com.hsd.universal.R.string.activation_wifi), SHIZUKU(com.hsd.universal.R.string.activation_shizuku), COMPUTER(com.hsd.universal.R.string.activation_computer), DIRECT_ADB(com.hsd.universal.R.string.activation_direct);
 
     fun backend(profile: Int): DesktopAccessMode? = when (this) {
-        WIFI -> if (profile == DesktopModePolicy.SAMSUNG_DEX) DesktopAccessMode.LEGACY_ADB else DesktopAccessMode.COMPUTER
+        WIFI, COMPUTER -> DesktopAccessMode.COMPUTER
         SHIZUKU -> DesktopAccessMode.SHIZUKU
-        COMPUTER -> DesktopAccessMode.COMPUTER.takeUnless { profile == DesktopModePolicy.SAMSUNG_DEX }
+        DIRECT_ADB -> DesktopAccessMode.LEGACY_ADB.takeIf { profile == DesktopModePolicy.SAMSUNG_DEX }
     }
 
     companion object {
         fun restore(profile: Int, saved: String?, backend: DesktopAccessMode): ActivationMethod =
             entries.firstOrNull { it.name == saved && it.backend(profile) == backend }
-                ?: if (backend == DesktopAccessMode.SHIZUKU) SHIZUKU else WIFI
+                ?: when (backend) {
+                    DesktopAccessMode.COMPUTER -> WIFI
+                    DesktopAccessMode.SHIZUKU -> SHIZUKU
+                    DesktopAccessMode.LEGACY_ADB -> DIRECT_ADB
+                }
     }
 }

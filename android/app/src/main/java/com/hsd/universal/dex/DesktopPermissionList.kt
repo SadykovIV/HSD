@@ -1,5 +1,6 @@
 package com.hsd.universal.dex
 
+import com.hsd.universal.R
 import com.hsd.universal.DesktopTransport
 
 import android.Manifest
@@ -26,8 +27,8 @@ internal class DesktopPermissionList(private val activity: Activity, private val
             try { activity.startActivity(intent); return } catch (_: android.content.ActivityNotFoundException) { }
             catch (_: SecurityException) { }
         }
-        AlertDialog.Builder(activity).setMessage("На этом телефоне откройте нужный пункт вручную в настройках Android.")
-            .setPositiveButton("Понятно", null).show()
+        AlertDialog.Builder(activity).setMessage(activity.getString(R.string.desktop_open_this_setting_manually_on_this_phone))
+            .setPositiveButton(activity.getString(R.string.apps_warn_ok), null).show()
     }
     private fun row(parent: LinearLayout, name: String, granted: Boolean?, reason: String, action: () -> Unit) {
         ui.permission(parent, name, action).update(granted, reason)
@@ -42,11 +43,11 @@ internal class DesktopPermissionList(private val activity: Activity, private val
             if (declared.protection != PermissionInfo.PROTECTION_DANGEROUS ||
                 (mine && permission == Manifest.permission.POST_NOTIFICATIONS)) return@forEach
             val granted = pm.checkPermission(permission, pkg) == PackageManager.PERMISSION_GRANTED
-            val label = labels[permission] ?: declared.loadLabel(pm).toString()
+            val label = labels[permission]?.let(activity::getString) ?: declared.loadLabel(pm).toString()
             row(parent, label, granted, when {
-                mine && permission == "android.permission.ACCESS_LOCAL_NETWORK" -> "Поиск телефона и подключение к устройствам локальной сети."
-                mine -> "Для беспроводного подключения к совместимой магнитоле."
-                else -> if (granted) "Разрешено для DriveDeck." else "Не выдано. Можно настроить в разрешениях DriveDeck."
+                mine && permission == "android.permission.ACCESS_LOCAL_NETWORK" -> activity.getString(R.string.desktop_find_the_phone_and_connect_to_local_network_devices)
+                mine -> activity.getString(R.string.desktop_for_wireless_connection_to_a_compatible_head_unit)
+                else -> if (granted) activity.getString(R.string.desktop_allowed_for_drivedeck) else activity.getString(R.string.desktop_you_can_configure_it_in_drivedeck_permissions)
             }) {
                 if (!mine) DriveDeckPermissions.openAppSettings(activity)
                 else if (granted) settings(details(pkg))
@@ -58,41 +59,41 @@ internal class DesktopPermissionList(private val activity: Activity, private val
         val pkg = activity.packageName
         val debug = Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)
         val usb = DesktopUsbDebugging.state(activity)
-        row(parent, "Отладка по USB", when (usb) {
+        row(parent, activity.getString(R.string.desktop_usb_debugging_fae9), when (usb) {
             DesktopUsbDebuggingPolicy.State.ENABLED -> true
             DesktopUsbDebuggingPolicy.State.DISABLED -> false
             else -> null
-        }, "Для активации с компьютера и восстановления независимого экрана по кабелю на Android 17.") { settings(debug, Intent(Settings.ACTION_SETTINGS)) }
+        }, activity.getString(R.string.desktop_to_activate_from_your_computer_and_restore_an_independent)) { settings(debug, Intent(Settings.ACTION_SETTINGS)) }
         val wifi = runCatching { Settings.Global.getString(activity.contentResolver, "adb_wifi_enabled") }.getOrNull()
-        row(parent, "Беспроводная отладка (Wi-Fi)", when (wifi) { "1" -> true; "0" -> false; else -> null },
-            "Для активации с телефона по коду. Для передачи рабочего стола по USB Wi-Fi не нужен.") { settings(debug, Intent(Settings.ACTION_SETTINGS)) }
+        row(parent, activity.getString(R.string.desktop_wireless_debugging_wi_fi), when (wifi) { "1" -> true; "0" -> false; else -> null },
+            activity.getString(R.string.desktop_you_don_t_need_wi_fi_to_activate_from)) { settings(debug, Intent(Settings.ACTION_SETTINGS)) }
         val blocked = PhonePairingService.notificationBlock(activity, needsCode = true)
-        row(parent, "Уведомления ${DesktopTransport.shortName}", blocked == null, when (blocked) {
-            PairingNotificationBlock.CODE_CHANNEL -> "Включите канал «Ввод кода сопряжения»."
-            PairingNotificationBlock.PROGRESS_CHANNEL -> "Включите канал «Активация ${DesktopTransport.shortName}»."
-            else -> "Состояние активации и ввод кода прямо в уведомлении."
+        row(parent, activity.getString(R.string.desktop_notifications, DesktopTransport.shortName), blocked == null, when (blocked) {
+            PairingNotificationBlock.CODE_CHANNEL -> activity.getString(R.string.desktop_enable_the_input_pairing_code_channel)
+            PairingNotificationBlock.PROGRESS_CHANNEL -> activity.getString(R.string.desktop_enable_the_activation_channel, DesktopTransport.shortName)
+            else -> activity.getString(R.string.desktop_activation_status_and_code_entry_directly_in_the_notification)
         }) {
             if (activity.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
                 activity.requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST)
             else settings(PhonePairingService.notificationSettings(activity, blocked ?: PairingNotificationBlock.APP), details(pkg))
         }
         val component = ComponentName(activity, ClusterNavigationListener::class.java)
-        row(parent, "Доступ ${DesktopTransport.shortName} к уведомлениям",
+        row(parent, activity.getString(R.string.desktop_notification_access_for, DesktopTransport.shortName),
             activity.getSystemService(NotificationManager::class.java).isNotificationListenerAccessGranted(component),
-            "Для подсказок навигации на приборной панели и HUD.") {
+            activity.getString(R.string.desktop_for_navigation_tips_on_the_dashboard_and_hud)) {
             settings(Intent(Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS)
                 .putExtra(Settings.EXTRA_NOTIFICATION_LISTENER_COMPONENT_NAME, component.flattenToString()), Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
         }
-        row(parent, "Показ поверх приложений", Settings.canDrawOverlays(activity),
-            "Для шторки на экране ГУ. Шторка отключена; этот доступ можно не выдавать.") {
+        row(parent, activity.getString(R.string.desktop_display_over_other_apps), Settings.canDrawOverlays(activity),
+            activity.getString(R.string.desktop_for_the_curtain_on_the_gu_screen_the_curtain)) {
             settings(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, pkgUri(pkg)), details(pkg))
         }
         val battery = DesktopOnboardingActivity.batteryExempt(activity)
-        row(parent, "Работа без ограничений батареи", battery, "Помогает сохранить соединение с магнитолой в фоне.") {
+        row(parent, activity.getString(R.string.desktop_unrestricted_battery_use), battery, activity.getString(R.string.desktop_helps_to_keep_the_connection_with_the_head_unit)) {
             if (battery) settings(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS), details(pkg))
             else DesktopOnboardingActivity.requestBatteryExemption(activity)
         }
-        row(parent, "Установка компонентов", pm.canRequestPackageInstalls(), "Нужно только для установки APK из каталога компонентов.") {
+        row(parent, activity.getString(R.string.desktop_component_installation), pm.canRequestPackageInstalls(), activity.getString(R.string.desktop_you_only_need_to_install_the_apk_from_the)) {
             settings(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, pkgUri(pkg)), details(pkg))
         }
         runtime(parent, pkg)
@@ -101,26 +102,26 @@ internal class DesktopPermissionList(private val activity: Activity, private val
         val state = DriveDeckPermissions.snapshot(activity)
         if (state.availability != DriveDeckPermissions.Availability.READY) {
             ui.text(parent, state.description)
-            ui.button(parent, "Установить компоненты") { activity.startActivity(Intent(activity, ComponentUpdatesActivity::class.java)) }
+            ui.button(parent, activity.getString(R.string.desktop_install_components)) { activity.startActivity(Intent(activity, ComponentUpdatesActivity::class.java)) }
             return
         }
-        row(parent, "Доступ DriveDeck к музыкальным данным", state.musicAccess,
-            "Для названия трека и обложки. Android выдаёт DriveDeck доступ к уведомлениям.") { DriveDeckPermissions.openMusicAccess(activity) }
+        row(parent, activity.getString(R.string.desktop_drivedeck_access_to_music_data), state.musicAccess,
+            activity.getString(R.string.desktop_for_the_title_of_the_track_and_the_cover)) { DriveDeckPermissions.openMusicAccess(activity) }
         try { runtime(parent, DriveDeckPermissionPolicy.PACKAGE) }
-        catch (_: PackageManager.NameNotFoundException) { ui.text(parent, "Компонент удалён.") }
+        catch (_: PackageManager.NameNotFoundException) { ui.text(parent, activity.getString(R.string.desktop_component_removed)) }
     }
     companion object {
         const val REQUEST = 1307
         private val labels = mapOf(
-            Manifest.permission.ACCESS_COARSE_LOCATION to "Приблизительное местоположение",
-            Manifest.permission.ACCESS_FINE_LOCATION to "Точное местоположение",
-            Manifest.permission.READ_CONTACTS to "Контакты",
-            Manifest.permission.READ_PHONE_STATE to "Состояние телефона",
-            Manifest.permission.BLUETOOTH_CONNECT to "Подключение устройств Bluetooth",
-            Manifest.permission.BLUETOOTH_SCAN to "Поиск устройств Bluetooth",
-            Manifest.permission.NEARBY_WIFI_DEVICES to "Устройства Wi-Fi поблизости",
-            Manifest.permission.POST_NOTIFICATIONS to "Показывать уведомления DriveDeck",
-            "android.permission.ACCESS_LOCAL_NETWORK" to "Доступ к локальной сети",
+            Manifest.permission.ACCESS_COARSE_LOCATION to R.string.desktop_approximate_location,
+            Manifest.permission.ACCESS_FINE_LOCATION to R.string.desktop_precise_location,
+            Manifest.permission.READ_CONTACTS to R.string.desktop_contacts,
+            Manifest.permission.READ_PHONE_STATE to R.string.desktop_phone_status,
+            Manifest.permission.BLUETOOTH_CONNECT to R.string.desktop_connecting_bluetooth_devices,
+            Manifest.permission.BLUETOOTH_SCAN to R.string.desktop_search_for_bluetooth_devices,
+            Manifest.permission.NEARBY_WIFI_DEVICES to R.string.desktop_nearby_wi_fi_devices,
+            Manifest.permission.POST_NOTIFICATIONS to R.string.desktop_showing_drivedeck_notifications,
+            "android.permission.ACCESS_LOCAL_NETWORK" to R.string.desktop_local_network_access,
         )
     }
 }

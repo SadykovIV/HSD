@@ -40,7 +40,7 @@ internal class CarPlayProjection(
     private val controls = mutableMapOf<String, Controls>()
     private val fingers = linkedMapOf<Int, TouchPoint>()
     private val frameTimeout = Runnable {
-        if (first.get()) stop("CarPlay не получил первый кадр рабочего стола")
+        if (first.get()) stop(context.getString(R.string.desktop_carplay_did_not_receive_the_first_desktop_frame))
     }
 
     override fun start() {
@@ -48,7 +48,7 @@ internal class CarPlayProjection(
         thread(name = "CarPlay connection", isDaemon = true) {
             try {
                 val endpoint = CarPlayBootstrap(context, lifetime, status).connect()
-                status("CarPlay · проверяю сопряжение AirPlay")
+                status(context.getString(R.string.desktop_carplay_checking_airplay_pairing))
                 val session = CarPlayAirSession(context, endpoint, lifetime, ::input, ::linkEnded)
                 val geometry = session.start()
                 main.post {
@@ -64,7 +64,7 @@ internal class CarPlayProjection(
                             main.postDelayed(frameTimeout, 55_000)
                             source.open(geometry.width, geometry.height, geometry.fps)
                         } catch (e: Exception) {
-                            stop(e.message ?: "Не удалось открыть рабочий стол")
+                            stop(e.message ?: context.getString(R.string.desktop_could_not_open_the_desktop))
                         }
                     }
                 }
@@ -85,7 +85,7 @@ internal class CarPlayProjection(
                     firstFrameAt = SystemClock.elapsedRealtime()
                     main.removeCallbacks(frameTimeout)
                     val text =
-                        "CarPlay · рабочий стол · ${display?.width} × ${display?.height} · H.264"
+                        context.getString(R.string.desktop_carplay_desk_h_264, display?.width, display?.height)
                     CarLifeState.video = text
                     status(text)
                 }

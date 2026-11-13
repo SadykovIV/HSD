@@ -1,5 +1,6 @@
 package com.hsd.universal.dex
 
+import com.hsd.universal.R
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
@@ -30,8 +31,8 @@ internal class DesktopSettingsNavigator(
             gravity = Gravity.CENTER_VERTICAL
             container.addView(this, LinearLayout.LayoutParams(-1, -2))
         }
-        ui.button(header, "Назад", ::back).layoutParams = LinearLayout.LayoutParams(-2, -2)
-        heading = ui.text(header, "Настройки", 23f, true).apply {
+        ui.button(header, scroll.context.getString(R.string.set_back), ::back).layoutParams = LinearLayout.LayoutParams(-2, -2)
+        heading = ui.text(header, scroll.context.getString(R.string.home_settings), 23f, true).apply {
             layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
             setPadding(ui.dp(12), 0, 0, 0)
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
@@ -79,7 +80,7 @@ internal class DesktopSettingsNavigator(
     private fun render() {
         index.visibility = if (current == null) View.VISIBLE else View.GONE
         pages.forEach { (id, page) -> page.body.visibility = if (current == id) View.VISIBLE else View.GONE }
-        heading.text = current?.let { pages.getValue(it).title } ?: "Настройки"
+        heading.text = current?.let { pages.getValue(it).title } ?: scroll.context.getString(R.string.home_settings)
         val target = ++revision
         val position = positions[current.orEmpty()] ?: 0
         scroll.post { if (target == revision) scroll.scrollTo(0, position) }

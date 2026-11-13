@@ -16,20 +16,17 @@ internal object DelegatedDesktopPolicy {
         if (!trustedDisplay || !input) throw SecurityException("Доступ рабочего стола завершён; повторно запустите службу доступа")
     }
 
-    fun requireMode(mode: Int) {
-        DesktopModePolicy.requireMode(mode)
-        require(mode != DesktopModePolicy.SAMSUNG_DEX) { "Эта служба поддерживает Android Desktop и DriveDeck; Samsung DeX требует Shizuku" }
-    }
-
     data class Component(val packageName: String, val className: String, val ownActivity: Boolean)
 
     fun desktopComponent(mode: Int, displayId: Int, appPackage: String): Component {
-        requireMode(mode)
+        DesktopModePolicy.requireMode(mode)
         require(displayId > 0) { "Запуск на основном экране запрещён" }
         EmbeddedDisplayPolicy.requirePackage(appPackage)
-        return if (mode == DesktopModePolicy.DRIVEDECK) {
-            Component(DesktopModePolicy.DRIVEDECK_PACKAGE, DesktopModePolicy.DRIVEDECK_HOME_CLASS, false)
-        } else Component(appPackage, DesktopModePolicy.ANDROID_HOME_CLASS, true)
+        return when (mode) {
+            DesktopModePolicy.SAMSUNG_DEX -> Component(DesktopModePolicy.SAMSUNG_PACKAGE, DesktopModePolicy.SAMSUNG_HOME_CLASS, false)
+            DesktopModePolicy.DRIVEDECK -> Component(DesktopModePolicy.DRIVEDECK_PACKAGE, DesktopModePolicy.DRIVEDECK_HOME_CLASS, false)
+            else -> Component(appPackage, DesktopModePolicy.ANDROID_HOME_CLASS, true)
+        }
     }
 
     data class Task(val displayId: Int, val userId: Int, val basePackage: String?, val topPackage: String?)

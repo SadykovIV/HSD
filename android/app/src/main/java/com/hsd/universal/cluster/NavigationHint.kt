@@ -8,6 +8,19 @@ internal data class ClusterNavigationHint(val nextTurn: Int, val road: String, v
 
 /** CarLife accepts a manoeuvre enum, not free text. Unknown directions stay unknown. */
 internal object NavigationHintParser {
+    /** Expanded, compact and heads-up layouts are variants of the same notification. */
+    fun fromCardVariants(variants: Sequence<ClusterNavigationHint>, includeRoad: Boolean): ClusterNavigationHint? {
+        val cards = variants.iterator()
+        if (!cards.hasNext()) return null
+        val primary = cards.next()
+        if (!includeRoad) return if (primary.road.isEmpty()) primary else primary.copy(road = "")
+        if (primary.road.isNotEmpty()) return primary
+        val alternate = cards.asSequence().firstOrNull {
+            it.road.isNotEmpty() && it.nextTurn == primary.nextTurn && it.distanceMeters == primary.distanceMeters
+        } ?: return primary
+        return primary.copy(road = alternate.road)
+    }
+
     private val distance = Regex("""(?<![\p{L}\d.,])(\d+(?:[.,]\d+)?)\s*(километр(?:а|ов)?|метр(?:а|ов)?|км|м|kilomet(?:er|re)s?|met(?:er|re)s?|km|m|mi|miles?|ft|feet|yd|yards?)(?![\p{L}/])""", RegexOption.IGNORE_CASE)
     private val durationOrTotal = Regex("""(?:осталось|до (?:конца|финиша|прибытия|места назначения)|remaining|to destination)""", RegexOption.IGNORE_CASE)
     private val nextInstruction = Regex("""(?:,?\s*затем\b|,?\s*(?:and\s+)?then\b)""", RegexOption.IGNORE_CASE)

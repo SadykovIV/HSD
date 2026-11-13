@@ -1,5 +1,6 @@
 package com.hsd.universal.update
 
+import com.hsd.universal.R
 import com.hsd.universal.dex.DesktopPermissionList
 import android.app.Activity
 import android.os.Bundle
@@ -28,8 +29,8 @@ class ComponentPermissionsActivity : Activity() {
         window.setDecorFitsSystemWindows(false)
         setContentView(scroll)
         val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; root.addView(this) }
-        ui.button(header, "Назад") { finish() }
-        ui.text(root, "Разрешения DriveDeck", 25f, true)
+        ui.button(header, getString(R.string.set_back)) { finish() }
+        ui.text(root, getString(R.string.desktop_drivedeck_permissions), 25f, true)
         DesktopPermissionList(this, ui).drivedeck(ui.section(root))
     }
 }

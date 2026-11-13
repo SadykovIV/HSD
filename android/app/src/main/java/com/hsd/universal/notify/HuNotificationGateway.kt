@@ -1,5 +1,7 @@
 package com.hsd.universal.notify
 
+import com.hsd.universal.R
+
 import android.content.Context
 import android.os.Bundle
 import android.os.Handler
@@ -55,7 +57,7 @@ internal object HuNotificationGateway {
         return main.post {
             if (EmbeddedSessionRegistry.isCurrentParent(parentId, proof)) {
                 if (HuNotificationLaunch.open(context, parentId, key, packageName)) shade?.collapse()
-                else android.widget.Toast.makeText(context, "Уведомление недоступно. Проверьте блокировку телефона или откройте приложение из меню.", android.widget.Toast.LENGTH_SHORT).show()
+                else android.widget.Toast.makeText(context, context.getString(R.string.notification_open_error), android.widget.Toast.LENGTH_SHORT).show()
             }
         }
     }

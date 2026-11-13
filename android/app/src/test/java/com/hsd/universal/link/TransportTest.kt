@@ -280,7 +280,7 @@ class TransportTest {
                     clockMs.addAndGet(20)
                     timeline.pcm(Ch.MEDIA, Wire.dataInner(0x30006, 0, byteArrayOf(it.toByte())), clockMs.get() * 1000L)
                 }
-                assertTrue(samples.none { it > 1 })
+                if (!wireless) assertTrue(samples.isEmpty()) // The shared USB writer is physically blocked.
                 release.countDown()
                 val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
                 while (link.queuedVideoFrames != 0 && System.nanoTime() < end) Thread.sleep(1)
@@ -288,7 +288,11 @@ class TransportTest {
                 assertNull(timeline.frame(clockMs.get() * 1000L, false, 30))
                 frame(4, true); assertTrue(recovered.await(3, TimeUnit.SECONDS))
                 assertEquals(listOf(1, 2, 4), pictures.toList())
-                assertTrue(samples.none { it in 2..65 })
+                if (wireless) {
+                    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+                    while (74 !in samples && System.nanoTime() < deadline) Thread.sleep(1)
+                    assertTrue("An independent audio socket delivers current PCM", 74 in samples)
+                } else assertTrue("The USB queue must discard expired PCM", samples.none { it in 2..65 })
             } finally { release.countDown(); timeline.close(); link.close() }
         }
     }

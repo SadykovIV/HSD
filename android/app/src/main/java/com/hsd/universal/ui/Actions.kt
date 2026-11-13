@@ -46,7 +46,7 @@ object Actions {
 
     enum class UsbScanState { DETACHED, WAITING_FOR_ACCESSORY, PERMISSION_REQUESTED, STARTING, ALREADY_RUNNING, FAILED }
     data class UsbScanResult(val state: UsbScanState, val detail: String? = null)
-    @Volatile var lastUsbResult = UsbScanResult(UsbScanState.WAITING_FOR_ACCESSORY, "Телефон готов. Ожидаю USB ${DesktopTransport.name}")
+    @Volatile var lastUsbResult = UsbScanResult(UsbScanState.WAITING_FOR_ACCESSORY)
         private set
     private val usbGate = UsbScanGate { SystemClock.elapsedRealtime() }
     private val autoConnect = DexAutoConnectPolicy()
@@ -84,8 +84,8 @@ object Actions {
                 else -> ctx.startForegroundService(DesktopTransport.service(ctx))
             }
         } catch (failure: RuntimeException) {
-            CarLifeState.status = "Не удалось запустить ${route.label}: ${failure.javaClass.simpleName}"
-            AppLog.e(CarLifeState.status, failure)
+            CarLifeState.setStatus(ctx.getString(R.string.projection_launch_error, route.label(ctx), failure.javaClass.simpleName))
+            AppLog.e(CarLifeState.status(ctx), failure)
         }
     }
     private fun accessoryKey(accessory: UsbAccessory): String = UsbAccessoryPolicy.key(
@@ -130,7 +130,7 @@ object Actions {
             autoConnect.observeAccessory(key)
             detachedIdle.observeCompatibleAccessory(key != null)
             if (reconnected) publish(UsbScanState.WAITING_FOR_ACCESSORY,
-                "USB ${DesktopTransport.name} обнаружен. Можно восстановить подключение", "новый аксессуар после detach")
+                ctx.getString(R.string.usb_receiver_found, DesktopTransport.name), "новый аксессуар после detach")
         }
     }
 
@@ -140,62 +140,62 @@ object Actions {
             observeUsbConnection(ctx)
             if (ProjectionRoute.wireless(ctx) || WirelessPrefs(ctx).mode == CarLifeConnectionMode.WIFI) {
                 usbGate.reset()
-                return publish(UsbScanState.WAITING_FOR_ACCESSORY, "Выбрано подключение ${DesktopTransport.name} по Wi-Fi", reason)
+                return publish(UsbScanState.WAITING_FOR_ACCESSORY, ctx.getString(R.string.usb_wifi_selected, DesktopTransport.name), reason)
             }
             if (detachedIdle.idle) {
-                return publish(UsbScanState.DETACHED, "USB отключён. Ожидаю переподключения; доступ сохранён", reason)
+                return publish(UsbScanState.DETACHED, ctx.getString(R.string.usb_wait_reconnect), reason)
             }
             if (autoConnect.stopped) {
-                return publish(UsbScanState.WAITING_FOR_ACCESSORY, "Подключение остановлено", reason)
+                return publish(UsbScanState.WAITING_FOR_ACCESSORY, ctx.getString(R.string.desktop_connection_stopped), reason)
             }
             if (com.hsd.universal.dex.PhonePairingService.blocksProjectionForCommittedActivation(ctx)) {
                 usbGate.reset()
-                return publish(UsbScanState.WAITING_FOR_ACCESSORY, "Завершаю проверку активации рабочего стола…", reason)
+                return publish(UsbScanState.WAITING_FOR_ACCESSORY, ctx.getString(R.string.projection_activation_check), reason)
             }
             if (DexPrefs(ctx).useDesktopService && !DesktopAccess.isReady(ctx)) {
                 usbGate.reset() // A late USB grant must not bypass the selected backend's permission.
-                return publish(UsbScanState.FAILED, if (DexPrefs(ctx).useDelegated) "Откройте ${DesktopTransport.shortName} и выполните активацию" else "Запустите Shizuku и разрешите доступ для ${DesktopTransport.appName}", reason)
+                return publish(UsbScanState.FAILED, if (DexPrefs(ctx).useDelegated) ctx.getString(R.string.usb_open_activate, DesktopTransport.shortName) else ctx.getString(R.string.usb_shizuku_access, DesktopTransport.appName), reason)
             }
             val usb = ctx.getSystemService(UsbManager::class.java)
             val list = usb.accessoryList.orEmpty()
             val acc = list.firstOrNull { matchesRoute(ProjectionRoute.selected(ctx), it) }
             val active = BridgeService.alive && CarLifeState.running && !CarLifeState.wirelessSession
             if (BridgeService.alive && DesktopTransport.activeRoute != ProjectionRoute.selected(ctx))
-                return publish(UsbScanState.STARTING, "Меняю способ подключения", reason)
+                return publish(UsbScanState.STARTING, ctx.getString(R.string.desktop_switching_connection_type), reason)
             if (acc != null && DesktopTransport.activeRoute == ProjectionRoute.USB && !CarLifeState.wirelessSession && !active && usbGate.failureDetail == null)
-                return publish(UsbScanState.STARTING, "Согласуем USB Android Auto с магнитолой…", reason)
+                return publish(UsbScanState.STARTING, ctx.getString(R.string.usb_negotiating), reason)
             val step = usbGate.decide(acc?.let(::accessoryKey), acc?.let(usb::hasPermission) == true, active, retryPermission)
-            if (acc != null) CarLifeState.accessory = MainActivity.describe(acc)
+            if (acc != null) CarLifeState.accessory = MainActivity.describe(ctx, acc)
             return when (step) {
                 UsbScanGate.Step.WAITING -> {
-                    CarLifeState.accessory = "не найден"
-                    val detail = if (list.isEmpty()) "Телефон готов. Ожидаю USB ${DesktopTransport.name}" else "Подключён USB-аксессуар, который не поддерживает ${DesktopTransport.name}"
-                    CarLifeState.status = detail
+                    CarLifeState.accessory = ctx.getString(R.string.desktop_not_found)
+                    val detail = if (list.isEmpty()) ctx.getString(R.string.usb_wait_accessory, DesktopTransport.name) else ctx.getString(R.string.usb_unsupported_accessory, DesktopTransport.name)
+                    CarLifeState.setStatus(detail)
                     publish(UsbScanState.WAITING_FOR_ACCESSORY, detail, reason)
                 }
-                UsbScanGate.Step.ACTIVE -> publish(UsbScanState.ALREADY_RUNNING, "USB ${DesktopTransport.name} подключён", reason)
-                UsbScanGate.Step.STARTING -> publish(UsbScanState.STARTING, "Запускаю USB ${DesktopTransport.name}…", reason)
-                UsbScanGate.Step.PERMISSION_PENDING -> publish(UsbScanState.PERMISSION_REQUESTED, "Разрешите доступ к USB в системном окне", reason)
-                UsbScanGate.Step.DENIED -> publish(UsbScanState.FAILED, "Доступ к USB не разрешён. Нажмите «Подключить», чтобы повторить", reason)
-                UsbScanGate.Step.PERMISSION_TIMEOUT -> publish(UsbScanState.FAILED, "Ответ на запрос USB не получен. Закройте системное окно и нажмите «Подключить»", reason)
-                UsbScanGate.Step.START_FAILED -> publish(UsbScanState.FAILED, usbGate.failureDetail ?: "USB ${DesktopTransport.name} не запустился. Проверьте кабель и ${DesktopTransport.name} на магнитоле, затем нажмите «Подключить»", reason)
+                UsbScanGate.Step.ACTIVE -> publish(UsbScanState.ALREADY_RUNNING, ctx.getString(R.string.usb_connected, DesktopTransport.name), reason)
+                UsbScanGate.Step.STARTING -> publish(UsbScanState.STARTING, ctx.getString(R.string.usb_starting, DesktopTransport.name), reason)
+                UsbScanGate.Step.PERMISSION_PENDING -> publish(UsbScanState.PERMISSION_REQUESTED, ctx.getString(R.string.usb_permission_pending), reason)
+                UsbScanGate.Step.DENIED -> publish(UsbScanState.FAILED, ctx.getString(R.string.usb_permission_denied), reason)
+                UsbScanGate.Step.PERMISSION_TIMEOUT -> publish(UsbScanState.FAILED, ctx.getString(R.string.usb_permission_timeout), reason)
+                UsbScanGate.Step.START_FAILED -> publish(UsbScanState.FAILED, usbGate.failureDetail ?: ctx.getString(R.string.usb_not_started, DesktopTransport.name), reason)
                 UsbScanGate.Step.REQUEST_PERMISSION -> {
                     val token = usbGate.pendingToken!!
                     val pi = PendingIntent.getBroadcast(ctx, token.toInt(),
                         Intent(MainActivity.ACTION_PERMISSION).setPackage(ctx.packageName).putExtra(USB_PERMISSION_TOKEN, token),
                         PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
                     usb.requestPermission(acc!!, pi)
-                    publish(UsbScanState.PERMISSION_REQUESTED, "Разрешите доступ к USB в системном окне", reason)
+                    publish(UsbScanState.PERMISSION_REQUESTED, ctx.getString(R.string.usb_permission_pending), reason)
                 }
                 UsbScanGate.Step.START -> {
                     ctx.startForegroundService(DesktopTransport.service(ctx))
-                    publish(UsbScanState.STARTING, "Запускаю USB ${DesktopTransport.name}…", reason)
+                    publish(UsbScanState.STARTING, ctx.getString(R.string.usb_starting, DesktopTransport.name), reason)
                 }
             }
         } catch (e: Exception) {
             usbGate.failed()
             AppLog.i("USB scan failed: ${e.javaClass.simpleName}")
-            return publish(UsbScanState.FAILED, "Не удалось открыть USB ${DesktopTransport.name} (${e.javaClass.simpleName}). Проверьте подключение и разрешение USB", reason)
+            return publish(UsbScanState.FAILED, ctx.getString(R.string.usb_open_error, DesktopTransport.name, e.javaClass.simpleName), reason)
         }
     }
 
@@ -218,19 +218,19 @@ object Actions {
             val granted = present && intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false) && usb.hasPermission(acc)
             if (!usbGate.permissionResult(key, token, granted)) return null
             return if (!present || granted) scan(ctx, "результат разрешения USB")
-                else publish(UsbScanState.FAILED, "Доступ к USB не разрешён. Нажмите «Подключить», чтобы повторить", "разрешение USB отклонено")
+                else publish(UsbScanState.FAILED, ctx.getString(R.string.usb_permission_denied), "разрешение USB отклонено")
         } catch (e: Exception) {
             usbGate.failed()
             AppLog.i("USB permission result failed: ${e.javaClass.simpleName}")
-            return publish(UsbScanState.FAILED, "Не удалось проверить разрешение USB. Переподключите кабель и нажмите «Подключить»", "проверка разрешения USB")
+            return publish(UsbScanState.FAILED, ctx.getString(R.string.usb_grant_check_error), "проверка разрешения USB")
         }
     }
 
     /** Service lifecycle hooks keep the activity informed after scan() has returned. */
-    @Synchronized fun onUsbSessionStarted() {
+    @Synchronized fun onUsbSessionStarted(ctx: Context) {
         detachedIdle.observeCompatibleAccessory(true)
         usbGate.started()
-        publish(UsbScanState.ALREADY_RUNNING, "USB ${DesktopTransport.name} подключён", "сессия запущена")
+        publish(UsbScanState.ALREADY_RUNNING, ctx.getString(R.string.usb_connected, DesktopTransport.name), "сессия запущена")
     }
 
     @Synchronized fun onUsbHandshakeFailed(accessory: UsbAccessory, detail: String) {
@@ -245,18 +245,18 @@ object Actions {
         publish(UsbScanState.FAILED, detail, "сервис не запущен")
     }
 
-    @Synchronized fun onUsbSessionClosed() {
+    @Synchronized fun onUsbSessionClosed(ctx: Context) {
         usbGate.reset()
-        if (detachedIdle.idle) publish(UsbScanState.DETACHED, "USB отключён. Ожидаю переподключения; доступ сохранён", "сессия закрыта после USB detach")
-        else publish(UsbScanState.WAITING_FOR_ACCESSORY, "Телефон готов. Ожидаю USB ${DesktopTransport.name}", "сессия закрыта")
+        if (detachedIdle.idle) publish(UsbScanState.DETACHED, ctx.getString(R.string.usb_wait_reconnect), "сессия закрыта после USB detach")
+        else publish(UsbScanState.WAITING_FOR_ACCESSORY, ctx.getString(R.string.usb_wait_accessory, DesktopTransport.name), "сессия закрыта")
     }
 
     /** Only BridgeService calls this after confirming physical accessory absence. No privilege teardown. */
-    @Synchronized fun onUsbDetached() {
+    @Synchronized fun onUsbDetached(ctx: Context) {
         detachedIdle.detached()
         autoConnect.observeAccessory(null)
         usbGate.reset() // Late USB grants cannot restart an absent accessory.
-        publish(UsbScanState.DETACHED, "USB отключён. Ожидаю переподключения; доступ сохранён", "физическое отключение USB")
+        publish(UsbScanState.DETACHED, ctx.getString(R.string.usb_wait_reconnect), "физическое отключение USB")
     }
 
     private fun publish(state: UsbScanState, detail: String, reason: String): UsbScanResult {
@@ -278,7 +278,7 @@ object Actions {
         AppLog.i(if (userInitiated) "кнопка Стоп" else "остановка для восстановления подключения")
         val serviceRequested = BridgeService.alive || usbGate.isStarting
         usbGate.reset() // Any outstanding system USB permission callback is now stale.
-        publish(UsbScanState.WAITING_FOR_ACCESSORY, "Подключение остановлено", "стоп")
+        publish(UsbScanState.WAITING_FOR_ACCESSORY, ctx.getString(R.string.desktop_connection_stopped), "стоп")
         if (serviceRequested) ctx.startForegroundService(DesktopTransport.service(ctx).setAction(BridgeService.ACTION_STOP))
     }
 

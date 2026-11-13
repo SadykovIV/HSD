@@ -35,6 +35,8 @@ class DriveDeckAapProbe : Instrumentation() {
     private var wirelessReceiver = false
     private var carPlayRadio: Bundle? = null
     private var carLifeUsbPort: Int? = null
+    private var carLifeHudPort: Int? = null
+    private var carLifeGesturePort: Int? = null
     private var carPlay = false
     private var shizuku = false
     private var modern = false
@@ -50,6 +52,10 @@ class DriveDeckAapProbe : Instrumentation() {
         carPlay = arguments?.getString("protocol") == "carplay"
         if (arguments?.getString("protocol") == "carlife-usb")
             carLifeUsbPort = arguments.getString("fixturePort")?.toInt() ?: 7240
+        if (arguments?.getString("protocol") == "carlife-hud")
+            carLifeHudPort = requireNotNull(arguments.getString("fixturePort")).toInt()
+        if (arguments?.getString("protocol") == "carlife-gesture-audio")
+            carLifeGesturePort = requireNotNull(arguments.getString("fixturePort")).toInt()
         shizuku = arguments?.getString("backend") == "shizuku"
         modern = arguments?.getString("protocol") == "6.1"
         hevc = arguments?.getString("codec") == "h265"
@@ -65,6 +71,18 @@ class DriveDeckAapProbe : Instrumentation() {
         try {
             check(Build.HARDWARE in listOf("ranchu", "goldfish")) { "Disposable emulator required" }
             val context = targetContext
+            carLifeGesturePort?.let { port ->
+                result.putString("gesture", checkCarLifeGestureAudio(port))
+                result.putString("result", "PASS")
+                finish(Activity.RESULT_OK, result)
+                return
+            }
+            carLifeHudPort?.let { port ->
+                checkCarLifeHud(context, port)
+                result.putString("result", "PASS")
+                finish(Activity.RESULT_OK, result)
+                return
+            }
             if (checkCertificates) {
                 finish(Activity.RESULT_OK, checkReceiverIdentities(context)); return
             }
@@ -214,7 +232,7 @@ class DriveDeckAapProbe : Instrumentation() {
                                 result.putString("AAP_touch", "Fullscreen Home restored DriveDeck and both apps")
                             } finally { removeMonitor(monitor) }
                             if (!shizuku) {
-                                await("USB playback capture · " + DesktopAudioState.status) { DesktopAudioState.running }
+                                await("USB playback capture · " + DesktopAudioState.status(targetContext)) { DesktopAudioState.running }
                                 val tone = fixtureAudio()
                                 try {
                                     tone.play()
@@ -251,7 +269,7 @@ class DriveDeckAapProbe : Instrumentation() {
                             check(closed.await(18, TimeUnit.SECONDS)) { "DriveDeck failed to release on disconnect" }
                             check(!DexState.running)
                         } finally {
-                            runOnMainSync { projection.stop() }
+                            runOnMainSync { projection.stop("Test session finished") }
                             hu.stop()
                             closed.await(8, TimeUnit.SECONDS)
                         }
@@ -305,7 +323,7 @@ class DriveDeckAapProbe : Instrumentation() {
     private fun await(stage: String = "video", ok: () -> Boolean) {
         val deadline = SystemClock.elapsedRealtime() + 18_000
         while (!ok() && SystemClock.elapsedRealtime() < deadline) SystemClock.sleep(100)
-        check(ok()) { "Timed out waiting for $stage · ${DexState.error} · ${DesktopAudioState.status}" }
+        check(ok()) { "Timed out waiting for $stage · ${DexState.error} · ${DesktopAudioState.status(targetContext)}" }
     }
 }
 

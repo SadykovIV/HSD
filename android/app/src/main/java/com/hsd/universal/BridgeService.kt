@@ -222,7 +222,7 @@ open class BridgeService : Service() {
         physicalUsbDetached = true
         com.hsd.universal.dex.DesktopMusicPlayback.physicalDetach(this)
         cancelDesktopRecovery()
-        Actions.onUsbDetached()
+        Actions.onUsbDetached(this@BridgeService)
         // Preserve a deliberate wireless opt-in when the already-selected car is still nearby.
         // An unplug from an ordinary computer never arms wireless on its own.
         autoMode = WirelessConnectionPolicy.retainAutoAfterUsbDetach(
@@ -361,7 +361,7 @@ open class BridgeService : Service() {
         }
         // автостарт по Bluetooth машины: обрабатываем до проверки session, при идущей сессии нужен только флаг
         if (session == null && com.hsd.universal.dex.PhonePairingService.blocksProjectionForCommittedActivation(this)) {
-            CarLifeState.status = "Завершаю проверку активации рабочего стола…"
+            CarLifeState.setStatus(R.string.projection_activation_check)
             AppLog.i("DESKTOP transport start deferred until phone activation completes", false)
             failStart()
             return
@@ -402,7 +402,7 @@ open class BridgeService : Service() {
                 val pfd = DebugTransport.connect(dbgPort)
                 main.post {
                     if (pfd == null) {
-                        CarLifeState.status = "debug TCP: нет соединения"
+                        CarLifeState.setStatus(R.string.projection_debug_disconnected)
                         failStart()
                     } else if (session != null) {
                         pfd.close()
@@ -427,7 +427,7 @@ open class BridgeService : Service() {
             }
             val unavailable = WirelessCarLife.unavailableReason(this)
             if (unavailable != null) {
-                CarLifeState.status = unavailable
+                CarLifeState.setStatus(unavailable)
                 failStart()
                 return
             }
@@ -447,7 +447,7 @@ open class BridgeService : Service() {
         }
 
         if (WirelessPrefs(this).mode == CarLifeConnectionMode.WIFI) {
-            CarLifeState.status = "Выбрано подключение CarLife по Wi-Fi"
+            CarLifeState.setStatus(R.string.projection_wifi_selected)
             failStart()
             return
         }
@@ -455,13 +455,13 @@ open class BridgeService : Service() {
         val acc = usb.accessoryList?.firstOrNull(Actions::isCarLifeAccessory)
         if (acc == null) {
             AppLog.i("сервис: аксессуара нет, останавливаюсь")
-            CarLifeState.status = "аксессуара нет"
+            CarLifeState.setStatus(R.string.projection_no_accessory)
             failStart()
             return
         }
         if (!usb.hasPermission(acc)) {
             AppLog.i("сервис: нет разрешения на аксессуар, останавливаюсь")
-            CarLifeState.status = "нет разрешения на аксессуар"
+            CarLifeState.setStatus(R.string.projection_no_usb_permission)
             failStart()
             return
         }
@@ -473,11 +473,11 @@ open class BridgeService : Service() {
         }
         if (pfd == null) {
             AppLog.i("сервис: openAccessory вернул null")
-            CarLifeState.status = "openAccessory: ошибка"
+            CarLifeState.setStatus(R.string.projection_open_usb_error)
             failStart()
             return
         }
-        AppLog.i("сервис: аксессуар открыт: ${MainActivity.describe(acc)}")
+        AppLog.i("сервис: аксессуар открыт: ${MainActivity.describe(this, acc)}")
         if (wifiBMode || pendingTcp6 != null) {
             // кабель побеждает воздух: ожидание машины по Wi-Fi отменяем; после USB-сессии возобновим, только если
             // машина рядом по Bluetooth и кабеля нет (usbToAir)
@@ -491,7 +491,7 @@ open class BridgeService : Service() {
             btProbe.stop("кабель")
             cancelLinkWait()
         }
-        startSession(StreamTransport.fromPfd(pfd, TransportCaps.USB_AOA, MainActivity.describe(acc)))
+        startSession(StreamTransport.fromPfd(pfd, TransportCaps.USB_AOA, MainActivity.describe(this, acc)))
     }
 
     /** debug tcp6: слушать 6 портов на loopback, ждать ГУ (pc-headunit --transport tcp6), затем обычная сессия. */
@@ -671,7 +671,7 @@ open class BridgeService : Service() {
         }
         val unavailable = WirelessCarLife.unavailableReason(this)
         if (unavailable != null) {
-            CarLifeState.status = unavailable
+            CarLifeState.setStatus(unavailable)
             failStart()
             return
         }
@@ -937,7 +937,7 @@ open class BridgeService : Service() {
         sixReady = false
         WLog.begin(kind, "bind" to bind, "ACCESS_LOCAL_NETWORK" to NetProbe.localNetworkGranted(this))
         AppLog.i("сервис: $kind, слушаю 6 портов на $bind, жду ГУ ${waitMs / 1000} с")
-        CarLifeState.status = if (beacon == null) "$kind: жду ГУ" else "Ожидаю магнитолу CarLife по Wi-Fi"
+        CarLifeState.setStatus(if (beacon == null) getString(R.string.projection_wait_peer, kind) else getString(R.string.projection_wait_carlife_wifi))
         val waitStart = SystemClock.elapsedRealtime()
         Thread({
             var hotspotPeer = false      // 6/6 собрала не P2P-группа ГУ, а подсеть маяка
@@ -1014,7 +1014,7 @@ open class BridgeService : Service() {
                             CarLifeState.wireless = getString(R.string.wl_state_gave_up, (WIFI_B_WAIT_MS / 60_000).toInt())
                         }
                         // отмена ожидания кабелем: статус уже USB-сессии, не перетираем
-                        if (session == null) CarLifeState.status = msg ?: "$kind: ошибка"
+                        if (session == null) CarLifeState.setStatus(msg ?: getString(R.string.projection_transport_error, kind))
                         failStart()
                     }
                 }
@@ -1069,7 +1069,7 @@ open class BridgeService : Service() {
             if (h == null) {
                 // Source construction failed; do not leave a USB transport open without a video source.
                 transport.close()
-                CarLifeState.status = AaState.setupError ?: "мост не стартовал"
+                CarLifeState.setStatus(AaState.setupError ?: getString(R.string.projection_start_failed))
                 failStart()
                 return
             }
@@ -1093,10 +1093,13 @@ open class BridgeService : Service() {
             brandArtwork = BrandArtwork.bitmap(resources),
             onHuSize = { w, hh -> aaPrefs.saveHuSize(w, hh) },
             onNavigationInterestChanged = { main.post { if (!stopRequested && session === sref[0]) clusterNavigation?.subscriptionChanged() } },
-            onDesktopOutputLost = { owner, hadPicture -> main.post {
-                if (!stopRequested && session === owner)
-                    com.hsd.universal.dex.DesktopMusicPlayback.usbOutputLost(this, owner, hadPicture && DexState.running)
-            } }
+            onDesktopOutputLost = { owner, hadPicture ->
+                val carriedAudio = h.core.audioViaUsb
+                main.post {
+                    if (!stopRequested && session === owner)
+                        com.hsd.universal.dex.DesktopMusicPlayback.usbOutputLost(this, owner, hadPicture && DexState.running, carriedAudio)
+                }
+            }
         ) { reason -> main.post { onSessionClosed(sref[0]!!, reason) } }
         sref[0] = s
         session = s
@@ -1126,7 +1129,7 @@ open class BridgeService : Service() {
             h.shutdown("завершившийся источник при подключении")
             return
         }
-        if (transport.caps.kind == TransportCaps.USB_AOA.kind) Actions.onUsbSessionStarted()
+        if (transport.caps.kind == TransportCaps.USB_AOA.kind) Actions.onUsbSessionStarted(this@BridgeService)
     }
 
     private fun startClusterSources(owner: CarLifeSession, config: SessionConfig, clusterTransport: Boolean, prefs: AaPrefs) {
@@ -1227,7 +1230,9 @@ open class BridgeService : Service() {
                 access.useShizuku -> ShizukuDexConnector(applicationContext, core) { reason ->
                     main.post { ref[0]?.let { onDesktopSourceFailed(it, reason) } }
                 }
-                else -> DexConnector(applicationContext, core)
+                else -> DexConnector(applicationContext, core) {
+                    main.post { ref[0]?.let { onDesktopSourceFailed(it, ShizukuDexConnector.Failure.OTHER) } }
+                }
             }
             AppLog.i("DEX: видео ${mode.outW}x${mode.outH} через CarLife; USB playback audio opt-in; микрофон CarLife не передаётся")
             val h = BridgeHost(core, conn, scheduler, log, previous = previous, onTornDown = {
@@ -1292,7 +1297,7 @@ open class BridgeService : Service() {
         if (recovery != null && recovery.owner === owner && desktopRecovery.isCurrent(recovery.attempt)) {
             // The callback acknowledges BOTH privileged producer closure and encoder/Surface disposal.
             DexState.error = null
-            DexState.status = "Восстанавливаю рабочий стол (${recovery.attempt.number}/2)…"
+            DexState.status = getString(R.string.projection_desktop_recovering, recovery.attempt.number)
             main.postDelayed({ recoverDesktop(recovery) }, recovery.attempt.delayMs)
         }
         if (session == null && host == null && !linkWaiting && !wifiBMode && !usbToAirPending) finish()
@@ -1333,7 +1338,7 @@ open class BridgeService : Service() {
 
     /** Старт не удался: если жив AA-хост (идёт grace), сервис не гасим, иначе finish. */
     private fun failStart() {
-        Actions.onUsbStartFailed(CarLifeState.status)
+        Actions.onUsbStartFailed(CarLifeState.status(this@BridgeService))
         if (linkWaiting) return      // идёт ожидание машины по воздуху: сервис нужен
         val h = host
         if (h != null && !h.isDead) return
@@ -1357,7 +1362,7 @@ open class BridgeService : Service() {
         cancelDesktopRecovery()
         session = null
         CarLifeState.running = false
-        if (s.transportKind == TransportCaps.USB_AOA.kind) Actions.onUsbSessionClosed()
+        if (s.transportKind == TransportCaps.USB_AOA.kind) Actions.onUsbSessionClosed(this@BridgeService)
         markCarSeen()
         CarLifeState.wirelessSession = false
         if (wifiBMode && autoStarted && !autoMode && !stopRequested) {

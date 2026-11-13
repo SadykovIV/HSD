@@ -149,9 +149,9 @@ class AaPrefs(ctx: Context) {
         get() = sp.getBoolean("metaNavi", true)
         set(v) = sp.edit().putBoolean("metaNavi", v).apply()
 
-    /** Experimental next-street text; arrows and distances are controlled separately by metaNavi. */
+    /** The navigation subscription controls arrows and distance. The user can hide just the street. */
     var metaNaviStreetNames: Boolean
-        get() = sp.getBoolean("metaNaviStreetNames", false)
+        get() = sp.getBoolean("metaNaviStreetNames", com.hsd.universal.NavigationStreetNames.ENABLED_BY_DEFAULT)
         set(v) = sp.edit().putBoolean("metaNaviStreetNames", v).apply()
 
     fun observeNavigationStreetNames(changed: (Boolean) -> Unit): () -> Unit {

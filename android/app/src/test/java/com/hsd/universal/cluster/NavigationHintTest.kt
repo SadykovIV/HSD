@@ -5,6 +5,17 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class NavigationHintTest {
+    @Test fun notificationVariantsSupplyOnlyTheSameManeuversStreet() {
+        val primary = ClusterNavigationHint(AaMeta.T_LEFT, "", 120)
+        val named = primary.copy(road = "улица Мира")
+        val otherTurn = named.copy(nextTurn = AaMeta.T_RIGHT)
+        val otherDistance = named.copy(distanceMeters = 300)
+        assertEquals(named, NavigationHintParser.fromCardVariants(sequenceOf(primary, otherTurn, named), true))
+        assertEquals(primary, NavigationHintParser.fromCardVariants(sequenceOf(primary, otherTurn, otherDistance), true))
+        assertEquals(primary, NavigationHintParser.fromCardVariants(sequenceOf(primary, named), false))
+        assertEquals(primary, NavigationHintParser.fromCardVariants(sequenceOf(named), false))
+        assertEquals(named, NavigationHintParser.fromCardVariants(sequenceOf(primary, named.copy(timeSeconds = 3)), true))
+    }
     @Test fun supportsManeuverTextAndDecimalUnits() {
         assertEquals(ClusterNavigationHint(AaMeta.T_LEFT, "", 450),
             NavigationHintParser.parse("Через 450 м поверните налево", "Тестовая улица", null, false))

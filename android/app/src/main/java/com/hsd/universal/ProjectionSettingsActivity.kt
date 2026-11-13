@@ -120,14 +120,14 @@ internal class ProjectionSettingsActivity : Activity() {
         portField = null
         content.removeAllViews()
         val heading = when (page) {
-            Page.ROUTES -> "Тип подключения"
-            Page.ROUTE -> route.title
-            Page.CERTIFICATES -> "Сертификаты Android Auto"
+            Page.ROUTES -> getString(R.string.desktop_connection_type)
+            Page.ROUTE -> getString(route.titleRes)
+            Page.CERTIFICATES -> getString(R.string.desktop_android_auto_certificates)
             Page.RECEIVER -> identities.receiverName(receiver)
         }
         title = heading
         val header = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL; content.addView(this) }
-        ui.button(header, "Назад") { onBackPressed() }.layoutParams = LinearLayout.LayoutParams(-2, -2)
+        ui.button(header, getString(R.string.set_back)) { onBackPressed() }.layoutParams = LinearLayout.LayoutParams(-2, -2)
         ui.text(header, heading, 23f, true).apply {
             layoutParams = LinearLayout.LayoutParams(0, -2, 1f)
             setPadding(ui.dp(12), 0, 0, 0)
@@ -136,17 +136,17 @@ internal class ProjectionSettingsActivity : Activity() {
         when (page) {
             Page.ROUTES -> {
                 val aa = ui.section(content, "Android Auto")
-                choice(aa, ProjectionRoute.USB, "Кабель от телефона к USB-порту магнитолы")
-                choice(aa, ProjectionRoute.WIRELESS_AA, "Сопряжение по Bluetooth, проекция по Wi-Fi")
+                choice(aa, ProjectionRoute.USB, getString(R.string.desktop_connect_the_phone_to_the_head_unit_s_usb))
+                choice(aa, ProjectionRoute.WIRELESS_AA, getString(R.string.desktop_pair_over_bluetooth_and_project_over_wi_fi))
                 val carLife = ui.section(content, "Baidu CarLife")
-                choice(carLife, ProjectionRoute.CARLIFE_USB, "Кабель от телефона к USB-порту CarLife")
-                choice(carLife, ProjectionRoute.CARLIFE_WIFI, "Проекция по Wi-Fi или Wi-Fi Direct")
+                choice(carLife, ProjectionRoute.CARLIFE_USB, getString(R.string.desktop_connect_the_phone_to_the_carlife_usb_port))
+                choice(carLife, ProjectionRoute.CARLIFE_WIFI, getString(R.string.desktop_project_over_wi_fi_or_wi_fi_direct))
                 val cp = ui.section(content, "CarPlay")
-                choice(cp, ProjectionRoute.CARPLAY, "Сопряжение по Bluetooth, проекция по Wi-Fi")
-                val lanGroup = ui.section(content, "Android Auto по локальной сети")
-                choice(lanGroup, ProjectionRoute.LAN_SERVER, "Магнитола подключается к телефону на порт 5277")
-                choice(lanGroup, ProjectionRoute.LAN_CLIENT, "Телефон подключается к IP и порту магнитолы")
-                ui.navigation(ui.section(content), "Сертификаты Android Auto", identities.defaultAlias ?: "Автоматически") {
+                choice(cp, ProjectionRoute.CARPLAY, getString(R.string.desktop_pair_over_bluetooth_and_project_over_wi_fi))
+                val lanGroup = ui.section(content, getString(R.string.desktop_android_auto_over_lan))
+                choice(lanGroup, ProjectionRoute.LAN_SERVER, getString(R.string.desktop_the_head_unit_connects_to_the_phone_on_port))
+                choice(lanGroup, ProjectionRoute.LAN_CLIENT, getString(R.string.desktop_the_phone_connects_to_the_head_unit_s_ip))
+                ui.navigation(ui.section(content), getString(R.string.desktop_android_auto_certificates), identities.defaultAlias ?: getString(R.string.desktop_automatic)) {
                     open(Page.CERTIFICATES)
                 }
             }
@@ -158,7 +158,7 @@ internal class ProjectionSettingsActivity : Activity() {
 
     private fun choice(parent: LinearLayout, option: ProjectionRoute, hint: String) {
         val active = ProjectionRoute.selected(this) == option
-        ui.navigation(parent, option.title, if (active) "✓ Выбрано · $hint" else hint) {
+        ui.navigation(parent, getString(option.titleRes), if (active) getString(R.string.desktop_selected, hint) else hint) {
             route = option
             open(Page.ROUTE)
         }.view.isSelected = active
@@ -167,48 +167,48 @@ internal class ProjectionSettingsActivity : Activity() {
     private fun routeOptions() {
         val card = ui.section(content, route.protocol)
         when (route) {
-            ProjectionRoute.CARLIFE_USB -> ui.text(card, "Откройте Baidu CarLife на магнитоле, подключите телефон кабелем передачи данных и разрешите доступ к USB.")
+            ProjectionRoute.CARLIFE_USB -> ui.text(card, getString(R.string.desktop_open_baidu_carlife_on_a_head_unit_connect_your))
             ProjectionRoute.CARLIFE_WIFI -> {
-                ui.text(card, "Откройте беспроводной CarLife на магнитоле. Магнитола может использовать общую сеть Wi-Fi, точку доступа или согласовать Wi-Fi Direct через Bluetooth.")
-                ui.navigation(card, "Магнитола и сеть", "Bluetooth, Wi-Fi Direct и точка доступа") {
+                ui.text(card, getString(R.string.desktop_open_wireless_carlife_on_a_head_unit_the_head))
+                ui.navigation(card, getString(R.string.desktop_head_unit_and_network), getString(R.string.desktop_bluetooth_wi_fi_direct_and_hotspot)) {
                     com.hsd.universal.link.car.WirelessCarLife.configure(this)
                 }
             }
-            ProjectionRoute.USB -> ui.text(card, "Откройте Android Auto на магнитоле и подключите телефон кабелем с передачей данных.")
+            ProjectionRoute.USB -> ui.text(card, getString(R.string.desktop_open_android_auto_on_a_head_unit_and_connect))
             ProjectionRoute.LAN_SERVER, ProjectionRoute.LAN_CLIENT -> {
                 ui.text(card, if (route == ProjectionRoute.LAN_SERVER)
-                    "Подключите устройства к одной сети. На магнитоле укажите адрес телефона и порт 5277."
-                else "Подключите устройства к одной сети и включите сервер Android Auto на магнитоле.")
+                    getString(R.string.desktop_connect_the_devices_to_the_same_network_on_the)
+                else getString(R.string.desktop_connect_your_devices_to_a_single_network_and_turn))
                 if (route == ProjectionRoute.LAN_SERVER) {
                     val ips = localAddresses()
-                    ui.text(card, if (ips.isEmpty()) "Адрес телефона появится после подключения к Wi-Fi." else "Адрес телефона · $ips", 15f, true)
+                    ui.text(card, if (ips.isEmpty()) getString(R.string.desktop_the_phone_address_will_appear_after_connecting_to_wi) else getString(R.string.desktop_phone_address, ips), 15f, true)
                 }
-                addressField = field(card, "IP-адрес магнитолы", lan)
-                if (route == ProjectionRoute.LAN_CLIENT) portField = field(card, "Порт магнитолы", port, true)
+                addressField = field(card, getString(R.string.desktop_head_unit_ip_address), lan)
+                if (route == ProjectionRoute.LAN_CLIENT) portField = field(card, getString(R.string.desktop_head_unit_port), port, true)
             }
             ProjectionRoute.WIRELESS_AA, ProjectionRoute.CARPLAY -> {
-                ui.text(card, "Включите беспроводной ${route.protocol} на магнитоле. Выберите сопряжённое устройство.")
-                ui.navigation(card, "Магнитола", peerName.ifBlank { peer.ifBlank { "Выбрать устройство Bluetooth" } }) {
+                ui.text(card, getString(R.string.desktop_turn_on_the_wireless_select_a_head_unit_select, route.protocol))
+                ui.navigation(card, getString(R.string.mock_bt_headunit), peerName.ifBlank { peer.ifBlank { getString(R.string.desktop_select_bluetooth_device) } }) {
                     withPermissions("pick")
                 }
-                ui.navigation(card, "Настройки Bluetooth", "Сопряжение с новой магнитолой") {
+                ui.navigation(card, getString(R.string.desktop_bluetooth_settings), getString(R.string.desktop_pair_a_new_head_unit)) {
                     startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
                 }
                 if (route == ProjectionRoute.CARPLAY) {
-                    ui.navigation(card, "Сделать телефон видимым", "Для первого сопряжения, когда магнитола ищет устройства") {
+                    ui.navigation(card, getString(R.string.desktop_make_phone_discoverable), getString(R.string.desktop_use_for_initial_pairing_when_the_head_unit_searches)) {
                         withPermissions("discoverable")
                     }
                     val bonds = getSharedPreferences("carplay-identities", MODE_PRIVATE)
                     if (peer.isNotEmpty() && bonds.contains("peer.$peer"))
-                        ui.button(card, "Забыть сопряжение CarPlay") {
-                            AlertDialog.Builder(this).setTitle("Забыть сопряжение CarPlay?")
-                                .setMessage(peerName.ifBlank { peer }).setNegativeButton("Отмена", null)
-                                .setPositiveButton("Забыть") { _, _ -> bonds.edit().remove("peer.$peer").apply(); capture(); render() }.show()
+                        ui.button(card, getString(R.string.desktop_forget_carplay_pairing)) {
+                            AlertDialog.Builder(this).setTitle(getString(R.string.desktop_forget_this_carplay_pairing))
+                                .setMessage(peerName.ifBlank { peer }).setNegativeButton(getString(R.string.mock_cancel), null)
+                                .setPositiveButton(getString(R.string.desktop_forget)) { _, _ -> bonds.edit().remove("peer.$peer").apply(); capture(); render() }.show()
                         }
                 }
             }
         }
-        ui.button(content, if (route == ProjectionRoute.selected(this)) "Готово" else "Использовать этот способ") { withPermissions("save") }
+        ui.button(content, if (route == ProjectionRoute.selected(this)) getString(R.string.diag_done) else getString(R.string.desktop_use_this_connection)) { withPermissions("save") }
     }
 
     private fun field(parent: LinearLayout, label: String, value: String, numeric: Boolean = false): EditText {
@@ -224,14 +224,14 @@ internal class ProjectionSettingsActivity : Activity() {
     }
 
     private fun certificates() {
-        val phone = ui.section(content, "Сертификат телефона")
-        ui.text(phone, "HSD создаёт сертификат при первом подключении. Если магнитола требует сертификат своего издателя, выберите выданный вам ключ в Android.")
-        ui.navigation(phone, "Выбор сертификата", identities.defaultAlias ?: "Автоматически") { chooseIdentity(null) }
-        val receivers = ui.section(content, "Магнитолы")
+        val phone = ui.section(content, getString(R.string.desktop_phone_certificate))
+        ui.text(phone, getString(R.string.desktop_hsd_creates_a_certificate_the_first_time_it_connects))
+        ui.navigation(phone, getString(R.string.desktop_select_certificate), identities.defaultAlias ?: getString(R.string.desktop_automatic)) { chooseIdentity(null) }
+        val receivers = ui.section(content, getString(R.string.desktop_head_unit_3d48))
         val ids = identities.receiverIds()
-        if (ids.isEmpty()) ui.text(receivers, "После первого соединения магнитола появится здесь. При повторном подключении HSD сверит её сертификат автоматически.")
+        if (ids.isEmpty()) ui.text(receivers, getString(R.string.desktop_after_the_first_connection_the_radio_will_appear_here))
         for (id in ids) ui.navigation(receivers, identities.receiverName(id), identities.connectionLabel(id) +
-            if (identities.changed(id) != null) " · Сертификат изменился" else "") {
+            if (identities.changed(id) != null) getString(R.string.desktop_certificate_changed) else "") {
             receiver = id
             open(Page.RECEIVER)
         }
@@ -241,32 +241,32 @@ internal class ProjectionSettingsActivity : Activity() {
         val id = receiver
         val card = ui.section(content, identities.connectionLabel(id))
         val last = identities.seen(id)
-        if (last > 0) ui.text(card, "Последнее соединение · " + DateFormat.getDateTimeInstance().format(Date(last)))
+        if (last > 0) ui.text(card, getString(R.string.desktop_last_connection) + DateFormat.getDateTimeInstance().format(Date(last)))
         val alias = identities.assignedAlias(id)
-        ui.navigation(card, "Сертификат телефона для этой магнитолы", when (alias) {
-            null -> "Общая настройка"
-            "" -> "Сертификат HSD"
+        ui.navigation(card, getString(R.string.desktop_certificate_of_telephone_for_this_head_unit), when (alias) {
+            null -> getString(R.string.desktop_general_settings)
+            "" -> getString(R.string.desktop_hsd_certificate)
             else -> alias
         }) { chooseIdentity(id) }
         val fingerprints = identities.get(id)
         val changed = identities.changed(id)
         if (changed != null || fingerprints.isNotEmpty()) {
-            val detail = ui.section(content, "Сертификат магнитолы")
-            for (pin in fingerprints.sorted()) fingerprint(detail, "Сохранённый SHA-256", pin)
+            val detail = ui.section(content, getString(R.string.desktop_certificate_of_recorder))
+            for (pin in fingerprints.sorted()) fingerprint(detail, getString(R.string.desktop_save_sha_256), pin)
             if (changed != null) {
-                fingerprint(detail, "Новый SHA-256", changed)
-                ui.text(detail, "Сверьте новый отпечаток с данными магнитолы перед заменой.")
-                ui.button(detail, "Принять новый сертификат") {
-                    AlertDialog.Builder(this).setTitle("Заменить сертификат магнитолы?").setMessage(changed)
-                        .setNegativeButton("Отмена", null).setPositiveButton("Подтвердить") { _, _ ->
+                fingerprint(detail, getString(R.string.desktop_new_sha_256), changed)
+                ui.text(detail, getString(R.string.desktop_check_the_new_print_with_the_head_unit_data))
+                ui.button(detail, getString(R.string.desktop_accept_new_certificate)) {
+                    AlertDialog.Builder(this).setTitle(getString(R.string.desktop_replace_the_head_unit_certificate)).setMessage(changed)
+                        .setNegativeButton(getString(R.string.mock_cancel), null).setPositiveButton(getString(R.string.desktop_confirm)) { _, _ ->
                             identities.acceptChange(id, changed); render()
                         }.show()
                 }
             }
         }
-        ui.button(content, "Забыть магнитолу") {
-            AlertDialog.Builder(this).setTitle("Забыть магнитолу?").setMessage("При следующем подключении HSD заново запомнит сертификат этого устройства.")
-                .setNegativeButton("Отмена", null).setPositiveButton("Забыть") { _, _ ->
+        ui.button(content, getString(R.string.desktop_forget_head_unit)) {
+            AlertDialog.Builder(this).setTitle(getString(R.string.desktop_forget_the_tape)).setMessage(getString(R.string.desktop_the_next_time_you_connect_the_hsd_will_remember))
+                .setNegativeButton(getString(R.string.mock_cancel), null).setPositiveButton(getString(R.string.desktop_forget)) { _, _ ->
                     identities.forget(id); open(Page.CERTIFICATES)
                 }.show()
         }
@@ -279,14 +279,14 @@ internal class ProjectionSettingsActivity : Activity() {
 
     private fun chooseIdentity(id: String?) {
         val alias = if (id == null) identities.defaultAlias else identities.assignedAlias(id)
-        val labels = if (id == null) arrayOf("Автоматически", "Выбрать из хранилища Android…")
-            else arrayOf("Общая настройка", "Сертификат HSD", "Выбрать из хранилища Android…")
+        val labels = if (id == null) arrayOf(getString(R.string.desktop_automatic), getString(R.string.desktop_select_from_android_storage))
+            else arrayOf(getString(R.string.desktop_general_settings), getString(R.string.desktop_hsd_certificate), getString(R.string.desktop_select_from_android_storage))
         fun select(value: String?) {
             if (id == null) identities.selectDefault(value) else identities.select(id, value)
             render()
         }
         val selected = when (alias) { null -> 0; "" -> 1; else -> labels.lastIndex }
-        AlertDialog.Builder(this).setTitle("Сертификат телефона").setSingleChoiceItems(labels, selected) { dialog, which ->
+        AlertDialog.Builder(this).setTitle(getString(R.string.desktop_phone_certificate)).setSingleChoiceItems(labels, selected) { dialog, which ->
             dialog.dismiss()
             when {
                 which == 0 -> select(null)
@@ -297,13 +297,13 @@ internal class ProjectionSettingsActivity : Activity() {
                             if (id == null) identities.selectDefault(result) else identities.select(id, result)
                         }
                         if (!isFinishing && !isDestroyed) {
-                            if (result == null) Toast.makeText(this, "Сертификат не выбран. Свой файл .p12 или .pfx можно установить в настройках безопасности Android.", Toast.LENGTH_LONG).show()
+                            if (result == null) Toast.makeText(this, getString(R.string.desktop_certificate_not_selected_you_can_set_your_p12_or), Toast.LENGTH_LONG).show()
                             render()
                         }
                     }
                 }, arrayOf("RSA", "EC"), null, null, -1, alias?.takeIf { it.isNotEmpty() })
             }
-        }.setNegativeButton("Отмена", null).show()
+        }.setNegativeButton(getString(R.string.mock_cancel), null).show()
     }
 
     private fun withPermissions(action: String) {
@@ -341,7 +341,7 @@ internal class ProjectionSettingsActivity : Activity() {
                 results.getOrNull(i) == PackageManager.PERMISSION_GRANTED || permissions[i] == Manifest.permission.ACCESS_COARSE_LOCATION ||
                     permissions[i] == Manifest.permission.ACCESS_FINE_LOCATION || permissions[i] == Manifest.permission.BLUETOOTH_SCAN
             }) perform(pending)
-        else Toast.makeText(this, "Для подключения предоставьте запрошенный доступ в настройках Android.", Toast.LENGTH_LONG).show()
+        else Toast.makeText(this, getString(R.string.desktop_to_connect_provide_the_requested_access_in_the_android), Toast.LENGTH_LONG).show()
     }
 
     private fun perform(action: String) {
@@ -351,9 +351,9 @@ internal class ProjectionSettingsActivity : Activity() {
                 try {
                     startActivityForResult(Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE), REQUEST_DISCOVERABLE)
                 } catch (_: ActivityNotFoundException) {
-                    Toast.makeText(this, "Откройте настройки Bluetooth и включите видимость телефона.", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, getString(R.string.desktop_open_bluetooth_settings_and_make_the_phone_discoverable), Toast.LENGTH_LONG).show()
                 } catch (_: SecurityException) {
-                    Toast.makeText(this, "Разрешите HSD доступ к устройствам поблизости.", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, getString(R.string.desktop_allow_hsd_to_access_nearby_devices), Toast.LENGTH_LONG).show()
                 }
             }
             else -> save()
@@ -363,7 +363,7 @@ internal class ProjectionSettingsActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == REQUEST_DISCOVERABLE && resultCode > 0)
-            Toast.makeText(this, "Телефон виден ${resultCode} с. Выберите его на магнитоле и подтвердите код сопряжения.", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, getString(R.string.desktop_phone_visible_select_it_on_the_head_unit_and, resultCode), Toast.LENGTH_LONG).show()
     }
 
     private companion object { const val REQUEST_DISCOVERABLE = 2 }
@@ -372,13 +372,13 @@ internal class ProjectionSettingsActivity : Activity() {
     private fun pickBondedDevice() {
         val devices = getSystemService(BluetoothManager::class.java)?.adapter?.bondedDevices.orEmpty().sortedBy { it.name.orEmpty() }
         if (devices.isEmpty()) {
-            AlertDialog.Builder(this).setTitle("Сопряжённые устройства")
-                .setMessage("Выполните сопряжение с магнитолой и вернитесь к её выбору.")
-                .setPositiveButton("Открыть Bluetooth") { _, _ -> startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }
-                .setNegativeButton("Отмена", null).show()
+            AlertDialog.Builder(this).setTitle(getString(R.string.desktop_paired_devices))
+                .setMessage(getString(R.string.desktop_pair_the_phone_with_the_head_unit_then_select))
+                .setPositiveButton(getString(R.string.step_bluetooth_primary)) { _, _ -> startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }
+                .setNegativeButton(getString(R.string.mock_cancel), null).show()
             return
         }
-        AlertDialog.Builder(this).setTitle("Выбрать магнитолу").setItems(devices.map { "${it.name.orEmpty()} · ${it.address}" }.toTypedArray()) { _, index ->
+        AlertDialog.Builder(this).setTitle(getString(R.string.desktop_choose_head_unit)).setItems(devices.map { "${it.name.orEmpty()} · ${it.address}" }.toTypedArray()) { _, index ->
             capture()
             peer = devices[index].address
             peerName = devices[index].name.orEmpty()
@@ -392,12 +392,12 @@ internal class ProjectionSettingsActivity : Activity() {
         if (route == ProjectionRoute.LAN_CLIENT || route == ProjectionRoute.LAN_SERVER) {
             val ip = runCatching { InetAddresses.parseNumericAddress(lan.trim()) }.getOrNull()
             if (ip == null || ip.isAnyLocalAddress || ip.isMulticastAddress) {
-                addressField?.error = "Введите IP-адрес одной магнитолы"; return
+                addressField?.error = getString(R.string.desktop_enter_the_ip_address_of_one_head_unit); return
             }
             edit.putString("lanPeer", ip.hostAddress)
             if (route == ProjectionRoute.LAN_CLIENT) {
                 val parsed = port.toIntOrNull()
-                if (parsed == null || parsed !in 1..65535) { portField?.error = "Порт от 1 до 65535"; return }
+                if (parsed == null || parsed !in 1..65535) { portField?.error = getString(R.string.desktop_port_1_to_65535); return }
                 edit.putInt("lanPort", parsed)
             }
         }

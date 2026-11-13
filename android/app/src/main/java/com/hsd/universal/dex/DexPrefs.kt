@@ -1,5 +1,7 @@
 package com.hsd.universal.dex
 
+import com.hsd.universal.R
+
 import com.hsd.universal.DesktopTransport
 import com.hsd.universal.compat.PublishedDesktop
 import android.content.Context
@@ -8,12 +10,12 @@ import com.hsd.universal.aa.DesktopGeometryPolicy
 import com.hsd.universal.aa.DesktopVideoSelection
 import com.hsd.universal.aa.FpsSetting
 
-internal enum class PhoneIdleMode(val label: String) {
-    PANEL("Выключать экран"), CURTAIN("Затемнять экран"), DISABLED("Без таймера")
+internal enum class PhoneIdleMode(val labelRes: Int) {
+    PANEL(com.hsd.universal.R.string.display_turn_off), CURTAIN(com.hsd.universal.R.string.display_dim), DISABLED(com.hsd.universal.R.string.desktop_no_timer)
 }
 
 /** Preferences are separate from upstream HSD/Android Auto settings. */
-class DexPrefs(context: Context) {
+class DexPrefs(private val context: Context) {
     private val prefs = context.getSharedPreferences(if (DesktopTransport.universal) "hsd_dex" else PublishedDesktop.PREFS, Context.MODE_PRIVATE)
 
     init {
@@ -72,7 +74,12 @@ class DexPrefs(context: Context) {
         if (profile == DesktopModePolicy.SAMSUNG_DEX) "dex_activation_method" else "desktop_activation_method"
 
     var activationMethod: ActivationMethod
-        get() = ActivationMethod.restore(desktopMode, prefs.getString(activationMethodKey(desktopMode), null), accessMode)
+        get() {
+            val profile = desktopMode
+            val saved = prefs.getString(activationMethodKey(profile), null)
+                ?: if (profile == DesktopModePolicy.SAMSUNG_DEX) prefs.getString("desktop_activation_method", null) else null
+            return ActivationMethod.restore(profile, saved, accessMode)
+        }
         set(value) {
             val profile = desktopMode
             val backend = requireNotNull(value.backend(profile)) { "Этот способ активации недоступен для выбранного профиля" }
@@ -83,7 +90,12 @@ class DexPrefs(context: Context) {
 
     /** Read a profile's existing backend before changing the profile or component selection. */
     fun accessModeFor(profile: Int): DesktopAccessMode {
-        val saved = prefs.getString(backendKey(profile), null) ?: prefs.getString("access_backend", null)
+        val selected = prefs.getString(backendKey(profile), null)
+        // Earlier builds used the streaming ADB backend for the ordinary DeX Wi-Fi activation option.
+        if (profile == DesktopModePolicy.SAMSUNG_DEX && selected == DesktopAccessMode.LEGACY_ADB.name &&
+            prefs.getString(activationMethodKey(profile), null) == ActivationMethod.WIFI.name) return DesktopAccessMode.COMPUTER
+        val saved = selected ?: prefs.getString("access_backend", null)
+            ?: if (profile == DesktopModePolicy.SAMSUNG_DEX) prefs.getString("desktop_access_backend", null) else null
         val legacy = if (prefs.contains("use_shizuku")) prefs.getBoolean("use_shizuku", true) else null
         return DesktopAccessMode.restore(profile, saved, legacy)
     }
@@ -91,7 +103,7 @@ class DexPrefs(context: Context) {
         get() = accessMode == DesktopAccessMode.SHIZUKU
         set(value) {
             accessMode = if (value) DesktopAccessMode.SHIZUKU
-                else DesktopAccessMode.optionsFor(desktopMode).single { it != DesktopAccessMode.SHIZUKU }
+                else if (desktopMode == DesktopModePolicy.SAMSUNG_DEX) DesktopAccessMode.LEGACY_ADB else DesktopAccessMode.COMPUTER
         }
     var useDelegated: Boolean
         get() = accessMode == DesktopAccessMode.COMPUTER
@@ -103,7 +115,7 @@ class DexPrefs(context: Context) {
     /** Called on the setup worker before instrumentation deliberately restarts this package. */
     internal fun persistActivationSelection(audio: Boolean, screen: Boolean): Boolean {
         val profile = desktopMode
-        if (profile == DesktopModePolicy.SAMSUNG_DEX || !useDelegated ||
+        if (!useDelegated ||
             usbPlaybackAudio != audio || desktopPanelControl != screen) return false
         return prefs.edit().putString(backendKey(profile), DesktopAccessMode.COMPUTER.name)
             .putBoolean("desktop_usb_playback_audio", audio)
@@ -148,7 +160,7 @@ class DexPrefs(context: Context) {
             .putString("desktop_resolution", DesktopResolution.CUSTOM.name).apply()
     }
     val desktopResolutionLabel: String get() = if (desktopResolution == DesktopResolution.CUSTOM)
-        customDesktopSize().let { "${it.first} × ${it.second}" } else desktopResolution.title
+        customDesktopSize().let { "${it.first} × ${it.second}" } else desktopResolution.displayTitle(context)
     fun desktopVideoSelection(): DesktopVideoSelection = customDesktopSize().let {
         DesktopVideoSelection(desktopResolution, desktopDensity, it.first, it.second)
     }
@@ -216,7 +228,8 @@ class DexPrefs(context: Context) {
 }
 
 object DexState {
-    @Volatile var status: String = "DeX не запущен"
+    @Volatile var status = ""
+    fun displayStatus(context: Context): String = status.ifEmpty { context.getString(R.string.projection_idle) }
     @Volatile var error: String? = null
     @Volatile var running: Boolean = false
     @Volatile var displayId: Int = -1

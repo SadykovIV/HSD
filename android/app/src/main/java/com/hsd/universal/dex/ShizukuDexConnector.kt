@@ -1,5 +1,6 @@
 package com.hsd.universal.dex
 
+import com.hsd.universal.R
 import com.hsd.universal.update.ComponentPackages
 import com.hsd.universal.DesktopTransport
 
@@ -99,14 +100,14 @@ class ShizukuDexConnector(context: Context, private val core: AaBridgeCore,
                 // A callback already queued by Shizuku may arrive after removal. Repeat
                 // removal for this unique tag rather than leaving its new process alive.
                 if (stopping.get()) unbind()
-            } catch (e: Exception) { fail("Не удалось открыть службу Shizuku: ${e.message}") }
+            } catch (e: Exception) { fail(context.getString(R.string.desktop_the_shizuku_service_failed_to_open, e.message)) }
             finally { connected.countDown() }
         }
         override fun onServiceDisconnected(name: ComponentName) {
             // A disconnect callback is not proof that the producer process died.
             fail(helperUnavailableMessage(), Failure.HELPER_UNAVAILABLE)
         }
-        override fun onNullBinding(name: ComponentName) { fail("Shizuku не запустил службу рабочего стола", Failure.HELPER_UNAVAILABLE) }
+        override fun onNullBinding(name: ComponentName) { fail(context.getString(R.string.desktop_shizuku_has_not_launched_a_desktop_service), Failure.HELPER_UNAVAILABLE) }
     }
 
     override fun start() {
@@ -121,8 +122,8 @@ class ShizukuDexConnector(context: Context, private val core: AaBridgeCore,
                 core.onAaConnecting()
                 core.peer = this
                 core.enableDesktopSurface(this)
-                status("Запускаю рабочий стол через Shizuku…")
-            } catch (e: Exception) { fail(e.message ?: "Не удалось подготовить рабочий стол"); return }
+                status(context.getString(R.string.desktop_i_m_running_my_desktop_through_shizuku))
+            } catch (e: Exception) { fail(e.message ?: context.getString(R.string.desktop_could_not_prepare_desktop)); return }
         }
         val bind = Runnable {
             if (!stopping.get()) try {
@@ -132,7 +133,7 @@ class ShizukuDexConnector(context: Context, private val core: AaBridgeCore,
                 AppLog.i("Shizuku UserService bind requested · server API ${Shizuku.getVersion()}.${Shizuku.getServerPatchVersion()}", false)
                 bindRequested = true
                 Shizuku.bindUserService(args, connection)
-            } catch (e: Exception) { fail(e.message ?: "Shizuku недоступен", Failure.HELPER_UNAVAILABLE) }
+            } catch (e: Exception) { fail(e.message ?: context.getString(R.string.desktop_shizuku_unavailable), Failure.HELPER_UNAVAILABLE) }
         }
         if (Looper.myLooper() == main.looper) bind.run() else main.post(bind)
         try { watchdog.scheduleWithFixedDelay({
@@ -141,9 +142,9 @@ class ShizukuDexConnector(context: Context, private val core: AaBridgeCore,
                 core.desktopVideoError?.let { fail(it) }
                 val since = awaitingFrameSince
                 if (since != 0L && !firstFrame && System.nanoTime() - since > TimeUnit.SECONDS.toNanos(30)) {
-                    fail("Рабочий стол не передал первый кадр за 30 секунд")
+                    fail(context.getString(R.string.desktop_the_desktop_did_not_transmit_the_first_frame_in))
                 }
-            } catch (e: Exception) { fail(e.message ?: "Ошибка рабочего стола") }
+            } catch (e: Exception) { fail(e.message ?: context.getString(R.string.desktop_desktop_error)) }
         }, 500, 500, TimeUnit.MILLISECONDS) } catch (_: java.util.concurrent.RejectedExecutionException) {
             // stop() raced with scheduling; its cleanup already owns the lifecycle.
         }
@@ -162,8 +163,8 @@ class ShizukuDexConnector(context: Context, private val core: AaBridgeCore,
                 fail(bindFailureMessage(access), Failure.HELPER_UNAVAILABLE)
                 return
             }
-            check(!stopping.get()) { "Подключение остановлено" }
-            val remote = checkNotNull(service) { "Служба Shizuku недоступна" }
+            check(!stopping.get()) { context.getString(R.string.desktop_connection_stopped) }
+            val remote = checkNotNull(service) { context.getString(R.string.desktop_shizuku_service_unavailable) }
             val prefs = DexPrefs(context)
             val compactMapSymbols = prefs.compactMapSymbols
             val correctionPackages = prefs.dpiCorrectionPackages
@@ -171,10 +172,10 @@ class ShizukuDexConnector(context: Context, private val core: AaBridgeCore,
             desktopMode = prefs.desktopMode
             if (desktopMode == DesktopModePolicy.DRIVEDECK) ComponentPackages.requireDriveDeck(context)
             val id = bounded(25) {
-                check(remote.protocolVersion() == DexUserServicePolicy.PROTOCOL_VERSION) { "Версия службы Shizuku не совпадает с приложением. Остановите подключение и перезапустите службу Shizuku." }
+                check(remote.protocolVersion() == DexUserServicePolicy.PROTOCOL_VERSION) { context.getString(R.string.desktop_shizuku_s_version_of_the_service_doesn_t_match) }
                 remote.startDesktopSized(input.surface, lifetime, input.width, input.height, density, desktopMode)
             }
-            check(id > 0) { "Не удалось создать отдельный экран" }
+            check(id > 0) { context.getString(R.string.desktop_could_not_create_a_separate_display) }
             displayId = id
             DexState.independentPhoneLock = context.getSystemService(android.hardware.display.DisplayManager::class.java)
                 .getDisplay(id)?.let(DesktopDisplayIsolation::confirmedIndependence)
@@ -185,16 +186,16 @@ class ShizukuDexConnector(context: Context, private val core: AaBridgeCore,
             }
             awaitingFrameSince = System.nanoTime()
             synchronized(stateLock) {
-                check(!stopping.get() && retiringGeneration != generation) { "Сеанс завершён" }
+                check(!stopping.get() && retiringGeneration != generation) { context.getString(R.string.desktop_session_ended) }
                 DexState.displayId = id
                 EmbeddedSessionRegistry.activate(this, remote, id, this.input, desktopMode, density, compactMapSymbols,
                     correctionPackages, shizuku = true)
             }
-            status("Рабочий стол ${input.width}×${input.height} готов, ожидаю видео…")
+            status(context.getString(R.string.desktop_desktop_ready_waiting_for_the_video, input.width, input.height))
             AppLog.i("DESKTOP mode=$desktopMode Shizuku display=$id generation=$generation native=${input.width}x${input.height} density=$density preview=false singleEncode=true", false)
         } catch (e: Exception) {
             if (!stopping.get()) {
-                val reason = e.cause?.message ?: e.message ?: "Ошибка создания экрана"
+                val reason = e.cause?.message ?: e.message ?: context.getString(R.string.desktop_display_creation_failed)
                 core.desktopSurfaceFailed(generation, reason)
                 fail(reason, failureKind(e))
             }
@@ -228,7 +229,7 @@ class ShizukuDexConnector(context: Context, private val core: AaBridgeCore,
                 val confirmedDead = try { serviceDied.await(6, TimeUnit.SECONDS) || !binder.isBinderAlive }
                     catch (_: InterruptedException) { Thread.currentThread().interrupt(); !binder.isBinderAlive }
                 if (!confirmedDead) {
-                    val message = "Shizuku не подтвердил закрытие экрана. Остановите Shizuku, затем подключитесь снова"
+                    val message = context.getString(R.string.desktop_shizuku_has_not_confirmed_the_screen_closing_stop_shizuku)
                     failure = message
                     DexState.error = message
                     fail(message)
@@ -242,7 +243,7 @@ class ShizukuDexConnector(context: Context, private val core: AaBridgeCore,
         this.generation = 0
         retiringGeneration = 0
         displayId = -1
-        if (!stopping.get()) status("Ожидаю повторного подключения USB ${DesktopTransport.name}…")
+        if (!stopping.get()) status(context.getString(R.string.desktop_i_m_waiting_for_the_usb_connection_again, DesktopTransport.name))
     }
 
     override fun onFirstFrame(generation: Long) {
@@ -359,7 +360,7 @@ class ShizukuDexConnector(context: Context, private val core: AaBridgeCore,
             binderCalls.execute {
                 try {
                     if (!synchronized(stateLock) { canControlPhonePanel(token) }) return@execute
-                    checkNotNull(service) { "Служба Shizuku недоступна" }.setPhoneScreenOff(off)
+                    checkNotNull(service) { context.getString(R.string.desktop_shizuku_service_unavailable) }.setPhoneScreenOff(off)
                     synchronized(stateLock) {
                         if (canControlPhonePanel(token)) {
                             DexState.phoneScreenOff = off
@@ -370,7 +371,7 @@ class ShizukuDexConnector(context: Context, private val core: AaBridgeCore,
                     synchronized(stateLock) {
                         if (canControlPhonePanel(token)) {
                             val detail = e.cause?.message ?: e.message ?: e.javaClass.simpleName
-                            DexState.phoneScreenError = "Не удалось изменить состояние экрана телефона: $detail"
+                            DexState.phoneScreenError = context.getString(R.string.desktop_it_was_not_possible_to_change_the_state_of, detail)
                             AppLog.i("DEX phone panel failed off=$off generation=$token type=${e.javaClass.simpleName}", false)
                         }
                     }
@@ -429,12 +430,12 @@ class ShizukuDexConnector(context: Context, private val core: AaBridgeCore,
                     // An already dequeued input can overlap normal USB-detach cleanup.
                     // Its retired display is gone; this must not end a reconnectable session.
                     if (!stopping.get() && generation == token && retiringGeneration != token && firstFrame) {
-                        fail("Не удалось передать управление рабочему столу: ${e.message}", failureKind(e))
+                        fail(context.getString(R.string.desktop_it_was_not_possible_to_transfer_control_to_the, e.message), failureKind(e))
                     }
                 }
             }
         } } catch (_: java.util.concurrent.RejectedExecutionException) {
-            if (!stopping.get()) fail("Очередь управления переполнена. Подключитесь снова")
+            if (!stopping.get()) fail(context.getString(R.string.desktop_the_control_line_is_full_connect_again))
         }
     }
 
@@ -444,16 +445,16 @@ class ShizukuDexConnector(context: Context, private val core: AaBridgeCore,
     }
 
     private fun helperUnavailableMessage(): String =
-        if (DexPrivilegeAccess.isReady(context)) "Служба рабочего стола завершилась; Shizuku доступен"
-        else "Сервер Shizuku недоступен. Запустите Shizuku и подключитесь снова"
+        if (DexPrivilegeAccess.isReady(context)) context.getString(R.string.desktop_desktop_service_terminated_shizuku_is_available)
+        else context.getString(R.string.desktop_shizuku_server_unavailable_launch_shizuku_and_connect_again)
 
     private fun bindFailureMessage(access: DexPrivilegeAccess.Status): String = when (access) {
-        DexPrivilegeAccess.Status.UPDATE_REQUIRED -> "Для рабочего стола нужен Shizuku 13 или новее. Обновите и перезапустите Shizuku."
-        DexPrivilegeAccess.Status.READY -> "Shizuku доступен, но служба рабочего стола не запустилась за 30 секунд. Перезапустите Shizuku или выберите в HSD «Настройки → Активация → Wi-Fi»."
+        DexPrivilegeAccess.Status.UPDATE_REQUIRED -> context.getString(R.string.desktop_you_need_shizuku_13_or_later_for_your_desktop)
+        DexPrivilegeAccess.Status.READY -> context.getString(R.string.desktop_shizuku_is_available_but_the_desktop_service_didn_t)
         DexPrivilegeAccess.Status.PERMISSION_REQUIRED, DexPrivilegeAccess.Status.DENIED_PERMANENTLY ->
-            "Разрешите доступ HSD в Shizuku → «Авторизованные приложения»."
+            context.getString(R.string.desktop_allow_hsd_access_to_shizuku_authorized_applications)
         DexPrivilegeAccess.Status.NOT_INSTALLED, DexPrivilegeAccess.Status.NOT_RUNNING ->
-            "Запустите Shizuku или выберите в HSD «Настройки → Активация → Wi-Fi»."
+            context.getString(R.string.desktop_start_shizuku_or_select_settings_activation_wi_fi_in)
     }
 
     private fun failureKind(error: Throwable): Failure =
@@ -492,7 +493,7 @@ class ShizukuDexConnector(context: Context, private val core: AaBridgeCore,
                 DexState.displayId = -1
                 DexState.independentPhoneLock = null
                 DexState.error = failure
-                status(failure?.let { "DeX: $it" } ?: "DeX остановлен")
+                status(failure?.let { "DeX: $it" } ?: context.getString(R.string.desktop_dex_has_been_stopped))
                 finished.countDown()
             }
         }

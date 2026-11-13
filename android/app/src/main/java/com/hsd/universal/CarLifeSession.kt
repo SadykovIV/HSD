@@ -61,8 +61,8 @@ class SessionConfig(
     val metaMusic: Boolean = true,
     /** Подсказки поворотов из AA (NAVI_NEXT_TURN_INFO по подписке ГУ moduleID=0). */
     val metaNavi: Boolean = true,
-    /** Experimental next-street text, independently switchable during the current route. */
-    val metaNaviStreetNames: Boolean = false,
+    /** Next-street text can be switched independently during the current route. */
+    val metaNaviStreetNames: Boolean = NavigationStreetNames.ENABLED_BY_DEFAULT,
     /** Поле 6 NAVI_NEXT_TURN_INFO: иконка и/или time. */
     val naviField6: NaviField6 = NaviField6.BOTH,
     val desktopVideo: DesktopVideoSelection? = null,
@@ -132,7 +132,10 @@ class CarLifeSession(
     private val turnIcons = HashMap<Int, ByteArray>()
     @Volatile private var metaMusicOffLogged = false
     private class HudSubscription(val on: Boolean)
-    @Volatile private var musicHud = HudSubscription(true) // CarLife's music subscription starts enabled.
+    // Some receivers present unsolicited MEDIA_INFO as a request to select their Apps input.
+    // With external audio, only send track data to receivers that actually subscribed to it.
+    @Volatile private var musicHud: HudSubscription? = null
+    private fun acceptsMusic(subscription: HudSubscription?) = subscription?.on ?: bridge.audioViaUsb
     @Volatile private var naviHud = HudSubscription(false)
     @Volatile private var navigationEnabled = cfg.metaNavi
     @Volatile internal var guidanceInterest = GuidanceInterest(GuidanceInterest.Mode.NONE)
@@ -242,9 +245,13 @@ class CarLifeSession(
             WLog.ev(WLog.VIDEO, "policy", "profile" to bitratePolicy.profile.name, "startKbps" to bitratePolicy.startBps / 1000,
                 "ceilingKbps" to bitratePolicy.ceilingBps / 1000, "mode" to mode.label, "transcode" to bridge.transcodeEnabled)
         }
-        CarLifeState.status = "соединено, жду HU_PROTOCOL_VERSION"
+        CarLifeState.setStatus(R.string.projection_version_wait)
         transport.start(::dispatch, ::logTx) { reason -> close(reason, transportLost = transport.outputEndpointLost) }
         sched.scheduleWithFixedDelay({ tick() }, 1, 1, TimeUnit.SECONDS)
+        if (cfg.desktopVideo != null) {
+            // A final capture block or a static map may have no following video/audio callback.
+            sched.scheduleWithFixedDelay(desktopAv::drainDueAudio, 20, 20, TimeUnit.MILLISECONDS)
+        }
         sched.scheduleWithFixedDelay({ pauseHeartbeat() }, PAUSE_HEARTBEAT_MS, PAUSE_HEARTBEAT_MS, TimeUnit.MILLISECONDS)
         sched.scheduleWithFixedDelay({ adaptBitrate() }, 1000, BITRATE_POLL_MS, TimeUnit.MILLISECONDS)
         sched.scheduleWithFixedDelay({ mobisKeepalive() }, MOBIS_KEEPALIVE_POLL_MS, MOBIS_KEEPALIVE_POLL_MS, TimeUnit.MILLISECONDS)
@@ -406,7 +413,7 @@ class CarLifeSession(
         WLog.ev(WLog.LINK, "session-end", "transport" to transport.caps.kind, "aliveS" to (SystemClock.elapsedRealtime() - t0) / 1000, "why" to reason)
         logSummary(reason)
         calls.stop()
-        CarLifeState.status = "закрыто: $reason"
+        CarLifeState.setStatus(R.string.projection_session_closed, reason)
         try {
             sched.shutdownNow()
             metaExec.shutdownNow()
@@ -506,7 +513,7 @@ class CarLifeSession(
                 } catch (_: java.util.concurrent.RejectedExecutionException) {
                     // сессия уже закрывается
                 }
-                CarLifeState.status = "handshake: стартовая пачка отправлена"
+                CarLifeState.setStatus(R.string.projection_handshake_sent)
             }
             Msg.HU_INFO -> {
                 huInfo = ProtocolLogPolicy.protobuf(m.body, Schemas.deviceInfo) ?: "<omitted>"
@@ -877,7 +884,7 @@ class CarLifeSession(
             csdPending = true
             lastVideoTx = SystemClock.elapsedRealtime()
         }
-        CarLifeState.status = "видео: мост"
+        CarLifeState.setStatus(R.string.projection_streaming)
         bridge.onCarlifeStart()
         if (bannerText != null) startOrUpdatePlaceholder()
     }
@@ -1275,7 +1282,7 @@ class CarLifeSession(
             return false
         }
         val subscription = musicHud
-        if (!subscription.on) return false
+        if (!acceptsMusic(subscription)) return false
         return metaSubmit("MEDIA_INFO") {
             val art = info.art
             val jpeg = when {
@@ -1292,15 +1299,15 @@ class CarLifeSession(
                     j
                 }
             }
-            if (musicHud === subscription) sendCmd(Msg.MEDIA_INFO, Msgs.mediaInfo(info, jpeg))
+            if (musicHud === subscription && acceptsMusic(subscription)) sendCmd(Msg.MEDIA_INFO, Msgs.mediaInfo(info, jpeg))
         }
     }
 
     override fun sendMediaProgress(progressBar: Int): Boolean {
         val subscription = musicHud
-        if (!cfg.metaMusic || !subscription.on) return false
+        if (!cfg.metaMusic || !acceptsMusic(subscription)) return false
         return metaSubmit("MEDIA_PROGRESS_BAR") {
-            if (musicHud === subscription) sendCmd(Msg.MEDIA_PROGRESS_BAR, Msgs.mediaProgress(progressBar))
+            if (musicHud === subscription && acceptsMusic(subscription)) sendCmd(Msg.MEDIA_PROGRESS_BAR, Msgs.mediaProgress(progressBar))
         }
     }
 
@@ -1546,7 +1553,7 @@ class CarLifeSession(
 
     override fun onError(msg: String, t: Throwable?) {
         AppLog.e(msg, t)
-        CarLifeState.status = "ОШИБКА: $msg: ${t?.message}"
+        CarLifeState.setStatus(R.string.projection_failure, listOfNotNull(msg, t?.message).joinToString(": "))
     }
 
     // ---------------- таймер ----------------
@@ -1632,7 +1639,7 @@ class CarLifeSession(
         checkThermal(now)
         if (transport.rxBytes == 0L && now - t0 > SILENCE_MS && (now - t0) % 10_000 < 1000) {
             AppLog.i("ГУ не прислало ни одного байта за ${(now - t0) / 1000} с (ждём HU_PROTOCOL_VERSION)")
-            CarLifeState.status = "ГУ молчит, байт от него нет"
+            CarLifeState.setStatus(R.string.projection_no_data)
         }
         if (now - lastStatsAt >= 5000 && (vFrames > 0 || vBeats > 0)) {
             if (cfg.desktopVideo != null) AppLog.i("DESKTOP AV: videoWriteMs=${transport.videoWriteAgeMs} " +

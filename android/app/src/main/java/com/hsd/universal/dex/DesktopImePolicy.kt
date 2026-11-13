@@ -39,8 +39,7 @@ internal object DesktopImePolicy {
     }
 }
 
-/** Shared by the shell and the activated input gateway. Only LOCAL is writable, and only on
- * named, trusted virtual displays owned by the expected UID. Never accepts display 0. */
+/** System window operations for trusted secondary displays owned by the active session. */
 @SuppressLint("PrivateApi", "BlockedPrivateApi")
 internal object ShellDisplayIme {
     const val PERMISSION = "android.permission.INTERNAL_SYSTEM_WINDOW"
@@ -82,6 +81,17 @@ internal object ShellDisplayIme {
         if (getPolicy.invoke(windowManager, id) != LOCAL) {
             setPolicy.invoke(windowManager, id, LOCAL)
             check(getPolicy.invoke(windowManager, id) == LOCAL) { "Android не применил клавиатуру к дисплею $id" }
+        }
+    }
+
+    fun configureSamsungDesktop(id: Int, ownerUid: Int) {
+        requireOwned(id, ownerUid)
+        val number = Int::class.javaPrimitiveType
+        wmType.getMethod("setDisplayEngagementMode", number, number).invoke(windowManager, id, 3)
+        wmType.getMethod("setWindowingMode", number, number).invoke(windowManager, id, 5)
+        check(wmType.getMethod("isEligibleForDesktopMode", number).invoke(windowManager, id) == true &&
+            wmType.getMethod("getWindowingMode", number).invoke(windowManager, id) == 5) {
+            "One UI не разрешил оконный режим DeX на экране магнитолы"
         }
     }
 

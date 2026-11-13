@@ -71,6 +71,7 @@ class DelegatedDesktopInstrumentation : Instrumentation() {
                 .put("elapsedRealtimeMs", SystemClock.elapsedRealtime())
                 .put("permissionsChecked", permissions)
                 .put("helperSession", if (active) recovery?.fingerprint() else null)
+                .put("needsIndependentHost", DesktopDisplayBackendPolicy.requiresVdm(android.os.Build.VERSION.SDK_INT, DexPrefs(context).desktopMode))
                 .put("keyboardRouting", keyboardRoutingReady)
                 .put("displayHelper", active && ShellPanelClient.isConnected)
                 .put("panelNeedsHelper", active && panelReady && DelegatedPanelAccess.usesShellBackend())
@@ -90,9 +91,6 @@ class DelegatedDesktopInstrumentation : Instrumentation() {
             check(Application.getProcessName() == context.packageName) { "Activation requires the main app process" }
             activationIdentity = activationToken ?: DisplayHelperRendezvous.newToken()
             AppLog.init(context)
-            check(DexPrefs(context).desktopMode != DesktopModePolicy.SAMSUNG_DEX) {
-                "Для доступа ${DesktopTransport.shortName} выберите профиль Android Desktop или DriveDeck"
-            }
             AppLog.i("ACTIVATION start: audio=$requestAudio screen=$requestScreen", false)
             automation = checkNotNull(getUiAutomation(UiAutomation.FLAG_DONT_USE_ACCESSIBILITY or
                 UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES))

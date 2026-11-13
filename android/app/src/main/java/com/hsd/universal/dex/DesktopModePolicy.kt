@@ -12,7 +12,9 @@ object DesktopModePolicy {
     const val ANDROID_HOME_CLASS = "com.hsd.universal.desktop.AndroidDesktopActivity"
     const val DRIVEDECK_PACKAGE = PublishedDesktop.DRIVEDECK
     const val DRIVEDECK_HOME_CLASS = "ru.drivedeck.launcher.MainActivity"
-    private const val SAMSUNG_HOME = "com.sec.android.app.launcher/com.honeyspace.dexservice.SecondaryLauncher"
+    const val SAMSUNG_PACKAGE = "com.sec.android.app.launcher"
+    const val SAMSUNG_HOME_CLASS = "com.honeyspace.dexservice.SecondaryLauncher"
+    private const val SAMSUNG_HOME = "$SAMSUNG_PACKAGE/$SAMSUNG_HOME_CLASS"
 
     fun requireMode(mode: Int) {
         require(mode == SAMSUNG_DEX || mode == ANDROID_DESKTOP || mode == DRIVEDECK) { "Неизвестный режим рабочего стола" }

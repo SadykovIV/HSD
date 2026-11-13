@@ -10,27 +10,7 @@ internal object DesktopActivationGuide {
         val flags = (if (audio) " --audio" else "") + (if (screen) " --screen" else "")
         return "$adb -d shell 'CLASSPATH=\$(pm path ${ManualAccessPolicy.PACKAGE} | cut -d: -f2 | head -n 1) app_process / ${ManualAccessPolicy.LAUNCHER}$flags'"
     }
-    fun instructions(audio: Boolean, screen: Boolean): String = """
-        1. Установите Android Platform Tools с сайта Android Developers и откройте терминал в папке platform-tools.
-        2. Включите «Отладку по USB» в параметрах разработчика телефона. Подключите USB-кабель и подтвердите доступ компьютеру на телефоне.
-        3. Проверьте подключение:
-
-        Windows PowerShell:
-        .\adb.exe devices
-
-        macOS / Linux:
-        ./adb devices
-
-        4. Выполните одну команду для вашей системы:
-
-        Windows PowerShell:
-        ${command(true, audio, screen)}
-
-        macOS / Linux:
-        ${command(false, audio, screen)}
-
-        5. Дождитесь ${ManualAccessPolicy.READY}. После этого подключайте телефон к ${DesktopTransport.name}.
-
-        Команда соответствует выбранным настройкам звука и управления панелью. После перезагрузки или обновления приложения активацию нужно повторить. Для восстановления службы независимого экрана на Android 17 может понадобиться Wi-Fi и беспроводная отладка.
-    """.trimIndent()
+    fun instructions(context: android.content.Context, audio: Boolean, screen: Boolean) =
+        context.getString(com.hsd.universal.R.string.desktop_activation_commands,
+            command(true, audio, screen), command(false, audio, screen), ManualAccessPolicy.READY, DesktopTransport.name)
 }

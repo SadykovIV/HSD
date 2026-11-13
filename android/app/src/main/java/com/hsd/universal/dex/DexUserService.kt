@@ -117,7 +117,6 @@ class DexUserService private constructor(private val context: Context, private v
     override fun startDesktopSized(surface: Surface, lifetimeToken: IBinder, width: Int, height: Int, density: Int, mode: Int): Int {
         enforceClient()
         DesktopModePolicy.requireMode(mode)
-        if (delegated) DelegatedDesktopPolicy.requireMode(mode)
         DexUserServicePolicy.requireDensity(density)
         DexUserServicePolicy.requireDimensions(width, height)
         require(surface.isValid) { "Поверхность видеокодера недоступна" }
@@ -155,7 +154,7 @@ class DexUserService private constructor(private val context: Context, private v
                 val display = checkNotNull(lease.display) { "Не удалось создать экран DeX" }.display
                 val id = display.displayId
                 validateDisplay(lease)
-                if (mode == DesktopModePolicy.SAMSUNG_DEX) {
+                if (mode == DesktopModePolicy.SAMSUNG_DEX && !delegated) {
                     command(epoch, "/system/bin/wm", "set-display-engagement-mode", "-d", id.toString(), "3")
                     command(epoch, "/system/bin/wm", "set-display-windowing-mode", "-d", id.toString(), "5")
                     ensureActive(epoch)
@@ -167,6 +166,9 @@ class DexUserService private constructor(private val context: Context, private v
                 }
                 validateDisplay(lease)
                 access.registerParentDisplay(id, lease.token, width, height)
+                if (mode == DesktopModePolicy.SAMSUNG_DEX && delegated) {
+                    checkNotNull(delegatedInputGateway).configureSamsungDesktop(id, lease.token)
+                }
                 ensureActive(epoch)
                 launchDesktop(lease)
                 ensureActive(epoch)

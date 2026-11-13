@@ -7,7 +7,7 @@ enum class DesktopAccessMode {
     companion object {
         /** The first backend is the default for the selected desktop. */
         fun optionsFor(profile: Int): List<DesktopAccessMode> = when (profile) {
-            DesktopModePolicy.SAMSUNG_DEX -> listOf(SHIZUKU, LEGACY_ADB)
+            DesktopModePolicy.SAMSUNG_DEX -> listOf(COMPUTER, SHIZUKU, LEGACY_ADB)
             DesktopModePolicy.ANDROID_DESKTOP, DesktopModePolicy.DRIVEDECK -> listOf(COMPUTER, SHIZUKU)
             else -> error("Неизвестный профиль рабочего стола")
         }

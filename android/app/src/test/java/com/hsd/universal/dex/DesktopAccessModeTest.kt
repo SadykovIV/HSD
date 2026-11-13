@@ -18,12 +18,12 @@ class DesktopAccessModeTest {
         }
     }
 
-    @Test fun samsungDexUsesShizukuOrLegacyAdb() {
+    @Test fun samsungDexUsesSharedActivationOrItsExplicitAlternatives() {
         val profile = DesktopModePolicy.SAMSUNG_DEX
-        val allowed = listOf(DesktopAccessMode.SHIZUKU, DesktopAccessMode.LEGACY_ADB)
+        val allowed = listOf(DesktopAccessMode.COMPUTER, DesktopAccessMode.SHIZUKU, DesktopAccessMode.LEGACY_ADB)
         assertEquals(allowed, DesktopAccessMode.optionsFor(profile))
         for (name in listOf(null, "COMPUTER", "UNSUPPORTED", "")) {
-            assertEquals(DesktopAccessMode.SHIZUKU, DesktopAccessMode.restore(profile, name, null))
+            assertEquals(DesktopAccessMode.COMPUTER, DesktopAccessMode.restore(profile, name, null))
         }
         for (mode in allowed) assertEquals(mode, DesktopAccessMode.restore(profile, mode.name, false))
     }

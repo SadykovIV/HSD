@@ -1,5 +1,6 @@
 package com.hsd.universal.dex
 
+import com.hsd.universal.R
 import com.hsd.universal.update.ComponentPackages
 import com.hsd.universal.DesktopTransport
 
@@ -99,7 +100,7 @@ class DelegatedDexConnector(context: Context, private val core: AaBridgeCore,
                 if (nativeProducer === binder) {
                     EmbeddedSessionRegistry.producerStopped(this)
                     retiringGeneration.takeIf { it != 0L }?.let(core::desktopSurfaceProducerClosed)
-                    fail("Связь с независимым рабочим столом прервалась", Failure.HELPER_UNAVAILABLE)
+                    fail(context.getString(R.string.desktop_communication_with_the_independent_desktop_is_interrupted), Failure.HELPER_UNAVAILABLE)
                 }
             }
             nativeDeath = callback
@@ -124,7 +125,7 @@ class DelegatedDexConnector(context: Context, private val core: AaBridgeCore,
                 service = IDexUserService.Stub.asInterface(binder)
                 // A connection queued before a stop can arrive after the session ended.
                 if (stopping.get()) unbind()
-            } catch (e: Exception) { fail("Не удалось открыть службу рабочего стола: ${e.message}") }
+            } catch (e: Exception) { fail(context.getString(R.string.desktop_it_was_not_possible_to_open_the_desktop_service, e.message)) }
             finally { connected.countDown() }
         }
         override fun onServiceDisconnected(name: ComponentName) {
@@ -135,7 +136,7 @@ class DelegatedDexConnector(context: Context, private val core: AaBridgeCore,
             connected.countDown()
             fail(helperUnavailableMessage(), Failure.HELPER_UNAVAILABLE)
         }
-        override fun onNullBinding(name: ComponentName) { connected.countDown(); fail("Служба рабочего стола недоступна. Активируйте доступ с компьютера") }
+        override fun onNullBinding(name: ComponentName) { connected.countDown(); fail(context.getString(R.string.desktop_desktop_service_is_not_available_activate_access_from_your)) }
     }
 
     override fun start() {
@@ -150,28 +151,28 @@ class DelegatedDexConnector(context: Context, private val core: AaBridgeCore,
                 core.onAaConnecting()
                 core.peer = this
                 core.enableDesktopSurface(this)
-                status("Запускаю рабочий стол…")
-            } catch (e: Exception) { fail(e.message ?: "Не удалось подготовить рабочий стол"); return }
+                status(context.getString(R.string.desktop_starting_the_desktop))
+            } catch (e: Exception) { fail(e.message ?: context.getString(R.string.desktop_could_not_prepare_desktop)); return }
         }
         main.post {
             if (!stopping.get()) try {
-                check(DelegatedDesktopAccess.isReady(context)) { "Активируйте доступ с компьютера" }
+                check(DelegatedDesktopAccess.isReady(context)) { context.getString(R.string.desktop_activate_access_from_the_computer) }
                 val intent = Intent(context, DelegatedDesktopService::class.java).setAction(bindAction)
                     .putExtras(Bundle().apply { putBinder(DelegatedInputGateway.EXTRA_BINDER, inputGateway) })
                 bindRequested = context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
-                check(bindRequested) { "Android не запустил службу рабочего стола" }
-            } catch (e: Exception) { connected.countDown(); fail(e.message ?: "Доступ с компьютера недоступен") }
+                check(bindRequested) { context.getString(R.string.desktop_android_has_not_launched_the_desktop_service) }
+            } catch (e: Exception) { connected.countDown(); fail(e.message ?: context.getString(R.string.desktop_computer_access_unavailable)) }
         }
         try { watchdog.scheduleWithFixedDelay({
             if (!stopping.get()) try {
-                check(DelegatedDesktopAccess.isReady(context)) { "Доступ завершён. Подключите телефон к компьютеру для повторной активации" }
+                check(DelegatedDesktopAccess.isReady(context)) { context.getString(R.string.desktop_access_complete_connect_your_phone_to_your_computer_to) }
                 core.tick()
                 core.desktopVideoError?.let { fail(it) }
                 if (generationStartedAt != 0L && !firstFrame &&
                     System.nanoTime() - generationStartedAt > TimeUnit.SECONDS.toNanos(30)) {
-                    fail("Рабочий стол не передал первый кадр за 30 секунд")
+                    fail(context.getString(R.string.desktop_the_desktop_did_not_transmit_the_first_frame_in))
                 }
-            } catch (e: Exception) { fail(e.message ?: "Ошибка рабочего стола") }
+            } catch (e: Exception) { fail(e.message ?: context.getString(R.string.desktop_desktop_error)) }
         }, 500, 500, TimeUnit.MILLISECONDS) } catch (_: java.util.concurrent.RejectedExecutionException) {
             // stop() raced with scheduling; its cleanup already owns the lifecycle.
         }
@@ -183,34 +184,36 @@ class DelegatedDexConnector(context: Context, private val core: AaBridgeCore,
         firstFrame = false
         generationStartedAt = System.nanoTime()
         try {
-            check(connected.await(12, TimeUnit.SECONDS)) { "Служба рабочего стола не ответила за 12 секунд" }
-            check(!stopping.get()) { "Подключение остановлено" }
-            val remote = checkNotNull(service) { "Служба рабочего стола недоступна" }
+            check(connected.await(12, TimeUnit.SECONDS)) { context.getString(R.string.desktop_desktop_service_did_not_respond_in_12_seconds) }
+            check(!stopping.get()) { context.getString(R.string.desktop_connection_stopped) }
+            val remote = checkNotNull(service) { context.getString(R.string.desktop_desktop_service_is_not_available) }
             val prefs = DexPrefs(context)
             val compactMapSymbols = prefs.compactMapSymbols
             val correctionPackages = prefs.dpiCorrectionPackages
             val density = input.density
             desktopMode = prefs.desktopMode
-            check(desktopMode != DesktopModePolicy.SAMSUNG_DEX) { "Для доступа с компьютера выберите Android или DriveDeck" }
-            check(DelegatedDesktopAccess.isReady(context)) { "Активируйте доступ с компьютера" }
+            if (desktopMode == DesktopModePolicy.SAMSUNG_DEX) check(SamsungDexCapability.isAvailable(context)) {
+                context.getString(R.string.desktop_on_the_phone_is_not_available_desktop_samsung_dex)
+            }
+            check(DelegatedDesktopAccess.isReady(context)) { context.getString(R.string.desktop_activate_access_from_the_computer) }
             if (desktopMode == DesktopModePolicy.DRIVEDECK) ComponentPackages.requireDriveDeck(context)
             if (requiresIsolatedPhoneLock) {
                 val repair = VdmHostRecovery.create(context) { !stopping.get() && this.generation == generation }
                 vdmRecovery = repair
                 if (!repair.ensureReady(18_000)) throw VdmRecoveryException(
-                    repair.failure ?: "Служба независимого экрана недоступна. Повторите подключение к ${DesktopTransport.name}.",
+                    repair.failure ?: context.getString(R.string.desktop_independent_screen_service_is_unavailable, DesktopTransport.name),
                     repair.failureReason)
             }
             val lifetime = Binder()
             synchronized(stateLock) {
-                check(!stopping.get()) { "Подключение остановлено" }
+                check(!stopping.get()) { context.getString(R.string.desktop_connection_stopped) }
                 inputGateway.beginGeneration(generation, lifetime, allowFullscreen = EmbeddedDisplayPolicy.supportsChildren(desktopMode))
             }
             val id = bounded(25) {
-                check(remote.protocolVersion() == DexUserServicePolicy.PROTOCOL_VERSION) { "Версия службы рабочего стола не совпадает с приложением. Завершите доступ и активируйте ${DesktopTransport.shortName} снова." }
+                check(remote.protocolVersion() == DexUserServicePolicy.PROTOCOL_VERSION) { context.getString(R.string.desktop_the_desktop_service_version_doesn_t_match_the_app, DesktopTransport.shortName) }
                 remote.startDesktopSized(input.surface, lifetime, input.width, input.height, density, desktopMode)
             }
-            check(id > 0) { "Не удалось создать отдельный экран" }
+            check(id > 0) { context.getString(R.string.desktop_could_not_create_a_separate_display) }
             displayId = id
             hadIsolatedDesktop = hadIsolatedDesktop || context.getSystemService(android.hardware.display.DisplayManager::class.java)
                 .getDisplay(id)?.let(DesktopDisplayIsolation::confirmedIndependence) == true
@@ -219,19 +222,17 @@ class DelegatedDexConnector(context: Context, private val core: AaBridgeCore,
                 return
             }
             synchronized(stateLock) {
-                check(!stopping.get() && retiringGeneration != generation) { "Сеанс завершён" }
+                check(!stopping.get() && retiringGeneration != generation) { context.getString(R.string.desktop_session_ended) }
                 DexState.displayId = id
-                if (desktopMode != DesktopModePolicy.SAMSUNG_DEX) {
-                    EmbeddedSessionRegistry.activate(this, remote, id, this.input, desktopMode, density, compactMapSymbols, correctionPackages,
-                        nativeLifetime = nativeProducer ?: checkNotNull(serviceBinder))
-                }
+                EmbeddedSessionRegistry.activate(this, remote, id, this.input, desktopMode, density, compactMapSymbols, correctionPackages,
+                    nativeLifetime = nativeProducer ?: checkNotNull(serviceBinder))
             }
-            status("Рабочий стол ${input.width}×${input.height} готов, ожидаю видео…")
+            status(context.getString(R.string.desktop_desktop_ready_waiting_for_the_video, input.width, input.height))
             AppLog.i("DESKTOP mode=$desktopMode delegated display=$id generation=$generation native=${input.width}x${input.height} density=$density preview=false singleEncode=true", false)
         } catch (e: Exception) {
             if (!stopping.get()) {
                 AppLog.e("DESKTOP delegated: screen creation failed", e)
-                val reason = e.cause?.message ?: e.message ?: "Ошибка создания экрана"
+                val reason = e.cause?.message ?: e.message ?: context.getString(R.string.desktop_display_creation_failed)
                 core.desktopSurfaceFailed(generation, reason)
                 fail(reason, failureKind(e))
             }
@@ -272,7 +273,7 @@ class DelegatedDexConnector(context: Context, private val core: AaBridgeCore,
                 } catch (_: InterruptedException) { Thread.currentThread().interrupt(); nativeHasStopped() }
                 nativeClosed = closed || confirmedDead
                 if (!nativeClosed) {
-                    val message = "Служба не подтвердила закрытие экрана. Завершите ${DesktopTransport.shortName} перед повторным подключением"
+                    val message = context.getString(R.string.desktop_service_hasn_t_confirmed_that_the_screen_is_closed, DesktopTransport.shortName)
                     failure = message
                     DexState.error = message
                     fail(message)
@@ -282,13 +283,13 @@ class DelegatedDexConnector(context: Context, private val core: AaBridgeCore,
                 }
             }
         }
-        check(nativeClosed || nativeHasStopped()) { "Производитель экрана ещё не подтвердил завершение" }
+        check(nativeClosed || nativeHasStopped()) { context.getString(R.string.desktop_the_screen_manufacturer_has_not_yet_confirmed_the_completion) }
         EmbeddedSessionRegistry.producerStopped(this)
         this.generation = 0
         retiringGeneration = 0
         forgetNativeProducer()
         displayId = -1
-        if (!stopping.get()) status("Ожидаю повторного подключения USB ${DesktopTransport.name}…")
+        if (!stopping.get()) status(context.getString(R.string.desktop_i_m_waiting_for_the_usb_connection_again, DesktopTransport.name))
     }
 
     override fun onFirstFrame(generation: Long) {
@@ -410,7 +411,7 @@ class DelegatedDexConnector(context: Context, private val core: AaBridgeCore,
                 // The main-process panel owner updates state; a late ACK must not undo watchdog restoration.
             } catch (error: Exception) {
                 if (generation == token) DexState.phoneScreenError =
-                    "Не удалось изменить питание панели: ${error.cause?.message ?: error.message}"
+                    context.getString(R.string.desktop_failed_to_change_the_power_of_the_panel, error.cause?.message ?: error.message)
                 AppLog.e("DESKTOP PANEL: request failed", error)
             } finally { if (generation == token) DexState.phoneScreenBusy = false }
         } } catch (_: java.util.concurrent.RejectedExecutionException) {
@@ -448,12 +449,12 @@ class DelegatedDexConnector(context: Context, private val core: AaBridgeCore,
                     // An already dequeued input can overlap normal USB-detach cleanup.
                     // Its retired display is gone; this must not end a reconnectable session.
                     if (!stopping.get() && generation == token && retiringGeneration != token && firstFrame) {
-                        fail("Не удалось передать управление рабочему столу: ${e.message}", failureKind(e))
+                        fail(context.getString(R.string.desktop_it_was_not_possible_to_transfer_control_to_the, e.message), failureKind(e))
                     }
                 }
             }
         } } catch (_: java.util.concurrent.RejectedExecutionException) {
-            if (!stopping.get()) fail("Очередь управления переполнена. Подключитесь снова")
+            if (!stopping.get()) fail(context.getString(R.string.desktop_the_control_line_is_full_connect_again))
         }
     }
 
@@ -463,8 +464,8 @@ class DelegatedDexConnector(context: Context, private val core: AaBridgeCore,
     }
 
     private fun helperUnavailableMessage(): String =
-        if (DelegatedDesktopAccess.isReady(context)) "Служба рабочего стола завершилась; права ${DesktopTransport.shortName} сохранены"
-        else "Доступ завершён. Откройте «Активация» в настройках ${DesktopTransport.shortName}"
+        if (DelegatedDesktopAccess.isReady(context)) context.getString(R.string.desktop_desktop_service_terminated_permissions_preserved, DesktopTransport.shortName)
+        else context.getString(R.string.desktop_access_complete_open_activation_in_settings, DesktopTransport.shortName)
 
     private fun failureKind(error: Throwable): Failure =
         if (error is DeadObjectException || error.cause is DeadObjectException ||
@@ -504,7 +505,7 @@ class DelegatedDexConnector(context: Context, private val core: AaBridgeCore,
                 DexState.running = false
                 DexState.displayId = -1
                 DexState.error = failure
-                status(failure ?: "Рабочий стол остановлен")
+                status(failure ?: context.getString(R.string.desktop_desktop_stopped))
                 finished.countDown()
             }
         }

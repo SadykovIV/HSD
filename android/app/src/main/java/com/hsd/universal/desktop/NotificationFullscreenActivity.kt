@@ -41,11 +41,11 @@ class NotificationFullscreenActivity : Activity() {
         window.setDecorFitsSystemWindows(false)
         val root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
         pane = DesktopAppPane(this, onOpened = {}, onHome = ::home,
-            onError = { Toast.makeText(this, "Уведомление больше недоступно или приложение не открылось на ГУ", Toast.LENGTH_LONG).show(); home() },
+            onError = { Toast.makeText(this, getString(R.string.desktop_notification_is_no_longer_available_or_the_application_has), Toast.LENGTH_LONG).show(); home() },
             fullscreenDriveDeck = true, ownDesktopProfile = mode == DesktopModePolicy.ANDROID_DESKTOP)
         root.addView(pane.view, FrameLayout.LayoutParams(-1, -1))
-        root.addView(button("Назад", R.drawable.desktop_back) { pane.back() }, position(1))
-        root.addView(button("Домой", R.drawable.desktop_home, ::home), position(0))
+        root.addView(button(getString(R.string.set_back), R.drawable.desktop_back) { pane.back() }, position(1))
+        root.addView(button(getString(R.string.desktop_home_780e), R.drawable.desktop_home, ::home), position(0))
         setContentView(root)
         hardwareBack = FullscreenHardwareBack.attach(this, pane, ::current)
             ?: run { finish(); return }

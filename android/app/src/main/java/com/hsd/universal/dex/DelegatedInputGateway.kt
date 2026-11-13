@@ -97,6 +97,17 @@ internal class DelegatedInputGateway(context: Context,
         liveDisplayIds = registry.registeredDisplayIds()
     }
 
+    @Synchronized override fun configureSamsungDesktop(displayId: Int, parentToken: IBinder) {
+        requireActive()
+        val parent = registry.requireDisplay(displayId, parentToken)
+        check(parent === panelParent && parent.parent == null && DexPrefs(context).desktopMode == DesktopModePolicy.SAMSUNG_DEX)
+        requireTrustedDisplay(displayId)
+        val display = checkNotNull(displays.getDisplay(displayId))
+        check(display.name == DesktopModePolicy.displayName(DesktopModePolicy.SAMSUNG_DEX) &&
+            display.flags and DexUserServicePolicy.DISPLAY_ALLOWS_CONTENT_MODE_SWITCH != 0)
+        ShellDisplayIme.configureSamsungDesktop(displayId, Process.myUid())
+    }
+
     override fun registerChild(parentId: Int, displayId: Int, token: IBinder, width: Int, height: Int) =
         registerChild(parentId, displayId, token, width, height, fullscreen = false)
 

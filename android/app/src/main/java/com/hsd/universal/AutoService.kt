@@ -56,15 +56,15 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
         override fun onReceive(context: Context, intent: Intent) {
             if (device != null && usb.autoAccessory() == null) {
                 com.hsd.universal.dex.DesktopMusicPlayback.physicalDetach(this@AutoEndpoint)
-                Actions.onUsbDetached()
-                finish("Кабель отключён")
+                Actions.onUsbDetached(service)
+                finish(service.getString(R.string.wl_usb_to_air_title))
             }
         }
     }
 
     init {
         getSystemService(NotificationManager::class.java)!!.createNotificationChannel(
-            NotificationChannel(CHANNEL, "Проекция на магнитолу", NotificationManager.IMPORTANCE_LOW))
+            NotificationChannel(CHANNEL, service.getString(R.string.desktop_head_unit_projection), NotificationManager.IMPORTANCE_LOW))
         registerReceiver(detached, IntentFilter(UsbManager.ACTION_USB_ACCESSORY_DETACHED), RECEIVER_EXPORTED)
     }
 
@@ -79,15 +79,15 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
             return Service.START_NOT_STICKY
         }
         if (intent?.action == BridgeService.ACTION_STOP) {
-            service.startForeground(ID, notification("Останавливаю проекцию"))
+            service.startForeground(ID, notification(service.getString(R.string.desktop_stopping_projection)))
             Actions.stopUsbAutoStartForSession()
-            finish("Остановлено на телефоне")
+            finish(service.getString(R.string.desktop_stopped_on_phone))
             return Service.START_NOT_STICKY
         }
         if (intent?.action == BridgeService.ACTION_WIFI_B_AUTO || intent?.action == BridgeService.ACTION_WIFI_B_AUTO_OFF ||
             intent?.action == BridgeService.ACTION_WIFI_B) {
             if (resources == null && !retryPending) {
-                service.startForeground(ID, notification("Завершаю ожидание CarLife"))
+                service.startForeground(ID, notification(service.getString(R.string.desktop_ending_carlife_standby)))
                 service.stopSelfResult(startId)
             }
             return Service.START_NOT_STICKY
@@ -105,16 +105,16 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
         CarLifeState.resetSession()
         CarLifeState.wirelessSession = mode != ProjectionRoute.USB
         try {
-            service.startForeground(ID, notification(mode.label))
+            service.startForeground(ID, notification(mode.label(service)))
             if (mode == ProjectionRoute.USB) {
                 device = usb.autoAccessory()?.takeIf(usb::hasPermission)
-                    ?: error("Подключите кабель и разрешите HSD открыть USB-аксессуар")
+                    ?: error(service.getString(R.string.desktop_connect_the_cable_and_allow_hsd_to_open_the))
             }
         } catch (error: RuntimeException) {
-            complete(error.message ?: "Не удалось начать соединение")
+            complete(error.message ?: service.getString(R.string.desktop_could_not_start_connection))
             return
         }
-        update(if (mode == ProjectionRoute.LAN_SERVER) "Ожидаю магнитолу на TCP 5277" else "Подключаю ${mode.label}…")
+        update(if (mode == ProjectionRoute.LAN_SERVER) service.getString(R.string.desktop_waiting_for_the_head_unit_on_tcp_port_5277) else service.getString(R.string.desktop_connecting, mode.label(service)))
         val attached = device
         worker.execute {
             try {
@@ -130,7 +130,7 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
                         main.post {
                             if (mode == ProjectionRoute.USB && ticket == generation && !stopping && !CarLifeState.running) {
                                 CarLifeState.running = true
-                                Actions.onUsbSessionStarted()
+                                Actions.onUsbSessionStarted(service)
                             }
                         }
                     }
@@ -139,13 +139,13 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
                     if (ticket == generation && !stopping) {
                         projection = session
                         CarLifeState.running = mode != ProjectionRoute.USB
-                        runCatching { session.start() }.onFailure { finish(it.message ?: "Ошибка запуска проекции") }
+                        runCatching { session.start() }.onFailure { finish(it.message ?: service.getString(R.string.desktop_failed_to_start_projection)) }
                     } else lifetime.close()
                 }
             } catch (error: Exception) {
                 val transient = error is java.io.IOException && error !is javax.net.ssl.SSLException ||
                     error is net.prototux.aare.aap.wireless.WirelessBootstrapException && error.whileNegotiating
-                main.post { if (ticket == generation) complete("Не удалось подключиться · ${error.message}", transient) }
+                main.post { if (ticket == generation) complete(service.getString(R.string.desktop_could_not_connect, error.message), transient) }
             }
         }
     }
@@ -160,14 +160,14 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
             }
             ProjectionRoute.LAN_SERVER -> {
                 val ip = InetAddresses.parseNumericAddress(settings.getString("lanPeer", null)
-                    ?: error("Укажите IP магнитолы в настройках подключения"))
+                    ?: error(service.getString(R.string.desktop_enter_the_head_unit_s_ip_address_in_connection)))
                 val listener = HeadUnitListener(ip)
                 lifetime.own(listener::close)
                 listener.use { it.accept() } to "lan|${ip.hostAddress}"
             }
             ProjectionRoute.LAN_CLIENT -> {
                 val address = InetAddresses.parseNumericAddress(settings.getString("lanPeer", null)
-                    ?: error("Укажите IP магнитолы в настройках подключения"))
+                    ?: error(service.getString(R.string.desktop_enter_the_head_unit_s_ip_address_in_connection)))
                 val port = settings.getInt("lanPort", 5288)
                 val socket = localSocketFor(getSystemService(android.net.ConnectivityManager::class.java)!!, address)
                 lifetime.own(socket::close)
@@ -175,13 +175,13 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
                 net.prototux.aare.aap.SocketTransport(socket, "Android Auto LAN · ${address.hostAddress}:$port") to "lan|${address.hostAddress}"
             }
             ProjectionRoute.WIRELESS_AA -> {
-                val address = settings.getString("bluetoothPeer", null) ?: error("Выберите сопряжённую магнитолу")
-                val bluetooth = getSystemService(BluetoothManager::class.java)?.adapter ?: error("Bluetooth недоступен")
+                val address = settings.getString("bluetoothPeer", null) ?: error(service.getString(R.string.desktop_select_a_paired_head_unit))
+                val bluetooth = getSystemService(BluetoothManager::class.java)?.adapter ?: error(service.getString(R.string.desktop_bluetooth_unavailable))
                 val attempt = WirelessConnector(this, protocolLog).Attempt(bluetooth.getRemoteDevice(address))
                 lifetime.own(attempt::abort)
                 attempt.run() to "bt|$address"
             }
-            else -> error("Этот маршрут не использует Android Auto: ${mode.label}")
+            else -> error(service.getString(R.string.desktop_this_connection_does_not_use_android_auto, mode.label(service)))
         }
     }
 
@@ -193,12 +193,12 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
         val stop = PendingIntent.getService(this, 2, Intent(this, AutoService::class.java).setAction(BridgeService.ACTION_STOP), PendingIntent.FLAG_IMMUTABLE)
         return Notification.Builder(this, CHANNEL).setSmallIcon(com.hsd.universal.R.mipmap.ic_launcher).setContentTitle("HSD")
             .setContentText(message).setContentIntent(open).setOnlyAlertOnce(true).setOngoing(true)
-            .addAction(Notification.Action.Builder(null, "Остановить", stop).build()).build()
+            .addAction(Notification.Action.Builder(null, service.getString(R.string.desktop_stop), stop).build()).build()
     }
 
     private fun update(message: String) {
         if (stopping) return
-        CarLifeState.status = message
+        CarLifeState.setStatus(message)
         getSystemService(NotificationManager::class.java)!!.notify(ID, notification(message))
     }
     private fun finish(message: String) {
@@ -230,17 +230,17 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
             projection = null
             retryPending = true
             usbOpenRetries++
-            update("USB пока не готов · повторяю согласование Android Auto")
+            update(service.getString(R.string.desktop_usb_is_not_ready_retrying_android_auto_negotiation))
             main.postDelayed(reconnect, usbOpenRetries * 750L)
             return
         }
         if (route == ProjectionRoute.USB) {
             if (usbFailed) Actions.onUsbHandshakeFailed(checkNotNull(attached), message)
-            else if (CarLifeState.running || stopping) Actions.onUsbSessionClosed()
+            else if (CarLifeState.running || stopping) Actions.onUsbSessionClosed(service)
             else Actions.onUsbStartFailed(message)
         }
         CarLifeState.running = false
-        CarLifeState.status = message
+        CarLifeState.setStatus(message)
         com.hsd.universal.AppLog.i("${route.protocol}: $message")
         getSharedPreferences("projection", MODE_PRIVATE).edit()
             .putString("last", message).putString("last." + route.name, message).apply()
@@ -250,7 +250,7 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
             if (delay != null) {
                 retryPending = true
                 AppLog.i("CarPlay: связь с выбранной магнитолой потеряна · повтор через ${delay} мс", false)
-                update("Прервалась связь с магнитолой · восстанавливаю CarPlay")
+                update(service.getString(R.string.desktop_head_unit_disconnected_reconnecting_carplay))
                 main.postDelayed(reconnect, delay)
                 return
             }
@@ -259,7 +259,7 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
         if (!stopping && (route == ProjectionRoute.LAN_CLIENT || route == ProjectionRoute.WIRELESS_AA) &&
             (lost || connectError) && now + retryDelayMs < reconnectUntil) {
             retryPending = true
-            update("Прервалась связь с магнитолой · восстанавливаю ${route.protocol}")
+            update(service.getString(R.string.desktop_head_unit_disconnected_reconnecting, route.protocol))
             main.postDelayed(reconnect, retryDelayMs)
             retryDelayMs = minOf(8000L, retryDelayMs * 2)
             return
@@ -269,8 +269,8 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
         service.stopSelf()
     }
     override fun stopForRouteChange() {
-        service.startForeground(ID, notification("Меняю способ подключения"))
-        finish("Меняю способ подключения")
+        service.startForeground(ID, notification(service.getString(R.string.desktop_switching_connection_type)))
+        finish(service.getString(R.string.desktop_switching_connection_type))
     }
 
     override fun close() {
@@ -280,7 +280,7 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
         retryPending = false
         CarLifeState.running = false
         unregisterReceiver(detached)
-        projection?.stop()
+        projection?.stop(getString(R.string.desktop_connection_stopped))
         resources?.close()
         worker.shutdownNow()
     }

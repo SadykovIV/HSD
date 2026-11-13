@@ -41,7 +41,7 @@ object HSDNotification {
             ctx, 2, Intent(ctx, StopReceiver::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        val text = DexState.error ?: "${DexState.status} · ${CarLifeState.status}"
+        val text = DexState.error ?: "${DexState.displayStatus(ctx)} · ${CarLifeState.status(ctx)}"
         val builder = Notification.Builder(ctx, channel)
             .setSmallIcon(R.drawable.ic_stat_hsd)
             .setLargeIcon(com.hsd.universal.BrandArtwork.bitmap(ctx.resources))
@@ -53,7 +53,7 @@ object HSDNotification {
             .setCategory(Notification.CATEGORY_SERVICE)
             .setShowWhen(false)
             .setContentIntent(open)
-            .addAction(Notification.Action.Builder(Icon.createWithResource(ctx, R.drawable.ic_stop), "Остановить", stop).build())
+            .addAction(Notification.Action.Builder(Icon.createWithResource(ctx, R.drawable.ic_stop), ctx.getString(R.string.desktop_stop), stop).build())
         if (Build.VERSION.SDK_INT >= 31) builder.setForegroundServiceBehavior(Notification.FOREGROUND_SERVICE_IMMEDIATE)
         return builder.build()
     }
@@ -69,7 +69,7 @@ object HSDNotification {
                     lastKey = ""
                     return
                 }
-                val key = "${DexState.status}|${DexState.error}|${CarLifeState.status}"
+                val key = "${DexState.displayStatus(app)}|${DexState.error}|${CarLifeState.status(app)}"
                 if (key != lastKey) {
                     lastKey = key
                     nm.notify(notifId, from(app, channel))

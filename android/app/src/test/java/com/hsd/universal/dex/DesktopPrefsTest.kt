@@ -104,8 +104,7 @@ class DesktopPrefsTest {
         assertEquals(DesktopAccessMode.SHIZUKU, DexPrefs(context).accessMode)
         prefs.desktopMode = DesktopModePolicy.SAMSUNG_DEX
         prefs.activationMethod = ActivationMethod.WIFI
-        assertEquals(DesktopAccessMode.LEGACY_ADB, prefs.accessMode)
-        assertThrows(IllegalArgumentException::class.java) { prefs.activationMethod = ActivationMethod.COMPUTER }
+        assertEquals(DesktopAccessMode.COMPUTER, prefs.accessMode)
         assertEquals(ActivationMethod.WIFI, DexPrefs(context).activationMethod)
         prefs.desktopMode = DesktopModePolicy.ANDROID_DESKTOP
         assertEquals(ActivationMethod.SHIZUKU, DexPrefs(context).activationMethod)
@@ -237,7 +236,7 @@ class DesktopPrefsTest {
         val prefs = DexPrefs(context)
         assertEquals(DesktopAccessMode.COMPUTER, prefs.accessMode)
         prefs.desktopMode = DesktopModePolicy.SAMSUNG_DEX
-        assertEquals(DesktopAccessMode.SHIZUKU, prefs.accessMode)
+        assertEquals(DesktopAccessMode.COMPUTER, prefs.accessMode)
         context.values["use_shizuku"] = false
         assertEquals(DesktopAccessMode.LEGACY_ADB, prefs.accessMode)
         prefs.desktopMode = DesktopModePolicy.DRIVEDECK
@@ -246,7 +245,31 @@ class DesktopPrefsTest {
         assertEquals(DesktopAccessMode.SHIZUKU, prefs.accessMode)
         context.values["access_backend"] = "COMPUTER"
         prefs.desktopMode = DesktopModePolicy.SAMSUNG_DEX
-        assertEquals(DesktopAccessMode.SHIZUKU, prefs.accessMode)
+        assertEquals(DesktopAccessMode.COMPUTER, prefs.accessMode)
+    }
+
+    @Test fun existingDexWifiPairingUsesSharedActivationAndExplicitDirectAdbRemainsSelectable() {
+        val context = MemoryPrefs()
+        context.values.putAll(mapOf("desktop_mode" to DesktopModePolicy.SAMSUNG_DEX, "dex_activation_method" to "WIFI",
+            "dex_access_backend" to "LEGACY_ADB", "has_paired" to true))
+        val prefs = DexPrefs(context)
+        assertEquals(DesktopAccessMode.COMPUTER, prefs.accessMode)
+        assertEquals(ActivationMethod.WIFI, prefs.activationMethod)
+        assertTrue(prefs.hasPaired)
+        prefs.activationMethod = ActivationMethod.DIRECT_ADB
+        assertEquals(DesktopAccessMode.LEGACY_ADB, DexPrefs(context).accessMode)
+        prefs.activationMethod = ActivationMethod.COMPUTER
+        assertTrue(prefs.persistActivationSelection(audio = true, screen = false))
+        assertEquals(ActivationMethod.COMPUTER, DexPrefs(context).activationMethod)
+    }
+
+    @Test fun streetNamesFollowTheDefaultUntilTheUserMakesAChoice() {
+        val context = MemoryPrefs()
+        val prefs = com.hsd.universal.aa.AaPrefs(context)
+        assertTrue(prefs.metaNaviStreetNames)
+        prefs.metaNaviStreetNames = false
+        assertFalse(com.hsd.universal.aa.AaPrefs(context).metaNaviStreetNames)
+        assertTrue(prefs.metaNavi)
     }
 
     @Test fun samsungAndAndroidDesktopsKeepSeparateChoicesAcrossRestarts() {
@@ -256,7 +279,6 @@ class DesktopPrefsTest {
         prefs.useShizuku = false
         assertEquals(DesktopAccessMode.LEGACY_ADB, prefs.accessMode)
         assertFalse(prefs.persistActivationSelection(audio = true, screen = false))
-        assertThrows(IllegalArgumentException::class.java) { prefs.useDelegated = true }
         prefs.desktopMode = DesktopModePolicy.ANDROID_DESKTOP
         assertThrows(IllegalArgumentException::class.java) { prefs.accessMode = DesktopAccessMode.LEGACY_ADB }
         prefs.useShizuku = true

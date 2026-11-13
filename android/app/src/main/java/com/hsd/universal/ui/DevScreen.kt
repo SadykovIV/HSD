@@ -463,7 +463,7 @@ class DevScreen(host: MainActivity) : Screen(host) {
 
     override fun tick() {
         val c = ctx
-        statusView.text = CarLifeState.summary() + "\n" + AaState.summary()
+        statusView.text = CarLifeState.summary(c) + "\n" + AaState.summary()
         val lines = AppLog.lastLines()
         val joined = lines.joinToString("\n")
         if (joined == lastLog) return

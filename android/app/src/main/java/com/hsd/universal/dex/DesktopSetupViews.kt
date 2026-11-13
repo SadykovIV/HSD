@@ -1,5 +1,6 @@
 package com.hsd.universal.dex
 
+import com.hsd.universal.R
 import android.app.AlertDialog
 import android.content.Context
 import android.content.res.ColorStateList
@@ -92,9 +93,9 @@ internal class DesktopSetupViews(private val context: Context) {
         row.addView(control, LinearLayout.LayoutParams(0, -2, 1f))
         val info = button(row, "ⓘ") {
             AlertDialog.Builder(context).setTitle(title).setMessage(message())
-                .setPositiveButton("Понятно", null).show()
+                .setPositiveButton(context.getString(R.string.apps_warn_ok), null).show()
         }.apply {
-            contentDescription = "Справка: $title"
+            contentDescription = context.getString(R.string.desktop_help, title)
             tooltipText = title
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
             background = RippleDrawable(ColorStateList.valueOf(Color.argb(45, 255, 255, 255)), null, null)
@@ -155,7 +156,7 @@ internal class DesktopSetupViews(private val context: Context) {
             mark.text = when (granted) { true -> "✓"; false -> "✕"; null -> "?" }
             mark.setTextColor(when (granted) { true -> Color.rgb(106, 230, 157); false -> Color.rgb(255, 119, 119); null -> Color.LTGRAY })
             row.updateSummary(detail)
-            view.stateDescription = (when (granted) { true -> "Доступ есть. "; false -> "Нет доступа. "; null -> "Проверьте в Android. " }) + detail
+            view.stateDescription = (when (granted) { true -> view.context.getString(R.string.desktop_granted); false -> view.context.getString(R.string.desktop_not_granted); null -> view.context.getString(R.string.desktop_check_in_android_settings) }) + detail
         }
     }
 

@@ -1,5 +1,6 @@
 package com.hsd.universal.dex
 
+import com.hsd.universal.R
 import com.hsd.universal.DesktopTransport
 
 import android.content.Context
@@ -26,10 +27,12 @@ import java.util.concurrent.atomic.AtomicLong
 import okio.source
 
 /** Experimental Samsung desktop -> scrcpy H.264 -> existing HSD CarLife pipeline. */
-class DexConnector(context: Context, private val core: AaBridgeCore) : AaLifecycle, AaPeer {
+class DexConnector(context: Context, private val core: AaBridgeCore,
+    private val onFailed: () -> Unit = {}) : AaLifecycle, AaPeer, com.hsd.universal.aa.TerminalSource {
     private val context = context.applicationContext
     private val started = AtomicBoolean(false)
     private val stopping = AtomicBoolean(false)
+    override val isTerminated: Boolean get() = stopping.get()
     private val finished = CountDownLatch(1)
     private val resources = CopyOnWriteArrayList<AutoCloseable>()
     private val controlQueue = LinkedBlockingQueue<ByteArray>(128)
@@ -75,12 +78,12 @@ class DexConnector(context: Context, private val core: AaBridgeCore) : AaLifecyc
         var established = false
         try {
             check(Build.MANUFACTURER.equals("samsung", ignoreCase = true) && Build.VERSION.SDK_INT >= 36) {
-                "Этот прототип рассчитан на Samsung с One UI 8/9 (Android 16+)."
+                context.getString(R.string.desktop_this_prototype_is_designed_for_samsung_with_one_ui)
             }
-            check(core.videoMode.marginW == 0 && core.videoMode.marginH == 0) { "Для DeX нужен видеорежим без полей Android Auto" }
+            check(core.videoMode.marginW == 0 && core.videoMode.marginH == 0) { context.getString(R.string.desktop_for_dex_you_need_video_mode_without_android_auto) }
             core.onAaConnecting()
             core.peer = this
-            setStatus("Подключение к беспроводной отладке…")
+            setStatus(context.getString(R.string.desktop_connecting_to_wireless_debugging))
             val startAt = System.nanoTime()
             scheduler.scheduleWithFixedDelay({
                 if (stopping.get()) return@scheduleWithFixedDelay
@@ -89,9 +92,9 @@ class DexConnector(context: Context, private val core: AaBridgeCore) : AaLifecyc
                     core.desktopVideoError?.let { fail(it); return@scheduleWithFixedDelay }
                     val silent = System.nanoTime() - if (streaming) lastVideoAt.get() else startAt
                     if (silent > TimeUnit.SECONDS.toNanos(if (streaming) 15 else 35)) {
-                        fail("DeX не передаёт видео. Проверьте беспроводную отладку и перезапустите мост.")
+                        fail(context.getString(R.string.desktop_dex_doesn_t_transmit_video_check_the_wireless_debugging))
                     }
-                } catch (e: Exception) { fail(e.message ?: "Ошибка контроля DeX") }
+                } catch (e: Exception) { fail(e.message ?: context.getString(R.string.desktop_dex_control_error)) }
             }, 500, 500, TimeUnit.MILLISECONDS)
             val prefs = DexPrefs(context)
             val adb = own(DexAccess.connect(context, prefs.connectPort))
@@ -105,13 +108,13 @@ class DexConnector(context: Context, private val core: AaBridgeCore) : AaLifecyc
                 val apk = DexOverlayPolicy.quote(context.applicationInfo.sourceDir)
                 val repaired = adb.shell("CLASSPATH=$apk /system/bin/app_process / " +
                     "${LegacyDensityRecovery::class.java.name} ${context.applicationInfo.uid}")
-                check(repaired.exitCode == 0) { "Не удалось восстановить прежний DPI из сохранённой записи ${DesktopTransport.shortName} 0.4.1" }
+                check(repaired.exitCode == 0) { context.getString(R.string.desktop_unable_to_recover_the_previous_dpi_from_the_saved, DesktopTransport.shortName) }
             }
             ensureActive()
 
             val bytes = context.assets.open(ASSET).use { it.readBytes() }
             val hash = MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
-            check(hash == SERVER_SHA256) { "Неверная контрольная сумма scrcpy-server" }
+            check(hash == SERVER_SHA256) { context.getString(R.string.desktop_incorrect_scrcpy_server_checksum) }
             // Fixed destination in shell's private directory, no downloaded code at runtime.
             bytes.inputStream().source().use { adb.push(it, REMOTE, 0x180, 0L) } // 0600
             ensureActive()
@@ -127,36 +130,36 @@ class DexConnector(context: Context, private val core: AaBridgeCore) : AaLifecyc
                 "video_bit_rate=${DexVideoGeometry.SOURCE_BITRATE} max_fps=30 " +
                 "video_codec_options=i-frame-interval=1,profile=1,max-bframes=0 " +
                 "clipboard_autosync=false power_on=false cleanup=true vd_destroy_content=true"
-            setStatus("Создание экрана DeX…")
+            setStatus(context.getString(R.string.desktop_creating_a_dex_screen))
             val logStream = own(adb.open("shell:$command"))
             Thread({ readServerLog(logStream) }, "dex-server-log").apply { isDaemon = true; start() }
             val endpoint = "localabstract:scrcpy_$scid"
             val video = connectStream(adb, endpoint)
             val control = connectStream(adb, endpoint)
-            check(displayReady.await(12, TimeUnit.SECONDS)) { "scrcpy не сообщил ID виртуального дисплея" }
+            check(displayReady.await(12, TimeUnit.SECONDS)) { context.getString(R.string.desktop_scrcpy_did_not_provide_a_virtual_display_id) }
             ensureActive()
-            check(displayId > 0) { "Нельзя использовать основной экран вместо DeX" }
+            check(displayId > 0) { context.getString(R.string.desktop_you_cannot_use_the_main_screen_instead_of_dex) }
             // scrcpy owns this secondary display. Verify that Android applied the requested DPI.
             val displays = context.getSystemService(android.hardware.display.DisplayManager::class.java)
-            val external = checkNotNull(displays.getDisplay(displayId)) { "Созданный дисплей DeX недоступен" }
+            val external = checkNotNull(displays.getDisplay(displayId)) { context.getString(R.string.desktop_created_dex_display_is_not_available) }
             @Suppress("DEPRECATION")
             val actual = android.util.DisplayMetrics().also(external::getRealMetrics).densityDpi
             DexUserServicePolicy.requireProjectionDensity(actual, density)
             // One UI 8.5/9 may default new displays to fullscreen. This only changes our display.
             val freeform = adb.shell("wm set-display-windowing-mode -d $displayId 5")
-            check(freeform.exitCode == 0) { "Прошивка не разрешила оконный режим DeX: ${freeform.allOutput.take(250)}" }
+            check(freeform.exitCode == 0) { context.getString(R.string.desktop_the_firmware_did_not_allow_window_mode_dex, freeform.allOutput.take(250)) }
             val checkMode = adb.shell("wm get-display-windowing-mode -d $displayId")
             check(checkMode.exitCode == 0 && (checkMode.allOutput.contains("freeform", true) || checkMode.allOutput.trim() == "5")) {
-                "Не удалось подтвердить оконный режим: ${checkMode.allOutput.take(250)}"
+                context.getString(R.string.desktop_the_window_mode_could_not_be_confirmed, checkMode.allOutput.take(250))
             }
             // One UI 9 can leave a new decorated display empty until its desktop HOME
             // is launched explicitly. Target only the display created by this session.
-            setStatus("Открываю рабочий стол DeX…")
+            setStatus(context.getString(R.string.desktop_opening_the_dex_desktop))
             val desktopHome = adb.shell("am start --display $displayId -a android.intent.action.MAIN " +
                 "-c android.intent.category.SECONDARY_HOME -n $DESKTOP_HOME")
             check(desktopHome.exitCode == 0 && desktopHome.allOutput.lineSequence().none {
                 it.trimStart().startsWith("Error", ignoreCase = true) || it.contains("Exception")
-            }) { "Не удалось открыть рабочий стол Samsung DeX: ${desktopHome.allOutput.take(250)}" }
+            }) { context.getString(R.string.desktop_it_was_not_possible_to_open_the_samsung_dex, desktopHome.allOutput.take(250)) }
             startControl(control)
             established = true
             val reader = ScrcpyProtocol.VideoReader(video.source.inputStream())
@@ -186,7 +189,7 @@ class DexConnector(context: Context, private val core: AaBridgeCore) : AaLifecyc
                                 streaming = true
                                 DexState.running = true
                                 DexState.displayId = displayId
-                                setStatus("DeX → ${DesktopTransport.name} · ${mode.aaW}×${mode.aaH} · звук через Bluetooth", placeholder = false)
+                                setStatus(context.getString(R.string.desktop_dex_bluetooth, DesktopTransport.name, mode.aaW, mode.aaH), placeholder = false)
                             }
                         }
                     }
@@ -209,8 +212,9 @@ class DexConnector(context: Context, private val core: AaBridgeCore) : AaLifecyc
             DexState.displayId = -1
             DexState.independentPhoneLock = null
             DexState.error = failure
-            setStatus(failure?.let { "DeX: $it. Нажмите «Остановить DeX», дождитесь остановки и подключите USB ${DesktopTransport.name} снова." } ?: "DeX остановлен")
+            setStatus(failure?.let { "DeX: $it" } ?: context.getString(R.string.desktop_dex_has_been_stopped))
             finished.countDown()
+            if (failure != null) onFailed()
         }
     }
 
@@ -230,7 +234,7 @@ class DexConnector(context: Context, private val core: AaBridgeCore) : AaLifecyc
                 AppLog.i("scrcpy: ${line.take(1000)}", ui = false)
             }
         } catch (e: Exception) {
-            if (!stopping.get()) fail("Процесс DeX завершился: ${e.message.orEmpty().take(200)}")
+            if (!stopping.get()) fail(context.getString(R.string.desktop_the_dex_process_has_concluded, e.message.orEmpty().take(200)))
         }
     }
 
@@ -241,7 +245,7 @@ class DexConnector(context: Context, private val core: AaBridgeCore) : AaLifecyc
             try { return own(adb.open(endpoint)) } catch (e: Exception) { error = e }
             Thread.sleep(200)
         }
-        throw IOException("Не удалось подключиться к scrcpy на телефоне", error)
+        throw IOException(context.getString(R.string.desktop_unable_to_connect_to_scrcpy_on_your_phone), error)
     }
 
     private fun startControl(stream: AdbStream) {
@@ -253,12 +257,12 @@ class DexConnector(context: Context, private val core: AaBridgeCore) : AaLifecyc
                     stream.sink.write(packet)
                     stream.sink.flush()
                 }
-            } catch (e: Exception) { if (!stopping.get()) fail("Потерян канал управления DeX") }
+            } catch (e: Exception) { if (!stopping.get()) fail(context.getString(R.string.desktop_lost_dex_control_channel)) }
         }, "dex-input").apply { isDaemon = true; start() }
         // Even with clipboard disabled, drain server messages so its sender never blocks.
         Thread({
             try { while (!stopping.get()) stream.source.readByte() }
-            catch (e: Exception) { if (!stopping.get()) fail("Канал управления DeX закрылся") }
+            catch (e: Exception) { if (!stopping.get()) fail(context.getString(R.string.desktop_the_dex_control_channel_has_closed)) }
         }, "dex-control-drain").apply { isDaemon = true; start() }
     }
 
@@ -327,14 +331,14 @@ class DexConnector(context: Context, private val core: AaBridgeCore) : AaLifecyc
 
     private fun enqueue(packet: ByteArray) {
         if (!controlReady || stopping.get()) return
-        if (!controlQueue.offer(packet)) fail("Очередь управления DeX переполнена; соединение остановлено")
+        if (!controlQueue.offer(packet)) fail(context.getString(R.string.desktop_dex_control_queue_overflowed_connection_halted))
     }
 
-    private fun ensureActive() { check(!stopping.get()) { "DeX остановлен" } }
+    private fun ensureActive() { check(!stopping.get()) { context.getString(R.string.desktop_dex_has_been_stopped) } }
 
     private fun <T : AutoCloseable> own(resource: T): T {
         resources.add(resource)
-        if (stopping.get()) { resource.close(); resources.remove(resource); throw IOException("DeX остановлен") }
+        if (stopping.get()) { resource.close(); resources.remove(resource); throw IOException(context.getString(R.string.desktop_dex_has_been_stopped)) }
         return resource
     }
 

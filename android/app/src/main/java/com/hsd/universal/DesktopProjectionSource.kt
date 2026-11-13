@@ -14,7 +14,7 @@ internal class DesktopProjectionSource(private val context: Context, private val
     private val log = { line: String, ui: Boolean -> AppLog.i(line.replace("CarLife", protocol), ui) }
     private val prefs = DexPrefs(context)
     private val profile = DesktopModePolicy.label(prefs.desktopMode)
-    private val core = AaBridgeCore(log, connectingText = "Запускаю $profile", waitingText = "Ожидаю $profile", desktopHevc = hevc)
+    private val core = AaBridgeCore(log, connectingText = context.getString(R.string.desktop_starting, profile), waitingText = context.getString(R.string.desktop_waiting_for, profile), desktopHevc = hevc)
     private val capture = DesktopAudioCapture(context)
     private val main = Handler(Looper.getMainLooper())
     private var source: AaLifecycle? = null
@@ -42,7 +42,7 @@ internal class DesktopProjectionSource(private val context: Context, private val
         if (encoding != null) bitrate = BitratePolicy(encoding.maxBitrate, maxOf(BitratePolicy.FLOOR_BPS, encoding.minBitrate))
 
         check(!prefs.useDesktopService || DesktopAccess.isReady(context)) {
-            "Откройте HSD и активируйте выбранный способ доступа"
+            context.getString(R.string.projection_activate_access)
         }
         fps = if (prefs.useDesktopService) frameRate else minOf(30, frameRate)
         framePolicy.reset(fps)
@@ -58,11 +58,11 @@ internal class DesktopProjectionSource(private val context: Context, private val
         core.expectFeatureConfig = false
         core.spliceMs = 0
         core.musicRateProvider = { MusicRate.entries.firstOrNull { it.hz == output.audioRate() } ?: MusicRate.HZ48 }
-        val onFailure = { main.post { if (!closed) failed(DexState.error ?: "Доступ к рабочему столу завершён") }; Unit }
+        val onFailure = { main.post { if (!closed) failed(DexState.error ?: context.getString(R.string.projection_access_ended)) }; Unit }
         source = when {
             prefs.useDelegated -> DelegatedDexConnector(context, core) { onFailure() }
             prefs.useShizuku -> ShizukuDexConnector(context, core) { onFailure() }
-            else -> DexConnector(context, core)
+            else -> DexConnector(context, core, onFailure)
         }
         core.attach(this)
         source!!.start()
@@ -114,7 +114,8 @@ internal class DesktopProjectionSource(private val context: Context, private val
     }
 
     fun outputLost(hadPicture: Boolean) {
-        if (!closed) DesktopMusicPlayback.usbOutputLost(context, this, hadPicture && DexState.running)
+        if (!closed) DesktopMusicPlayback.usbOutputLost(context, this, hadPicture && DexState.running,
+            carriedAudio = core.audioViaUsb && output.audioRate() != null)
     }
 
     fun requestKeyFrame() { if (!closed) core.onCarlifeKeyFrameRequest() }

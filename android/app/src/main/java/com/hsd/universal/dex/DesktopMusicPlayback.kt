@@ -3,6 +3,8 @@ package com.hsd.universal.dex
 import android.content.Context
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.media.MediaMetadata
 import android.media.session.MediaController
 import android.media.session.MediaSession
@@ -13,6 +15,13 @@ import android.os.Looper
 import android.os.SystemClock
 import com.hsd.universal.AppLog
 import com.hsd.universal.aa.BridgeHost
+
+internal fun isBluetoothPlaybackDevice(type: Int): Boolean = when (type) {
+    AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+    AudioDeviceInfo.TYPE_BLE_HEADSET, AudioDeviceInfo.TYPE_BLE_SPEAKER,
+    AudioDeviceInfo.TYPE_BLE_BROADCAST, AudioDeviceInfo.TYPE_HEARING_AID -> true
+    else -> false
+}
 
 /** Main-process memory survives USB service grace. No track names, URIs or PCM are logged/saved. */
 internal object DesktopMusicPlayback {
@@ -84,9 +93,9 @@ internal object DesktopMusicPlayback {
         scheduleNext()
     }
 
-    fun usbOutputLost(serviceOwner: Any, owner: Any, hadPicture: Boolean) = onMain {
+    fun usbOutputLost(serviceOwner: Any, owner: Any, hadPicture: Boolean, carriedAudio: Boolean) = onMain {
         val app = context ?: return@onMain
-        if (link.consumeTransportLoss(serviceOwner, owner, hadPicture)) pauseCurrentPlayer(app, "USB transport loss")
+        if (link.consumeTransportLoss(serviceOwner, owner, hadPicture, carriedAudio)) pauseCurrentPlayer(app, "USB transport loss")
     }
 
     fun physicalDetach(serviceOwner: Any) = onMain {
@@ -94,10 +103,12 @@ internal object DesktopMusicPlayback {
         // A failed retry may replace the working session before USB reports physical detach.
         if (link.serviceOwner !== serviceOwner) return@onMain
         if (receivingVideo()) link.markReady() // The first frame may arrive between readiness polls.
-        if (link.consumePhysicalDetach(serviceOwner, SystemClock.elapsedRealtime())) pauseCurrentPlayer(app, "physical USB detach")
+        if (link.consumePhysicalDetach(serviceOwner, SystemClock.elapsedRealtime())) {
+            pauseCurrentPlayer(app, "physical USB detach", keepBluetooth = true)
+        }
     }
 
-    private fun pauseCurrentPlayer(app: Context, cause: String, retryToken: MediaSession.Token? = null) {
+    private fun pauseCurrentPlayer(app: Context, cause: String, keepBluetooth: Boolean = false, retryToken: MediaSession.Token? = null) {
         if (policy.hasPending || !allowed(app)) return
         var selected: MediaSession.Token? = null
         var commandAttempted = false
@@ -110,6 +121,10 @@ internal object DesktopMusicPlayback {
             val info = target.playbackInfo
             if (info.playbackType != MediaController.PlaybackInfo.PLAYBACK_TYPE_LOCAL ||
                 info.audioAttributes.usage != AudioAttributes.USAGE_MEDIA) return
+            if (keepBluetooth) {
+                val outputs = app.getSystemService(AudioManager::class.java).getAudioDevicesForAttributes(info.audioAttributes)
+                if (outputs.isEmpty() || outputs.any { isBluetoothPlaybackDevice(it.type) }) return
+            }
             val before = snapshot(target) ?: return
             releaseObserver()
             if (!policy.pause(before, SystemClock.elapsedRealtime())) return
@@ -129,7 +144,7 @@ internal object DesktopMusicPlayback {
                 val loss = link.lossId ?: return
                 // Retry a transient query once, only for the same selected player and loss.
                 main.postDelayed({
-                    if (link.lossId === loss) pauseCurrentPlayer(app, cause, retryToken = token)
+                    if (link.lossId === loss) pauseCurrentPlayer(app, cause, keepBluetooth, token)
                 }, 100L)
             }
         }

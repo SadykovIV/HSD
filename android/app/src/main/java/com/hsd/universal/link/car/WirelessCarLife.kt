@@ -1,5 +1,7 @@
 package com.hsd.universal.link.car
 
+import com.hsd.universal.R
+
 import android.Manifest
 import android.app.Activity
 import android.content.Context
@@ -73,12 +75,12 @@ object WirelessCarLife {
 
     /** No sockets, Bluetooth listeners or activation are started before this check. */
     fun unavailableReason(context: Context): String? = when {
-        !BuildConfig.WIRELESS_BETA || !WirelessPrefs(context).enabled -> "Выберите подключение CarLife по Wi-Fi"
+        !BuildConfig.WIRELESS_BETA || !WirelessPrefs(context).enabled -> context.getString(R.string.projection_select_wifi)
         WirelessPrefs(context).mode == CarLifeConnectionMode.AUTO && !hasConfiguredCar(context) ->
-            "Настройте беспроводную магнитолу для автоматического подключения без USB"
-        missingPermissions(context).isNotEmpty() -> "Разрешите доступ к устройствам поблизости и локальной сети"
-        com.hsd.universal.dex.PhonePairingService.blocksProjectionForCommittedActivation(context) -> "Завершаю проверку активации рабочего стола…"
-        !DesktopAccess.isReadyForProjection(context) -> "Сначала подготовьте выбранный способ доступа на главном экране ${BuildConfig.BRAND}"
+            context.getString(R.string.projection_configure_wireless)
+        missingPermissions(context).isNotEmpty() -> context.getString(R.string.projection_network_permissions)
+        com.hsd.universal.dex.PhonePairingService.blocksProjectionForCommittedActivation(context) -> context.getString(R.string.projection_activation_check)
+        !DesktopAccess.isReadyForProjection(context) -> context.getString(R.string.projection_prepare_access, BuildConfig.BRAND)
         else -> null
     }
 
@@ -96,7 +98,7 @@ object WirelessCarLife {
     fun startReady(context: Context): Boolean {
         val reason = unavailableReason(context)
         if (reason != null) {
-            CarLifeState.status = reason
+            CarLifeState.setStatus(reason)
             return false
         }
         return try {
@@ -106,7 +108,7 @@ object WirelessCarLife {
             context.startForegroundService(com.hsd.universal.DesktopTransport.service(context).setAction(BridgeService.ACTION_WIFI_B))
             true
         } catch (error: RuntimeException) {
-            CarLifeState.status = "Не удалось начать подключение по Wi-Fi. Откройте ${BuildConfig.BRAND} и повторите"
+            CarLifeState.setStatus(context.getString(R.string.projection_wifi_error, BuildConfig.BRAND))
             AppLog.i("WIRELESS start failed: ${error.javaClass.simpleName}", false)
             false
         }

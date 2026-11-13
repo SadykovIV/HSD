@@ -248,7 +248,7 @@ class AndroidDesktopActivity : Activity() {
         if (dashboard) updateTargetGuidance()
         if (!ownsDisplay()) {
             layout.visibility = View.INVISIBLE
-            status.text = "Подключение рабочего стола…"
+            status.text = getString(R.string.desktop_connecting_desktop)
         }
         window.insetsController?.apply {
             hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
@@ -333,7 +333,7 @@ class AndroidDesktopActivity : Activity() {
             adapter = railAdapter
             divider = null
             setSelector(android.graphics.drawable.ColorDrawable(Color.argb(105, 70, 165, 110)))
-            contentDescription = "Панель приложений"
+            contentDescription = getString(R.string.desktop_app_drawer)
             setOnItemClickListener { _, _, position, _ -> pinnedEntries.getOrNull(position)?.let { launchApp(it) } }
             setOnItemLongClickListener { _, row, position, _ ->
                 pinnedEntries.getOrNull(position)?.let { showPinMenu(row, it) }
@@ -342,11 +342,11 @@ class AndroidDesktopActivity : Activity() {
         }
         railDrag = DesktopRailDrag(layout, rail, ::dropOnRail, ::showPinMenu)
         sidebar.addView(rail, LinearLayout.LayoutParams(-1, 0, 1f))
-        backButton = navButton("Назад", com.hsd.universal.R.drawable.desktop_back) {
+        backButton = navButton(getString(R.string.set_back), com.hsd.universal.R.drawable.desktop_back) {
             if (ownsDisplay()) pane.back()
         }
         sidebar.addView(backButton, LinearLayout.LayoutParams(-1, buttonHeight))
-        homeButton = navButton("Домой", com.hsd.universal.R.drawable.desktop_home) {
+        homeButton = navButton(getString(R.string.desktop_home_780e), com.hsd.universal.R.drawable.desktop_home) {
             if (ownsDisplay()) { autoOpenPanel = false; pane.home() }
         }
         sidebar.addView(homeButton, LinearLayout.LayoutParams(-1, buttonHeight))
@@ -382,8 +382,8 @@ class AndroidDesktopActivity : Activity() {
             status.setTextColor(Color.rgb(180, 190, 203))
             status.text = when {
                 entries.isNotEmpty() -> catalogHint()
-                loading -> "Загружаю приложения…"
-                else -> "Приложения не найдены"
+                loading -> getString(R.string.desktop_loading_apps)
+                else -> getString(R.string.desktop_no_apps_found)
             }
             grid.smoothScrollToPosition(0)
         }, onError = ::showError, guidanceVisibility = targetGuidance)
@@ -402,7 +402,7 @@ class AndroidDesktopActivity : Activity() {
             setPadding(dp(8), 0, dp(8), dp(6))
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         status = TextView(this).apply {
-            text = "Подключение рабочего стола…"
+            text = getString(R.string.desktop_connecting_desktop)
             textSize = 15f
             setTextColor(Color.rgb(180, 190, 203))
             setPadding(dp(8), 0, dp(8), dp(16))
@@ -488,7 +488,7 @@ class AndroidDesktopActivity : Activity() {
     private fun loadApps() {
         if (loading || !ownsDisplay()) return
         loading = true
-        if (entries.isEmpty()) status.text = "Загружаю приложения…"
+        if (entries.isEmpty()) status.text = getString(R.string.desktop_loading_apps)
         loader.execute {
             val result = runCatching {
                 val query = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
@@ -516,7 +516,7 @@ class AndroidDesktopActivity : Activity() {
                     if (entries != it.entries) showEntries(it.entries)
                     updateVisibleIcons()
                 }, onFailure = {
-                    showError("Не удалось получить список приложений. Вернитесь на рабочий стол ещё раз.")
+                    showError(getString(R.string.desktop_couldn_t_get_a_list_of_apps_go_back))
                     AppLog.i("Android Desktop catalog: ${it.javaClass.simpleName}", false)
                 })
             }
@@ -529,8 +529,8 @@ class AndroidDesktopActivity : Activity() {
         if (changed) adapter.notifyDataSetChanged()
         refreshPins()
         grid.visibility = View.VISIBLE
-        if (status.text == "Загружаю приложения…" || status.text == "Подключение рабочего стола…") {
-            status.text = if (entries.isEmpty()) "Приложения не найдены" else catalogHint()
+        if (status.text == getString(R.string.desktop_loading_apps) || status.text == getString(R.string.desktop_connecting_desktop)) {
+            status.text = if (entries.isEmpty()) getString(R.string.desktop_no_apps_found) else catalogHint()
             status.setTextColor(Color.rgb(180, 190, 203))
         }
     }
@@ -575,7 +575,7 @@ class AndroidDesktopActivity : Activity() {
         val pinned = pinnedEntries.any { it.key == entry.key }
         val popup = PopupMenu(this, anchor)
         popup.setForceShowIcon(true)
-        popup.menu.add(if (pinned) "Убрать с панели" else "Закрепить на панели").setIcon(
+        popup.menu.add(if (pinned) getString(R.string.desktop_unpin_from_panel) else getString(R.string.desktop_pin_to_panel)).setIcon(
             if (pinned) R.drawable.desktop_unpin else R.drawable.desktop_pin)
         popup.setOnMenuItemClickListener {
             if (ownsDisplay()) {
@@ -598,7 +598,7 @@ class AndroidDesktopActivity : Activity() {
                 panelChoice = choice
                 panelButton.visibility = if (choice != null && !dashboard) View.VISIBLE else View.GONE
                 if (choice != null) {
-                    panelButton.text = "Открыть панель «${choice.label}»"
+                    panelButton.text = getString(R.string.desktop_open_the_panel, choice.label)
                     if (autoOpenPanel) openPanel(choice)
                 }
                 autoOpenPanel = false
@@ -656,11 +656,11 @@ class AndroidDesktopActivity : Activity() {
                 }
             }
             panelSession = session
-            if (!dashboard) status.text = "Открывается ${entry.label}…"
+            if (!dashboard) status.text = getString(R.string.desktop_opening, entry.label)
             providerPane.openComponent(entry, session::attach)
         } catch (e: Exception) {
             providerPane.home()
-            showError("Компонент «${entry.label}» недоступен")
+            showError(getString(R.string.desktop_component_unavailable, entry.label))
         }
     }
 
@@ -673,12 +673,12 @@ class AndroidDesktopActivity : Activity() {
     private fun launchApp(entry: DesktopAppCatalog.Entry, requestedByPanel: Boolean = false,
         allowTaskMove: Boolean = false) {
         if (!ownsDisplay()) {
-            showError("Подключение рабочего стола ещё не готово или уже завершено")
+            showError(getString(R.string.desktop_desktop_connection_not_yet_ready_or_already_completed))
             return
         }
         autoOpenPanel = false
         if (!dashboard) revokePanel() else showTarget()
-        status.text = "Открывается ${entry.label}…"
+        status.text = getString(R.string.desktop_opening, entry.label)
         status.setTextColor(Color.rgb(180, 190, 203))
         val owner = panelChoice
         val session = panelSession
@@ -688,13 +688,13 @@ class AndroidDesktopActivity : Activity() {
             panelSession === session && CarLifeState.running && ownsDisplay() }
         pane.open(entry, requestedByPanel, DesktopAppPane.DashboardLaunch(owner, allowTaskMove, current) {
             if (!current() || confirmMove?.isShowing == true) return@DashboardLaunch
-            confirmMove = showHardwareDialog(AlertDialog.Builder(this).setTitle("Открыть на головном устройстве?")
-                .setMessage("«${entry.label}» может использовать уже открытое на телефоне окно. Разрешить перенос на ГУ?")
-                .setPositiveButton("Открыть на ГУ") { _, _ ->
+            confirmMove = showHardwareDialog(AlertDialog.Builder(this).setTitle(getString(R.string.desktop_open_on_the_head_unit))
+                .setMessage(getString(R.string.desktop_can_use_a_window_that_s_already_open_on, entry.label))
+                .setPositiveButton(getString(R.string.desktop_open_on_head_unit)) { _, _ ->
                     musicPane.ifComponentForeground(owner) {
                         if (current()) launchApp(entry, requestedByPanel, allowTaskMove = true)
                     }
-                }.setNegativeButton("Выбрать другое") { _, _ -> if (current()) { showTarget(); pane.home() } }.create())
+                }.setNegativeButton(getString(R.string.desktop_choose_another_app)) { _, _ -> if (current()) { showTarget(); pane.home() } }.create())
         })
     }
 
@@ -710,7 +710,7 @@ class AndroidDesktopActivity : Activity() {
         musicPane.view.visibility = View.VISIBLE
         panelButton.visibility = View.GONE
         layoutDashboard()
-        status.text = "Выберите приложение для второго окна."
+        status.text = getString(R.string.desktop_select_the_app_for_the_second_window)
     }
 
     private fun leaveDashboard() {
@@ -774,13 +774,13 @@ class AndroidDesktopActivity : Activity() {
         val restore = if (curtain) PhoneScreenIdleController.phoneCurtainVisible() ?: return else DexState.phoneScreenOff
         if (!curtain && !(prefs.useShizuku || prefs.useDelegated && DelegatedPanelAccess.isAvailable(this))) return
         val title = when {
-            restore -> "Включить экран телефона?"
-            curtain -> "Затемнить экран телефона?"
-            else -> "Погасить экран телефона?"
+            restore -> getString(R.string.desktop_turn_on_phone_screen)
+            curtain -> getString(R.string.desktop_dim_phone_screen_a0e1)
+            else -> getString(R.string.desktop_turn_off_phone_screen)
         }
         phoneConfirmation = showHardwareDialog(AlertDialog.Builder(this).setTitle(title)
-            .setMessage("Запрос от панели «${provider.label}».")
-            .setNegativeButton("Отмена", null).setPositiveButton("Да") { _, _ ->
+            .setMessage(getString(R.string.desktop_request_from_the_panel, provider.label))
+            .setNegativeButton(getString(R.string.mock_cancel), null).setPositiveButton(getString(R.string.desktop_yes)) { _, _ ->
                 musicPane.ifComponentForeground(provider) {
                     if (available() && curtain == (prefs.phoneScreenMode == PhoneIdleMode.CURTAIN)) {
                         if (curtain) PhoneScreenIdleController.setPhoneCurtain(!restore)
@@ -793,7 +793,7 @@ class AndroidDesktopActivity : Activity() {
             }.create())
     }
 
-    private fun catalogHint() = if (dashboard) "Выберите приложение для второго окна." else CATALOG_HINT
+    private fun catalogHint() = if (dashboard) getString(R.string.desktop_select_the_app_for_the_second_window) else CATALOG_HINT
 
     private fun ownedHardwareDialog(): AlertDialog? {
         if (!visible || isDestroyed || !ownsDisplay()) return null
@@ -918,13 +918,13 @@ class AndroidDesktopActivity : Activity() {
         if (selected != null) { launchApp(selected); return }
         if (choices.isEmpty()) {
             pane.home()
-            showError("Нет приложения для этой кнопки ГУ. Выберите его в списке приложений.")
+            showError(getString(R.string.desktop_there_is_no_application_for_this_go_button_select))
             return
         }
         categoryChoice = showHardwareDialog(AlertDialog.Builder(this)
-            .setTitle(if (category == Intent.CATEGORY_APP_MAPS) "Навигация" else "Музыка")
+            .setTitle(if (category == Intent.CATEGORY_APP_MAPS) getString(R.string.dev_meta_navi_title) else getString(R.string.dev_meta_music_title))
             .setItems(choices.map { it.label }.toTypedArray()) { _, index -> if (ownsDisplay()) launchApp(choices[index]) }
-            .setNegativeButton("Отмена", null).create()) { dismissed ->
+            .setNegativeButton(getString(R.string.mock_cancel), null).create()) { dismissed ->
                 if (categoryChoice === dismissed) categoryChoice = null
             }
     }

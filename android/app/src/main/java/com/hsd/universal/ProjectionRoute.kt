@@ -6,17 +6,17 @@ internal enum class ProjectionProtocol(val title: String) {
     ANDROID_AUTO("Android Auto"), CARPLAY("CarPlay"), CARLIFE("CarLife")
 }
 
-internal enum class ProjectionRoute(val family: ProjectionProtocol, val title: String, val link: String, val wired: Boolean = false) {
-    USB(ProjectionProtocol.ANDROID_AUTO, "По USB", "USB", true),
-    WIRELESS_AA(ProjectionProtocol.ANDROID_AUTO, "Беспроводной Android Auto", "Bluetooth и Wi-Fi"),
-    LAN_SERVER(ProjectionProtocol.ANDROID_AUTO, "Сервер на телефоне", "сервер на телефоне"),
-    LAN_CLIENT(ProjectionProtocol.ANDROID_AUTO, "Сервер на магнитоле", "сервер на магнитоле"),
-    CARPLAY(ProjectionProtocol.CARPLAY, "Беспроводной CarPlay", "Bluetooth и Wi-Fi"),
-    CARLIFE_USB(ProjectionProtocol.CARLIFE, "CarLife по USB", "USB", true),
-    CARLIFE_WIFI(ProjectionProtocol.CARLIFE, "Беспроводной CarLife", "Wi-Fi");
+internal enum class ProjectionRoute(val family: ProjectionProtocol, val titleRes: Int, private val linkRes: Int, val wired: Boolean = false) {
+    USB(ProjectionProtocol.ANDROID_AUTO, R.string.route_usb, R.string.route_link_usb, true),
+    WIRELESS_AA(ProjectionProtocol.ANDROID_AUTO, R.string.route_aa_wireless, R.string.route_link_bt_wifi),
+    LAN_SERVER(ProjectionProtocol.ANDROID_AUTO, R.string.route_phone_server, R.string.route_phone_server),
+    LAN_CLIENT(ProjectionProtocol.ANDROID_AUTO, R.string.route_hu_server, R.string.route_hu_server),
+    CARPLAY(ProjectionProtocol.CARPLAY, R.string.route_cp_wireless, R.string.route_link_bt_wifi),
+    CARLIFE_USB(ProjectionProtocol.CARLIFE, R.string.route_cl_usb, R.string.route_link_usb, true),
+    CARLIFE_WIFI(ProjectionProtocol.CARLIFE, R.string.route_cl_wireless, R.string.route_link_wifi);
 
     val protocol get() = family.title
-    val label get() = "$protocol · $link"
+    fun label(context: Context) = "$protocol · ${context.getString(linkRes)}"
     val carLife get() = family == ProjectionProtocol.CARLIFE
 
     companion object {

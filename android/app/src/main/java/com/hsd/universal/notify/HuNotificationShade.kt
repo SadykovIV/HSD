@@ -1,5 +1,6 @@
 package com.hsd.universal.notify
 
+import com.hsd.universal.R
 import com.hsd.universal.BuildConfig
 
 import android.app.KeyguardManager
@@ -143,11 +144,11 @@ internal class HuNotificationShade(context: Context) : AutoCloseable {
         }
         while (root.childCount > 1) root.removeViewAt(1)
         var downY = 0f
-        val handle = (root.getChildAt(0) as? Button) ?: button(ctx, "Уведомления") {
+        val handle = (root.getChildAt(0) as? Button) ?: button(ctx, app.getString(R.string.step_notif_short)) {
             expanded = !expanded
             render()
         }.apply {
-            contentDescription = if (expanded) "Скрыть уведомления" else "Открыть шторку уведомлений"
+            contentDescription = if (expanded) app.getString(R.string.desktop_hide_notifications) else app.getString(R.string.desktop_open_notification_shade)
             setOnTouchListener { _, event ->
                 when (event.actionMasked) {
                     MotionEvent.ACTION_DOWN -> downY = event.rawY
@@ -163,17 +164,17 @@ internal class HuNotificationShade(context: Context) : AutoCloseable {
                 false
             }
         }
-        handle.text = if (expanded) "Уведомления  ▴" else "Уведомления · ${HuNotifications.items.size}  ▾"
-        handle.contentDescription = if (expanded) "Скрыть уведомления" else "Открыть шторку уведомлений"
+        handle.text = if (expanded) app.getString(R.string.desktop_notifications_3d48) else app.getString(R.string.desktop_notifications_a97d, HuNotifications.items.size)
+        handle.contentDescription = if (expanded) app.getString(R.string.desktop_hide_notifications) else app.getString(R.string.desktop_open_notification_shade)
         if (handle.parent == null) root.addView(handle, LinearLayout.LayoutParams(-1, dp(48)))
         if (expanded) {
             val items = HuNotifications.items
             if (!reveal) {
-                root.addView(label(ctx, "Телефон заблокирован\nРазблокируйте его, чтобы прочитать уведомления.", 16f))
+                root.addView(label(ctx, app.getString(R.string.desktop_phone_s_locked_unlock_it_to_read_the_notifications), 16f))
             } else if (!HuNotifications.connected) {
-                root.addView(label(ctx, "Разрешите ${BuildConfig.BRAND} доступ к уведомлениям в настройках телефона.", 16f))
+                root.addView(label(ctx, app.getString(R.string.desktop_permission_access_to_notifications_in_the_phone_settings, BuildConfig.BRAND), 16f))
             } else if (items.isEmpty()) {
-                root.addView(label(ctx, "Новых уведомлений нет", 17f))
+                root.addView(label(ctx, app.getString(R.string.desktop_no_new_notifications), 17f))
             } else {
                 val list = LinearLayout(ctx).apply { orientation = LinearLayout.VERTICAL }
                 for (item in items) {
@@ -186,11 +187,11 @@ internal class HuNotificationShade(context: Context) : AutoCloseable {
                         if (mayReveal()) HuNotificationGateway.open(app, displayId, item.key, item.pkg)
                     }
                     card.isFocusable = true
-                    card.contentDescription = "Открыть уведомление: ${item.who}"
+                    card.contentDescription = app.getString(R.string.desktop_open_notification, item.who)
                     val top = LinearLayout(ctx).apply { gravity = Gravity.CENTER_VERTICAL }
                     top.addView(label(ctx, item.who, 20f, true), LinearLayout.LayoutParams(0, -2, 1f))
                     top.addView(button(ctx, "×") { HuNotifications.dismiss(item.key) }.apply {
-                        contentDescription = "Убрать уведомление"
+                        contentDescription = app.getString(R.string.desktop_dismiss_notification)
                     }, LinearLayout.LayoutParams(dp(48), dp(48)))
                     card.addView(top)
                     card.addView(label(ctx, item.text, 18f).apply { maxLines = 8 })
@@ -198,7 +199,7 @@ internal class HuNotificationShade(context: Context) : AutoCloseable {
                     list.addView(card, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(6) })
                 }
                 root.addView(ScrollView(ctx).apply { addView(list) }, LinearLayout.LayoutParams(-1, 0, 1f))
-                root.addView(button(ctx, "Очистить уведомления") { HuNotifications.clearAll() }, LinearLayout.LayoutParams(-1, dp(48)))
+                root.addView(button(ctx, app.getString(R.string.desktop_clear_notifications)) { HuNotifications.clearAll() }, LinearLayout.LayoutParams(-1, dp(48)))
             }
         }
         val width = if (expanded) maxOf(dp(320), (currentWidth * 0.60).toInt()).coerceAtMost(currentWidth - dp(12))

@@ -6,7 +6,7 @@ import android.content.Context
 object DesktopAccess {
     /** UI/setup completion includes the phone transaction; transport recovery still has its own gate. */
     fun activationSetupComplete(context: Context): Boolean {
-        if (!isReady(context)) return false
+        if (!isReadyForProjection(context)) return false
         val prefs = DexPrefs(context)
         if (!prefs.useDelegated) return true
         return DesktopActivationSetupPolicy.isReady(prefs.activationMethod,

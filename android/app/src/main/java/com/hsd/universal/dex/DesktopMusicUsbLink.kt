@@ -34,8 +34,13 @@ internal class DesktopMusicUsbLink(private val graceMs: Long) {
     }
 
     /** The failed fd must itself have delivered a desktop; a failed retry has no such claim. */
-    fun consumeTransportLoss(service: Any, link: Any, hadPicture: Boolean): Boolean {
+    fun consumeTransportLoss(service: Any, link: Any, hadPicture: Boolean, carriedAudio: Boolean): Boolean {
         if (serviceOwner !== service || owner !== link || outputLost || !(sawReady || hadPicture)) return false
+        // A camera or source switch may close just the projection endpoint while Bluetooth keeps playing.
+        if (!carriedAudio) {
+            markReady() // retain physical-detach evidence if the first frame arrived between polls
+            return false
+        }
         consumeLoss()
         return true
     }

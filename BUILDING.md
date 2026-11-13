@@ -15,6 +15,10 @@ Set `HSD_SIGNING_PROPERTIES` to the absolute path of a local Java properties fil
 
 Phone and computer activation use Android’s package-scoped `run-as`, so HSD’s release build enables the Android debuggable flag. HSD and its DriveDeck companion must be signed with the same certificate. [Build the DriveDeck companion](tools/drivedeck-companion/README.md)
 
+## CarLife receiver tests
+
+Install the HSD build and its matching `assembleDebugAndroidTest` APK on an Android emulator. Put the [CarLife HeadUnit Emulator](https://github.com/SadykovIV/CarLife-HeadUnit-Emulator) checkout on `PYTHONPATH` for its wire decoder. Run `python3 tools/carlife_receiver_test.py --serial <adb-serial>` to check the audio sequence during pinch gestures, camera return with Bluetooth audio and instrument cluster guidance.
+
 ## Publish a release
 
 Set the version name and increment the version code in `android/app/build.gradle.kts`. Use a tag of the form `vX.Y.Z`. Attach exactly two signed APKs, `HSD-X.Y.Z.apk` and `DriveDeck-HSD-X.Y.Z-codeNNN.apk`, using each app’s own version. GitHub supplies the source archives (ZIP and tar.gz) from the tag. Write short release notes in English and Russian and link to the system diagrams. [Release notes](docs/releases/) · [System diagrams and project map](docs/architecture.md)

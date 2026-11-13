@@ -5,6 +5,7 @@ import com.hsd.universal.aa.NaviTurnInfo
 
 /** Normalize source text once; apply receiver presentation limits only at the TBT boundary. */
 internal object NavigationStreetNames {
+    const val ENABLED_BY_DEFAULT = true
     private const val OTHER_MAX_CODE_POINTS = 256
     private val ROAD_TYPE = Regex(
         """(?<![\p{L}\p{M}\p{N}_-])(улица|проспект)(?![\p{L}\p{M}\p{N}_-])""",

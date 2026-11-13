@@ -1490,7 +1490,7 @@ class AaMetaTest {
         r.core.onMediaStatus(AaMeta.parseMediaStatus(status(2, 1))!!)
         r.core.onAudioData(M.CH_AUDIO_MEDIA, ByteArray(640), 0)
         r.core.onAudioData(M.CH_AUDIO_SPEECH, ByteArray(640), 0)            // TTS инициализирован
-        assertTrue("MEDIA играет: MUSIC активна", r.core.musicActive)
+        assertTrue("MEDIA играет: MUSIC активна", r.core.isMediaInited)
         assertFalse("MUSIC=0: ответ MUSIC=0, хотя пауза MEDIA отложена", r.core.onCarlifeMusicControl(0))
         assertFalse("пауза MEDIA ждёт конца TTS", r.link.audio.contains(CarlifeAudio.MEDIA_PAUSE))
         assertTrue(r.logs.any { it.contains("MEDIA пауза отложена") })
@@ -1509,30 +1509,59 @@ class AaMetaTest {
         r.start()
         r.core.onMediaStatus(AaMeta.parseMediaStatus(status(2, 1))!!)
         r.core.onAudioData(M.CH_AUDIO_MEDIA, ByteArray(640), 0)
-        assertTrue("MEDIA играет: MUSIC активна", r.core.musicActive)
+        assertTrue("MEDIA играет: MUSIC активна", r.core.isMediaInited)
         assertFalse("MUSIC=0: MEDIA на паузе, ответ MUSIC=0", r.core.onCarlifeMusicControl(0))
         assertTrue(r.link.audio.contains(CarlifeAudio.MEDIA_PAUSE))
     }
 
     @Test
-    fun musicModuleByStateOnlyWithoutUsbAudio() {
+    fun externalPlaybackKeepsItsOwnControlsAcrossCameraAndSourceChanges() {
+        for (externalByFeature in listOf(false, true)) {
+            val r = Rig()
+            val player = FakePeer()
+            r.core.peer = player
+            if (externalByFeature) r.core.onHuFeatureConfig(CarlifeAudio.AUDIO_MODE_BT)
+            else r.core.usbAudioEnabled = false
+            r.start()
+            r.core.onMediaStatus(AaMeta.parseMediaStatus(status(2, 1))!!)
+            assertFalse(r.core.onCarlifeMusicControl(1))
+            r.core.onCarlifePause()
+            assertFalse(r.core.onCarlifeMusicControl(0))
+            r.start()
+            repeat(3) { assertFalse(r.core.onCarlifeMusicControl(1)) }
+            r.core.onAudioData(M.CH_AUDIO_MEDIA, ByteArray(640), 0)
+            r.core.onMediaStatus(AaMeta.parseMediaStatus(status(3, 2))!!)
+            assertTrue(player.keys.isEmpty())
+            assertTrue(r.link.audio.isEmpty())
+            assertTrue(r.link.modules.none { it.first == CarlifeAudio.MODULE_MUSIC })
+        }
+    }
+
+    @Test fun mediaRouteChangesReleaseTheOldStreamAndNewReceiversNegotiateIndependently() {
         val r = Rig()
         r.start()
         r.core.onMediaStatus(AaMeta.parseMediaStatus(status(2, 1))!!)
-        assertTrue("звук по USB: MUSIC владеет MEDIA INIT", r.link.modules.none { it.first == CarlifeAudio.MODULE_MUSIC })
-        assertFalse(r.core.musicActive)
-
-        val q = Rig()
-        q.core.usbAudioEnabled = false
-        q.start()
-        q.core.onMediaStatus(AaMeta.parseMediaStatus(status(2, 1))!!)
-        assertTrue(q.core.musicActive)
-        q.core.onMediaStatus(AaMeta.parseMediaStatus(status(3, 2))!!)
-        assertFalse(q.core.musicActive)
-        assertEquals(
-            listOf(CarlifeAudio.MODULE_MUSIC to 1, CarlifeAudio.MODULE_MUSIC to 0),
-            q.link.modules.filter { it.first == CarlifeAudio.MODULE_MUSIC },
-        )
+        assertFalse(r.core.onCarlifeMusicControl(1))
+        r.core.onAudioData(M.CH_AUDIO_MEDIA, ByteArray(640), 0)
+        assertTrue(r.core.onCarlifeMusicControl(1))
+        r.core.onHuFeatureConfig(CarlifeAudio.AUDIO_MODE_BT)
+        r.core.onHuFeatureConfig(null)
+        assertFalse(r.core.audioViaUsb)
+        assertFalse(r.core.onCarlifeMusicControl(1))
+        assertEquals(listOf(1, 0), r.link.modules.filter { it.first == CarlifeAudio.MODULE_MUSIC }.map { it.second })
+        assertEquals(CarlifeAudio.MEDIA_STOP, r.link.audio.last())
+        r.core.onHuFeatureConfig(0)
+        r.core.onAudioData(M.CH_AUDIO_MEDIA, ByteArray(640), 0)
+        assertTrue(r.core.onCarlifeMusicControl(1))
+        r.core.usbAudioEnabled = false
+        assertEquals(CarlifeAudio.MEDIA_STOP, r.link.audio.last())
+        r.core.onHuFeatureConfig(CarlifeAudio.AUDIO_MODE_BT)
+        r.core.onCarlifeClosed(r.link)
+        r.core.attach(MetaLink())
+        assertFalse(r.core.featureConfigSeen)
+        assertFalse(r.core.audioViaUsb)
+        r.core.usbAudioEnabled = true
+        assertTrue(r.core.audioViaUsb)
     }
 
     // --- билдеры CarLife ---
