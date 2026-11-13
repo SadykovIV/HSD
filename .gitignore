@@ -1,5 +1,6 @@
 # Generated output and local tooling
 **/build/
+**/.cxx/
 .gradle/
 .kotlin/
 .idea/

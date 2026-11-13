@@ -68,8 +68,8 @@ object WirelessCarLife {
     fun hasConfiguredCar(context: Context): Boolean = CarProfile(context).isSet || CarWifi(context).isSet
 
     fun missingPermissions(context: Context): List<String> = buildList {
-        add(Manifest.permission.BLUETOOTH_CONNECT)
-        add(Manifest.permission.NEARBY_WIFI_DEVICES)
+        if (Build.VERSION.SDK_INT >= 31) add(Manifest.permission.BLUETOOTH_CONNECT)
+        add(if (Build.VERSION.SDK_INT >= 33) Manifest.permission.NEARBY_WIFI_DEVICES else Manifest.permission.ACCESS_FINE_LOCATION)
         if (Build.VERSION.SDK_INT >= 37) add("android.permission.ACCESS_LOCAL_NETWORK")
     }.filter { context.checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
 

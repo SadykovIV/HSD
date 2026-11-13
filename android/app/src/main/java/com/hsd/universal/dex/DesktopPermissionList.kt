@@ -64,9 +64,11 @@ internal class DesktopPermissionList(private val activity: Activity, private val
             DesktopUsbDebuggingPolicy.State.DISABLED -> false
             else -> null
         }, activity.getString(R.string.desktop_to_activate_from_your_computer_and_restore_an_independent)) { settings(debug, Intent(Settings.ACTION_SETTINGS)) }
-        val wifi = runCatching { Settings.Global.getString(activity.contentResolver, "adb_wifi_enabled") }.getOrNull()
-        row(parent, activity.getString(R.string.desktop_wireless_debugging_wi_fi), when (wifi) { "1" -> true; "0" -> false; else -> null },
-            activity.getString(R.string.desktop_you_don_t_need_wi_fi_to_activate_from)) { settings(debug, Intent(Settings.ACTION_SETTINGS)) }
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            val wifi = runCatching { Settings.Global.getString(activity.contentResolver, "adb_wifi_enabled") }.getOrNull()
+            row(parent, activity.getString(R.string.desktop_wireless_debugging_wi_fi), when (wifi) { "1" -> true; "0" -> false; else -> null },
+                activity.getString(R.string.desktop_you_don_t_need_wi_fi_to_activate_from)) { settings(debug, Intent(Settings.ACTION_SETTINGS)) }
+        }
         val blocked = PhonePairingService.notificationBlock(activity, needsCode = true)
         row(parent, activity.getString(R.string.desktop_notifications, DesktopTransport.shortName), blocked == null, when (blocked) {
             PairingNotificationBlock.CODE_CHANNEL -> activity.getString(R.string.desktop_enable_the_input_pairing_code_channel)

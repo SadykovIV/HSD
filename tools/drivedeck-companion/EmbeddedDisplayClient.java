@@ -266,7 +266,7 @@ public final class EmbeddedDisplayClient {
         int expected = DisplayOnlyLaunch.displayId(renderer.getContext());
         Activity host = DisplayOnlyLaunch.activity(renderer.getContext());
         Display display = renderer.getDisplay();
-        if (display == null && host != null) display = host.getDisplay();
+        if (display == null && host != null) display = HostedDisplay.of(host);
         if (expected <= 0 || display == null || !display.isValid() || display.getDisplayId() != expected) {
             throw new IllegalArgumentException("Рабочий стол недоступен. Подключите HSD заново.");
         }

@@ -1,5 +1,19 @@
 package com.hsd.universal.ui
 
+import com.hsd.universal.ProjectionRoute
+
+/** Enumeration may complete after the attach intent. Only a newly visible wired protocol
+ * can switch the profile, so a later manual selection is respected on the same connection. */
+internal class WiredAccessorySelection {
+    private var previous = emptySet<ProjectionRoute>()
+
+    fun observe(selected: ProjectionRoute, available: Set<ProjectionRoute>): ProjectionRoute {
+        val added = available - previous
+        previous = available
+        return if (selected.wired && selected !in available) added.singleOrNull() ?: selected else selected
+    }
+}
+
 /** Process-local claims prevent duplicate permission dialogs and service launches. */
 internal class UsbScanGate(private val nowMs: () -> Long) {
     enum class Step { WAITING, ACTIVE, START, STARTING, REQUEST_PERMISSION, PERMISSION_PENDING, DENIED, PERMISSION_TIMEOUT, START_FAILED }
@@ -71,11 +85,12 @@ internal class UsbScanGate(private val nowMs: () -> Long) {
         startFailed = false
     }
 
-    fun handshakeFailed(accessoryKey: String, detail: String) {
-        if (key != accessoryKey) reset()
+    fun handshakeFailed(accessoryKey: String, detail: String): Boolean {
+        if (key != null && key != accessoryKey) return false
         key = accessoryKey
         failed()
         failureDetail = detail
+        return true
     }
 
     fun failed() {

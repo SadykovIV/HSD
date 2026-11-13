@@ -1,5 +1,7 @@
 package com.hsd.universal.desktop
 
+import com.hsd.universal.compat.hostDisplay
+
 import android.app.Activity
 import com.hsd.universal.embed.EmbeddedSessionRegistry
 
@@ -36,7 +38,7 @@ internal class FullscreenHardwareBack private constructor(
 
     private fun current(): Boolean = resumed && !closed &&
         !activity.isFinishing && !activity.isDestroyed &&
-        activity.display?.displayId == parentId &&
+        activity.hostDisplay?.displayId == parentId &&
         EmbeddedSessionRegistry.isCurrentParent(parentId, parentProof) && acceptsInput()
 
     fun resume() {
@@ -62,7 +64,7 @@ internal class FullscreenHardwareBack private constructor(
     companion object {
         fun attach(activity: Activity, pane: DesktopAppPane,
             acceptsInput: () -> Boolean = { true }): FullscreenHardwareBack? {
-            val parentId = activity.display?.displayId ?: return null
+            val parentId = activity.hostDisplay?.displayId ?: return null
             val proof = EmbeddedSessionRegistry.captureParent(parentId) ?: return null
             return FullscreenHardwareBack(activity, pane, parentId, proof, acceptsInput)
         }

@@ -26,7 +26,7 @@ class ComponentApkProvider : FileProvider()
 data class PreparedComponent(val version: String, val code: Long, val file: File)
 
 internal object ComponentPackages {
-    private val sigFlags = PackageManager.PackageInfoFlags.of(PackageManager.GET_SIGNING_CERTIFICATES.toLong())
+    private val sigFlags = PackageManager.GET_SIGNING_CERTIFICATES
     private fun PackageInfo.signers() = signingInfo?.apkContentsSigners?.toSet().orEmpty()
 
     fun installed(ctx: Context, spec: DesktopComponent): PackageInfo? = try {
@@ -42,7 +42,7 @@ internal object ComponentPackages {
     fun requireDriveDeck(ctx: Context) {
         val spec = DesktopComponent.DRIVEDECK
         checkNotNull(trustedInstalled(ctx, spec)) { "Установите ${spec.title} (код ${spec.minCode} или новее)." }
-        val component = ComponentName(spec.pkg, DesktopModePolicy.DRIVEDECK_HOME_CLASS)
+        val component = ComponentName(spec.pkg, DesktopModePolicy.driveDeckHome(ctx))
         val activity = try { ctx.packageManager.getActivityInfo(component, 0) }
             catch (_: PackageManager.NameNotFoundException) { error("В установленном DriveDeck отсутствует рабочий стол.") }
         check(activity.exported && activity.enabled && activity.applicationInfo.enabled) { "Рабочий стол DriveDeck отключён." }
@@ -118,8 +118,8 @@ internal object ComponentPackages {
         check(installed.signerSha256 == entry.signerSha256 && installed.modeId == entry.modeId) {
             "Подпись или профиль установленного компонента изменились."
         }
-        val flags = PackageManager.PackageInfoFlags.of((PackageManager.GET_SIGNING_CERTIFICATES or
-            PackageManager.GET_ACTIVITIES or PackageManager.GET_META_DATA).toLong())
+        val flags = PackageManager.GET_SIGNING_CERTIFICATES or
+            PackageManager.GET_ACTIVITIES or PackageManager.GET_META_DATA
         val apk = ctx.packageManager.getPackageArchiveInfo(file.absolutePath, flags) ?: error("Не удалось прочитать APK.")
         val sha = MessageDigest.getInstance("SHA-256")
         val pins = apk.signers().map { sha.digest(it.toByteArray()).joinToString("") { b -> "%02x".format(b) } }.toSet()
@@ -175,7 +175,7 @@ internal object ComponentPackages {
 
     fun validate(ctx: Context, spec: DesktopComponent, file: File): PreparedComponent {
         val pm = ctx.packageManager
-        val flags = PackageManager.PackageInfoFlags.of((PackageManager.GET_SIGNING_CERTIFICATES or PackageManager.GET_ACTIVITIES or PackageManager.GET_META_DATA).toLong())
+        val flags = PackageManager.GET_SIGNING_CERTIFICATES or PackageManager.GET_ACTIVITIES or PackageManager.GET_META_DATA
         val apk = pm.getPackageArchiveInfo(file.absolutePath, flags) ?: error("Файл не является подписанным APK.")
         check(apk.packageName == spec.pkg) { "Выберите адаптированный APK ${spec.title}, пакет ${spec.pkg}." }
         checkPublisher(ctx, spec, apk)

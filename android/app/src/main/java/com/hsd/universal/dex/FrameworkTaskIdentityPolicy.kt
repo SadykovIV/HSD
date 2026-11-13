@@ -7,6 +7,7 @@ internal object FrameworkTaskIdentityPolicy {
     private const val PREFIX_LIMIT = 128
     private val prefix = Regex(
         "\\ATaskInfo\\{userId=(0|[1-9][0-9]{0,9}) " +
+            "(?:stackId=(?:0|[1-9][0-9]{0,9}) )?" + // Android 10 and 11 include the stack before the task.
             "taskId=(0|[1-9][0-9]{0,9}) " +
             "(?:effectiveUid=(?:-1|0|[1-9][0-9]{0,9}) )?" + // API 37 framework identity prefix.
             "displayId=(0|[1-9][0-9]{0,9}) isRunning=(?:true|false)(?: |\\})"

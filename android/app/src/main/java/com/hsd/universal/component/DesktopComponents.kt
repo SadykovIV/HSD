@@ -121,7 +121,7 @@ internal object DesktopComponents {
     private fun query(context: Context, only: ComponentName?): List<DesktopComponentEntry> {
         val pm = context.packageManager
         val intent = Intent(ACTION).addCategory(Intent.CATEGORY_DEFAULT).setPackage(only?.packageName)
-        val flags = PackageManager.ResolveInfoFlags.of((PackageManager.GET_META_DATA or PackageManager.MATCH_DEFAULT_ONLY).toLong())
+        val flags = PackageManager.GET_META_DATA or PackageManager.MATCH_DEFAULT_ONLY
         return try {
             pm.queryIntentActivities(intent, flags).mapNotNull { result ->
                 val activity = result.activityInfo ?: return@mapNotNull null
@@ -146,7 +146,7 @@ internal object DesktopComponents {
         if (!DesktopComponentPolicy.supportsIsolatedTask(activity.launchMode, activity.documentLaunchMode,
                 (activity.flags and ActivityInfo.FLAG_ALLOW_TASK_REPARENTING) != 0)) return null
         val pkg = try {
-            pm.getPackageInfo(name.packageName, PackageManager.PackageInfoFlags.of(PackageManager.GET_SIGNING_CERTIFICATES.toLong()))
+            pm.getPackageInfo(name.packageName, PackageManager.GET_SIGNING_CERTIFICATES)
         } catch (_: PackageManager.NameNotFoundException) { return null }
         val uid = pkg.applicationInfo?.uid ?: return null
         if (uid != activity.applicationInfo.uid || !DesktopComponentPolicy.acceptsOwner(name.packageName,

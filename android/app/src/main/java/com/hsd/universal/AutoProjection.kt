@@ -4,11 +4,11 @@ import aap_protobuf.service.media.shared.message.AudioConfigurationOuterClass.Au
 import aap_protobuf.service.control.message.AudioFocusNotificationOuterClass.AudioFocusNotification
 import aap_protobuf.service.control.message.AudioFocusRequestTypeOuterClass.AudioFocusRequestType
 import aap_protobuf.service.control.message.ServiceDiscoveryResponseOuterClass.ServiceDiscoveryResponse
+import aap_protobuf.shared.MessageStatusOuterClass.MessageStatus
 import aap_protobuf.service.inputsource.message.InputReportOuterClass.InputReport
 import aap_protobuf.service.media.shared.message.MediaCodecTypeOuterClass.MediaCodecType
 import aap_protobuf.service.media.sink.message.VideoConfigurationOuterClass.VideoConfiguration
 import android.content.Context
-import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -30,6 +30,14 @@ internal class AutoProjection(private val context: Context, transport: Transport
                               private val ended: (String) -> Unit, private val ready: () -> Unit = {}) :
     ProjectionSession, AapSession.Callbacks, VideoChannel.Listener, InputChannel.Listener, DesktopProjectionOutput {
     private val cluster = AutoCluster(context)
+    private val wired = transport.usbAccessory
+    private val certificateDates = PhoneCertificateDates(identity.certificate)
+    private val transportLabel = when {
+        wired -> "USB"
+        peer.startsWith("bt|") -> "Bluetooth/Wi-Fi"
+        peer.startsWith("lan|") -> "TCP"
+        else -> "stream"
+    }
     private val prefs = DexPrefs(context)
     private val profile = com.hsd.universal.dex.DesktopModePolicy.label(prefs.desktopMode)
     private val delivery = com.hsd.universal.dex.DesktopVideoDelivery()
@@ -74,7 +82,7 @@ internal class AutoProjection(private val context: Context, transport: Transport
     }
     private val main = Handler(Looper.getMainLooper())
     private val session = AapSession(transport, identity,
-        PhoneDescription(Build.MODEL, "HSD", instanceId = fingerprint(identity.certificate).take(32)),
+        identity.projectionDescription(),
         this, options = SessionOptions(sendPings = com.hsd.universal.ProjectionRoute.wireless(context), pins = pins, peerKey = peer, trustOnFirstUse = true))
     @Volatile var retryUsbOpen = false
         private set
@@ -245,7 +253,7 @@ internal class AutoProjection(private val context: Context, transport: Transport
         height = h
         runCatching {
             val encoding = requireNotNull(encoder(layout, type)) { context.getString(R.string.desktop_mode_encoder_unavailable, layout.mode.title, fps) }
-            val desktop = DesktopProjectionSource(context, this, type == h265, ::stop)
+            val desktop = DesktopProjectionSource(context, this, type == h265, wired, ::stop)
             activeLayout = layout
             activeCodec = type
             runningConfig = config
@@ -269,7 +277,7 @@ internal class AutoProjection(private val context: Context, transport: Transport
             val hadPicture = delivery.hasPicture()
             delivery.pause()
             pcmQueue.clear()
-            main.post { source?.outputLost(hadPicture) }
+            main.post { source?.outputLost(hadPicture, carriedAudio = false) }
         }
     }
     override fun onKeyFrameNeeded() {
@@ -398,8 +406,10 @@ internal class AutoProjection(private val context: Context, transport: Transport
         retryUsbOpen = !stopping && !oldUsb && session.closedDuring == AapSession.State.VERSION && error is java.io.IOException
         networkInterrupted = !stopping && session.closedDuring == AapSession.State.RUNNING &&
             error is java.io.IOException && error !is javax.net.ssl.SSLException
+        val lostUsbPicture = wired && !stopping && error is java.io.IOException && delivery.hasPicture()
         stopping = true
         main.post {
+            if (lostUsbPicture) source?.outputLost(true, carriedAudio = true)
             main.removeCallbacks(sample)
             pcmQueue.close()
             audioEncoder.close()
@@ -407,14 +417,31 @@ internal class AutoProjection(private val context: Context, transport: Transport
             delivery.close()
             com.hsd.universal.dex.DesktopConnectionState.detach(delivery)
             main.removeCallbacks(deadline)
-            if (session.pinRefusal != null || session.certificateRejected || session.closedDuring == AapSession.State.AUTH)
+            val authorization = session.authorization
+            AppLog.i("Android Auto closed · transport=$transportLabel · phase=${session.closedDuring} · version=${session.headUnitVersion?.let { "${it.first}.${it.second}" } ?: "none"} · auth=${authorization?.description ?: "none"} · cause=${error?.message ?: reason}", false)
+            if (session.pinRefusal != null || authorization?.certificateError == true)
                 (pins as? ProjectionIdentity)?.rejected(peer, session.pinRefusal?.fingerprint)
             val message = endMessage ?: if (oldUsb)
                 context.getString(R.string.desktop_the_head_unit_continued_the_previous_usb_session_without)
             else if (session.pinRefusal != null)
                 context.getString(R.string.desktop_the_stereo_certificate_has_changed_check_the_fingerprint_under)
-            else if (session.certificateRejected || session.closedDuring == AapSession.State.AUTH)
-                context.getString(R.string.desktop_the_head_unit_closed_the_connection_during_authorization_if)
+            else if (authorization != null && authorization.code != 0) {
+                val resource = when (authorization.status) {
+                    MessageStatus.STATUS_AUTHENTICATION_FAILURE_CERT_EXPIRED -> R.string.aa_auth_cert_expired
+                    MessageStatus.STATUS_AUTHENTICATION_FAILURE_CERT_NOT_YET_VALID -> R.string.aa_auth_cert_not_yet_valid
+                    MessageStatus.STATUS_CERTIFICATE_ERROR -> R.string.aa_auth_certificate
+                    MessageStatus.STATUS_BUSY -> R.string.aa_auth_busy
+                    else -> R.string.aa_auth_rejected
+                }
+                when (resource) {
+                    R.string.aa_auth_cert_expired, R.string.aa_auth_cert_not_yet_valid ->
+                        context.getString(resource, authorization.description) + " " +
+                            context.getString(R.string.aa_check_certificate_dates, certificateDates.from, certificateDates.until, java.time.Instant.now())
+                    else -> context.getString(resource, authorization.description)
+                }
+            }
+            else if (session.closedDuring == AapSession.State.HANDSHAKE || session.closedDuring == AapSession.State.AUTH)
+                context.getString(R.string.aa_handshake_interrupted, session.closedDuring.name, error?.message ?: reason)
             else context.getString(R.string.desktop_android_auto_is_completed, session.closedDuring, error?.message ?: reason)
             val cleanup = source
             source = null

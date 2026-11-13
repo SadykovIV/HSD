@@ -1,5 +1,10 @@
 package com.hsd.universal.desktop
 
+import androidx.core.view.WindowCompat
+import com.hsd.universal.compat.hostDisplay
+import com.hsd.universal.compat.safeInsets
+import com.hsd.universal.compat.hideDesktopBars
+
 import com.hsd.universal.DesktopTransport
 
 import android.app.Activity
@@ -25,8 +30,6 @@ import android.view.MotionEvent
 import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
-import android.view.WindowInsets
-import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.ListView
@@ -250,10 +253,7 @@ class AndroidDesktopActivity : Activity() {
             layout.visibility = View.INVISIBLE
             status.text = getString(R.string.desktop_connecting_desktop)
         }
-        window.insetsController?.apply {
-            hide(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
-            systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        }
+        window.hideDesktopBars()
         ownershipDeadline = SystemClock.elapsedRealtime() + 10_000L
         main.removeCallbacks(awaitOwnership)
         main.post(awaitOwnership)
@@ -309,7 +309,7 @@ class AndroidDesktopActivity : Activity() {
     }
 
     private fun buildView() {
-        window.setDecorFitsSystemWindows(false)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         layout = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutDirection = View.LAYOUT_DIRECTION_LTR // The rail stays on the physical left in every locale.
@@ -317,7 +317,7 @@ class AndroidDesktopActivity : Activity() {
             setBackgroundColor(Color.BLACK)
         }
         layout.setOnApplyWindowInsetsListener { view, insets ->
-            val safe = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+            val safe = insets.safeInsets(view)
             view.setPadding(safe.left, safe.top, safe.right, safe.bottom)
             insets
         }
@@ -624,10 +624,10 @@ class AndroidDesktopActivity : Activity() {
         val current = { visible && !isDestroyed && !isFinishing && panelSession === session && panelPlaced && ownsDisplay() }
         val lock = getSystemService(KeyguardManager::class.java)
         val foreground = { current() && CarLifeState.running &&
-            (!lock.isDeviceLocked && !lock.isKeyguardLocked || display?.let { com.hsd.universal.dex.DesktopDisplayIsolation.independent(it) } == true) &&
+            (!lock.isDeviceLocked && !lock.isKeyguardLocked || hostDisplay?.let { com.hsd.universal.dex.DesktopDisplayIsolation.independent(it) } == true) &&
             providerPane.isComponentForeground(entry) && current() }
         try {
-            session = PanelLaunchSession(this, entry, display?.displayId ?: -1, current, mediaForeground = {
+            session = PanelLaunchSession(this, entry, hostDisplay?.displayId ?: -1, current, mediaForeground = {
                 (!dashboard || musicVisible) && foreground() &&
                     (!dashboard || musicVisible)
             }, chromeForeground = { dashboard && foreground() }, chromeVisible = { profileExposed }, onDashboardAction = { action ->
@@ -929,7 +929,7 @@ class AndroidDesktopActivity : Activity() {
             }
     }
 
-    private fun currentDisplayId(): Int = display?.displayId ?: -1
+    private fun currentDisplayId(): Int = hostDisplay?.displayId ?: -1
     private fun ownsDisplay(): Boolean = DesktopAppCatalog.ownsDisplay(currentDisplayId(), DexState.displayId) &&
         EmbeddedSessionRegistry.isAndroidDesktop(currentDisplayId())
 

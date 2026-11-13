@@ -119,6 +119,7 @@ public final class VdmHostBootstrap {
         for (long owner : identity.uids) if (owner != uid) throw new SecurityException("Owner UID changed");
     }
 
+    @android.annotation.TargetApi(37)
     private static Bundle provider(int uid, String method, String token, Bundle extras) throws Exception {
         IBinder activity = (IBinder)Class.forName("android.os.ServiceManager").getMethod("getService", String.class).invoke(null, "activity");
         Object am = Class.forName("android.app.IActivityManager$Stub").getMethod("asInterface", IBinder.class).invoke(null, activity);

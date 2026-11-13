@@ -2892,7 +2892,7 @@ class AaBridgeCore(
     @Synchronized
     override fun onTranscodeError(msg: String) {
         if (desktopInputEnabled) {
-            stopDesktopVideo("Ошибка энкодера CarLife: $msg")
+            stopDesktopVideo("Ошибка видеокодера: $msg")
             return
         }
         log("BRIDGE !!!!!! ошибка транскодера: $msg. Откат на passthrough", true)

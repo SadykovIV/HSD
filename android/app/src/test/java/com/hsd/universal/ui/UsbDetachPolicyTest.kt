@@ -1,20 +1,38 @@
 package com.hsd.universal.ui
 
 import com.hsd.universal.dex.DexAutoConnectPolicy
+import com.hsd.universal.R
 import org.junit.Assert.*
 import org.junit.Test
 
 class UsbDetachPolicyTest {
+    @Test fun waitingForAnAccessoryExplainsOnlyWhatTheSystemReported() {
+        assertEquals(R.string.usb_wait_accessory, UsbBusState(null, null, null).waitingMessage())
+        assertEquals(R.string.usb_wait_data, UsbBusState(false, false, true).waitingMessage())
+        assertEquals(R.string.usb_wait_configuration, UsbBusState(true, false, null).waitingMessage())
+        assertEquals(R.string.usb_wait_accessory_mode, UsbBusState(true, true, null).waitingMessage())
+        assertEquals(R.string.usb_wait_enumeration, UsbBusState(true, true, true).waitingMessage())
+    }
+
+    @Test fun cableStateDistinguishesCameraSwitchesFromPhysicalUnplug() {
+        assertFalse(UsbDetachPolicy.physicalDisconnect(cableConnected = true, accessoryPresent = false))
+        assertTrue(UsbDetachPolicy.physicalDisconnect(cableConnected = false, accessoryPresent = false))
+        assertFalse(UsbDetachPolicy.physicalDisconnect(cableConnected = false, accessoryPresent = true))
+        assertTrue(UsbDetachPolicy.physicalDisconnect(cableConnected = null, accessoryPresent = false))
+        assertFalse(UsbDetachPolicy.physicalDisconnect(cableConnected = null, accessoryPresent = null))
+    }
+
     @Test fun onlyConfirmedPhysicalAbsenceOfOwnedUsbMarksDetached() {
-        assertTrue(UsbDetachPolicy.confirmedDetached(true, false))
-        assertFalse("IO/protocol error with accessory present keeps reconnect grace", UsbDetachPolicy.confirmedDetached(true, true))
-        assertFalse("failed UsbManager query is not proof of detach", UsbDetachPolicy.confirmedDetached(true, null))
-        assertFalse("unrelated USB broadcast cannot stop TCP", UsbDetachPolicy.confirmedDetached(false, false))
-        assertFalse(UsbDetachPolicy.confirmedDetached(false, null))
+        assertTrue(UsbDetachPolicy.confirmedDetached(true, false, null))
+        assertFalse("camera can temporarily remove the accessory", UsbDetachPolicy.confirmedDetached(true, false, true))
+        assertFalse("IO/protocol error with accessory present keeps reconnect grace", UsbDetachPolicy.confirmedDetached(true, true, null))
+        assertFalse("failed UsbManager query is not proof of detach", UsbDetachPolicy.confirmedDetached(true, null, null))
+        assertFalse("unrelated USB broadcast cannot stop TCP", UsbDetachPolicy.confirmedDetached(false, false, false))
+        assertFalse(UsbDetachPolicy.confirmedDetached(false, null, null))
     }
 
     @Test fun staleQueuedDetachDoesNotOverrideAlreadyReconnectedAccessory() {
-        assertFalse(UsbDetachPolicy.confirmedDetached(ownedUsbSession = true, compatibleAccessoryPresent = true))
+        assertFalse(UsbDetachPolicy.confirmedDetached(ownedUsbSession = true, compatibleAccessoryPresent = true, cableConnected = false))
     }
 
     @Test fun detachedIdleNeverResumesForOrdinaryPcAndExplicitConnectOnlyArmsWaiting() {

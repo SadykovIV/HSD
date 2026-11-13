@@ -11,7 +11,7 @@ class Profile:
     code: int
     upstream_code: int
     patch: str
-    symbols: dict
+    symbols: dict | None
 
 LEGACY = Profile('bb67e07ff14a6300082a33fa75be2082ab250e5aec1bd6f75e72b5b034b157c4', '0.6.8', 305, 300, 'patch.py', {
     'RENDERER_CLASS': 'c.Y7', 'OPEN_SPLIT': 'z', 'SET_HANDLE': 'o',
@@ -23,7 +23,10 @@ CURRENT = Profile('e32ac90ed66d7d325653ed475cd3623d41d7737aeb321813991aedab7b06a
     'SCALE': 'O', 'WIDTH': 'K', 'HEIGHT': 'L', 'DENSITY': 'P',
     'CLOSED': 'D', 'RELEASING': 'E', 'ENABLED': 'g0', 'READY': 'W',
 })
-PROFILES = {p.original_sha256: p for p in (LEGACY, CURRENT)}
+# The author now ships the embedded renderer in a dedicated, signed HeadSwap edition.
+AUTHOR_070 = Profile('03942533e47b3698deeee84f50359681f5bb7c53c27a4bd9ca3db081d66a3e5f',
+                     '0.7.0', 349, 348, 'patch_070.py', None)
+PROFILES = {p.original_sha256: p for p in (LEGACY, CURRENT, AUTHOR_070)}
 
 def select(sha256: str) -> Profile:
     if sha256 not in PROFILES:

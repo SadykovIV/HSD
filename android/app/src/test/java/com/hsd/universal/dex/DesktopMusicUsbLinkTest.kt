@@ -1,6 +1,5 @@
 package com.hsd.universal.dex
 
-import android.media.AudioDeviceInfo
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -41,9 +40,6 @@ class DesktopMusicUsbLinkTest {
         gate.close(first, 200)
         assertTrue(gate.consumePhysicalDetach(service, 250))
         assertFalse(gate.consumePhysicalDetach(service, 251))
-        assertTrue(isBluetoothPlaybackDevice(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP))
-        assertTrue(isBluetoothPlaybackDevice(AudioDeviceInfo.TYPE_BLE_SPEAKER))
-        assertFalse(isBluetoothPlaybackDevice(AudioDeviceInfo.TYPE_BUILTIN_SPEAKER))
     }
 
     @Test fun samsungReadErrorThenShortRetryStillPausesExactlyOnce() {

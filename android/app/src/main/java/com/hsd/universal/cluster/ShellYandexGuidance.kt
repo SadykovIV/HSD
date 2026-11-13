@@ -115,7 +115,8 @@ internal object ShellYandexGuidance {
                         val b = data.readTypedObject(Bundle.CREATOR)
                         val identity = Binder.clearCallingIdentity()
                         try {
-                            val structure = b?.getParcelable("structure", AssistStructure::class.java)
+                            @Suppress("DEPRECATION")
+                            val structure = b?.getParcelable<android.os.Parcelable>("structure") as? AssistStructure
                             if (structure == null || top(displayId, userId, requireOwnership) != target ||
                                 structure.activityComponent?.packageName != target.pkg ||
                                 structureTask.invoke(structure) != target.task) ShellManeuverSample.Unavailable

@@ -95,6 +95,8 @@ class Cryptor(
     private val session get() = engine.session
     private var netOut: ByteBuffer = ByteBuffer.allocate(session.packetBufferSize)
     private var appIn: ByteBuffer = ByteBuffer.allocate(session.applicationBufferSize)
+    // An AAP handshake message may end in the middle of a TLS record.
+    private var handshakeRemainder = ByteArray(0)
     private val empty = ByteBuffer.allocate(0)
 
     @Volatile var handshakeDone = false
@@ -117,7 +119,8 @@ class Cryptor(
      * and returns the bytes to send back (possibly empty).
      */
     fun handshake(incoming: ByteArray): ByteArray {
-        val input = ByteBuffer.wrap(incoming)
+        val input = ByteBuffer.wrap(if (handshakeRemainder.isEmpty()) incoming else handshakeRemainder + incoming)
+        handshakeRemainder = ByteArray(0)
         val out = java.io.ByteArrayOutputStream()
         loop@ while (true) {
             when (engine.handshakeStatus) {
@@ -126,7 +129,11 @@ class Cryptor(
                     appIn.clear()
                     val r = engine.unwrap(input, appIn)
                     when (r.status) {
-                        SSLEngineResult.Status.BUFFER_UNDERFLOW -> break@loop // wait for more bytes
+                        SSLEngineResult.Status.BUFFER_UNDERFLOW -> {
+                            check(input.remaining() <= session.packetBufferSize) { "Incomplete TLS record exceeds the TLS packet limit" }
+                            handshakeRemainder = ByteArray(input.remaining()).also(input::get)
+                            break@loop
+                        }
                         SSLEngineResult.Status.BUFFER_OVERFLOW -> appIn = ByteBuffer.allocate(appIn.capacity() * 2)
                         SSLEngineResult.Status.CLOSED -> throw AapException("TLS closed during handshake")
                         SSLEngineResult.Status.OK -> Unit

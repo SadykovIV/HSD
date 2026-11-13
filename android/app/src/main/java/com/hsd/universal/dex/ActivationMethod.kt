@@ -11,10 +11,14 @@ enum class ActivationMethod(val labelRes: Int) {
     }
 
     companion object {
-        fun restore(profile: Int, saved: String?, backend: DesktopAccessMode): ActivationMethod =
-            entries.firstOrNull { it.name == saved && it.backend(profile) == backend }
+        fun available(profile: Int, sdk: Int) = entries.filter {
+            it.backend(profile) != null && (it != WIFI || sdk >= 30)
+        }
+
+        fun restore(profile: Int, saved: String?, backend: DesktopAccessMode, sdk: Int = 30): ActivationMethod =
+            available(profile, sdk).firstOrNull { it.name == saved && it.backend(profile) == backend }
                 ?: when (backend) {
-                    DesktopAccessMode.COMPUTER -> WIFI
+                    DesktopAccessMode.COMPUTER -> if (sdk >= 30) WIFI else COMPUTER
                     DesktopAccessMode.SHIZUKU -> SHIZUKU
                     DesktopAccessMode.LEGACY_ADB -> DIRECT_ADB
                 }

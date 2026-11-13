@@ -1,5 +1,7 @@
 package com.hsd.universal.update
 
+import com.hsd.universal.compat.safeInsets
+
 import com.hsd.universal.R
 import com.hsd.universal.DesktopTransport
 
@@ -39,8 +41,8 @@ class ComponentUpdatesActivity : Activity() {
         scroll = ScrollView(this).apply {
             isFillViewport = true
             setBackgroundColor(ui.background)
-            setOnApplyWindowInsetsListener { _, insets ->
-                val bars = insets.getInsets(android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.displayCutout())
+            setOnApplyWindowInsetsListener { view, insets ->
+                val bars = insets.safeInsets(view)
                 setPadding(bars.left, bars.top, bars.right, bars.bottom); insets
             }
             addView(root)

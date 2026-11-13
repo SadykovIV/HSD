@@ -104,6 +104,17 @@ class AaTranscoder(
     @Synchronized
     fun start() {
         if (running) return
+        try {
+            startEncoder(imageInput = false)
+        } catch (size: GlRelay.SurfaceSize) {
+            // Some encoders expose a 1x1 Surface irrespective of the configured size.
+            // Use their advertised YUV input instead, keeping the negotiated mode and GL timing.
+            log("${size.message}; retrying the same codec with YUV input")
+            startEncoder(imageInput = true)
+        }
+    }
+
+    private fun startEncoder(imageInput: Boolean) {
         require(!hevc || !baidu)
         require(viewport == null || viewport.fits(width, height))
         require(!directSurface || (crop.isNone && (viewport != null || (srcWidth == width && srcHeight == height)))) {
@@ -121,7 +132,18 @@ class AaTranscoder(
         for ((attempt, level) in levels.withIndex()) {
             try {
                 if (attempt > 0) c.reset()
-                c.configure(format(level), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                val requested = format(level)
+                if (imageInput) {
+                    val yuv = MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible
+                    require(yuv in c.codecInfo.getCapabilitiesForType(encoderMime).colorFormats) {
+                        "Encoder $encoderName has no usable input at ${width}×$height"
+                    }
+                    requested.setInteger(MediaFormat.KEY_COLOR_FORMAT, yuv)
+                    requested.removeKey(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER)
+                    requested.setInteger(MediaFormat.KEY_COLOR_STANDARD, MediaFormat.COLOR_STANDARD_BT601_NTSC)
+                    requested.setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED)
+                }
+                c.configure(requested, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
                 encoderNote = when (level) {
                     BAIDU_WITH_LEVEL -> "baidu: baseline+level256+VBR+repeat100ms"
                     BAIDU_NO_LEVEL -> "baidu: baseline+VBR+repeat100ms, без level"
@@ -145,7 +167,7 @@ class AaTranscoder(
         }
         var inSurface: Surface? = null
         try {
-            inSurface = c.createInputSurface()
+            if (!imageInput) inSurface = c.createInputSurface()
             c.start()
         } catch (e: Exception) {
             // кодек и Surface ещё не в полях: stop() их не увидит, аппаратный энкодер освобождаем здесь
@@ -170,14 +192,20 @@ class AaTranscoder(
         if (viewport != null || directSurface || !tuning.contains("nogl")) {
             // декодер -> GL-реле -> Surface энкодера: реле перерисовывает последний кадр на статике (>= 10 fps)
             try {
-                relay = GlRelay(surface!!, width, height, REDRAW_IDLE_MS, log, srcWidth, srcHeight, crop, target,
-                    limitHighFps = directSurface, preserveSourceTimestamps = directSurface, viewport = viewport).also { it.start() }
+                val image = if (imageInput) CodecImageInput(c, width, height) else null
+                relay = GlRelay(surface, width, height, REDRAW_IDLE_MS, log, srcWidth, srcHeight, crop, target,
+                    limitHighFps = directSurface, preserveSourceTimestamps = directSurface, viewport = viewport,
+                    imageSink = image?.let { it::submit }, onImageError = out::onTranscodeError).also { it.start() }
             } catch (e: Exception) {
-                if (directSurface || viewport != null) {
+                if (e is GlRelay.SurfaceSize && !imageInput) {
+                    stop()
+                    throw e
+                }
+                if (directSurface || viewport != null || imageInput) {
                     // Direct input depends on GL for pacing and idle redraw. Never silently
                     // switch to an unpaced surface or leave a configured codec allocated.
                     stop()
-                    throw IllegalStateException("Desktop GL input could not be created", e)
+                    throw IllegalStateException("Desktop GL input could not be created: ${e.message}", e)
                 }
                 log("транскодер: GL-реле не поднялось (${e.message}), декодер пишет прямо в энкодер")
                 relay = null
@@ -563,7 +591,10 @@ class AaTranscoder(
                 }
             }
         } catch (e: Exception) {
-            if (running) out.onTranscodeError("цикл энкодера: ${e.javaClass.simpleName}: ${e.message}")
+            if (running) {
+                val detail = (e as? MediaCodec.CodecException)?.diagnosticInfo ?: e.message ?: e.javaClass.simpleName
+                out.onTranscodeError("Энкодер $encoderName ${width}×${height}: $detail")
+            }
         }
     }
 

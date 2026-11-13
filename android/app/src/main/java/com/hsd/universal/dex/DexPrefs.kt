@@ -15,7 +15,7 @@ internal enum class PhoneIdleMode(val labelRes: Int) {
 }
 
 /** Preferences are separate from upstream HSD/Android Auto settings. */
-class DexPrefs(private val context: Context) {
+class DexPrefs @JvmOverloads constructor(private val context: Context, private val sdkInt: Int = android.os.Build.VERSION.SDK_INT) {
     private val prefs = context.getSharedPreferences(if (DesktopTransport.universal) "hsd_dex" else PublishedDesktop.PREFS, Context.MODE_PRIVATE)
 
     init {
@@ -78,7 +78,7 @@ class DexPrefs(private val context: Context) {
             val profile = desktopMode
             val saved = prefs.getString(activationMethodKey(profile), null)
                 ?: if (profile == DesktopModePolicy.SAMSUNG_DEX) prefs.getString("desktop_activation_method", null) else null
-            return ActivationMethod.restore(profile, saved, accessMode)
+            return ActivationMethod.restore(profile, saved, accessMode, sdkInt)
         }
         set(value) {
             val profile = desktopMode

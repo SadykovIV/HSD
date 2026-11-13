@@ -1,5 +1,7 @@
 package com.hsd.universal.embed
 
+import com.hsd.universal.compat.hostDisplay
+
 import com.hsd.universal.BuildConfig
 
 import android.app.Activity
@@ -336,7 +338,7 @@ internal object EmbeddedSessionRegistry {
         return activeCall(lease) { remote ->
             val id = lease.displayId
             EmbeddedGatewayPolicy.requireComponentChild(lease.parent.mode, lease.fullscreen,
-                activity.display?.displayId ?: -1, lease.parent.displayId, id)
+                activity.hostDisplay?.displayId ?: -1, lease.parent.displayId, id)
             val context = activity.applicationContext
             val intent = resolve()?.setComponent(target)?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) ?: return@activeCall false
             check(context.packageManager.hasSystemFeature(PackageManager.FEATURE_ACTIVITIES_ON_SECONDARY_DISPLAYS) &&
@@ -359,7 +361,7 @@ internal object EmbeddedSessionRegistry {
     fun launchNotification(activity: Activity, handle: Int, ticket: com.hsd.universal.notify.HuNotificationLaunch.Ticket) {
         val lease = active(Process.myUid(), handle)
         activeCall(lease) { remote ->
-            check(lease.fullscreen && activity.display?.displayId == lease.parent.displayId &&
+            check(lease.fullscreen && activity.hostDisplay?.displayId == lease.parent.displayId &&
                 ticket.parentId == lease.parent.displayId && ticket.parentProof === lease.parent && ticket.current(activity))
             com.hsd.universal.dex.EmbeddedDisplayPolicy.requireChildId(lease.displayId, lease.parent.displayId)
             remote.trackDesktopChildLaunch(lease.token, ticket.action.packageName)

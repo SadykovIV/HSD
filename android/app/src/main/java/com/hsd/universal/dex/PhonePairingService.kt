@@ -144,6 +144,7 @@ class PhonePairingService : Service() {
                 worker = Thread({ activate(forcePair) }, "${com.hsd.universal.BuildConfig.BRAND}-desk-activation").also { it.start() }
             }
             REPLY -> {
+                if (getSystemService(android.app.KeyguardManager::class.java).isDeviceLocked) return START_NOT_STICKY
                 val token = intent.getStringExtra(TOKEN)
                 val value = PairingReplyPolicy.code(RemoteInput.getResultsFromIntent(intent)?.getCharSequence(CODE))
                 // Never log the code/token. Distinguish delivery from a later pairing failure.
@@ -550,7 +551,9 @@ class PhonePairingService : Service() {
                         .setAllowFreeFormInput(true).build()
                     addAction(Notification.Action.Builder(Icon.createWithResource(this@PhonePairingService, android.R.drawable.ic_menu_edit),
                         getString(R.string.desktop_enter_6_digits), serviceAction(REPLY, 1, true, promptToken)).addRemoteInput(reply)
-                        .setAllowGeneratedReplies(false).setAuthenticationRequired(true).build())
+                        .setAllowGeneratedReplies(false).apply {
+                            if (android.os.Build.VERSION.SDK_INT >= 31) setAuthenticationRequired(true)
+                        }.build())
                 }
             }.build()
     }

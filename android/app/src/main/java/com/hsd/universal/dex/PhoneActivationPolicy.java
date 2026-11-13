@@ -55,8 +55,9 @@ public final class PhoneActivationPolicy {
     static String quote(String value) { return "'" + value.replace("'", "'\"'\"'") + "'"; }
 
     static String resultPhase(int exit, String output, boolean requestedScreen) {
-        if (exit != 0 || !output.lines().anyMatch(ManualAccessPolicy.READY::equals)) return "FAILED";
-        return requestedScreen && output.lines().anyMatch(PANEL_UNAVAILABLE::equals) ? READY_WITHOUT_PANEL : "READY";
+        java.util.List<String> lines = java.util.Arrays.asList(output.split("\\R"));
+        if (exit != 0 || !lines.contains(ManualAccessPolicy.READY)) return "FAILED";
+        return requestedScreen && lines.contains(PANEL_UNAVAILABLE) ? READY_WITHOUT_PANEL : "READY";
     }
 
     public static String failureMessage(String output) {

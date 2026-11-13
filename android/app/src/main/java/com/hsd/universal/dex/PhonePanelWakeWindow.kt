@@ -1,5 +1,7 @@
 package com.hsd.universal.dex
 
+import com.hsd.universal.compat.hostDisplay
+
 import com.hsd.universal.BuildConfig
 
 import android.app.Activity
@@ -41,7 +43,7 @@ internal class PhonePanelWakeWindow(
         @Suppress("DEPRECATION")
         internal fun topOnPhone(context: Context): ComponentName? = runCatching {
             context.getSystemService(ActivityManager::class.java).getRunningTasks(100).firstOrNull {
-                it.isVisible && FrameworkTaskIdentityReader.read(it)?.displayId == Display.DEFAULT_DISPLAY
+                (Build.VERSION.SDK_INT < 32 || it.isVisible) && FrameworkTaskIdentityReader.read(it)?.displayId == Display.DEFAULT_DISPLAY
             }?.topActivity
         }.getOrNull()
     }
@@ -121,7 +123,7 @@ class PhonePanelWakeActivity : Activity() {
 
     private fun eligible(): Boolean {
         val lock = getSystemService(KeyguardManager::class.java)
-        return !isFinishing && !isDestroyed && display?.displayId == Display.DEFAULT_DISPLAY &&
+        return !isFinishing && !isDestroyed && hostDisplay?.displayId == Display.DEFAULT_DISPLAY &&
             getSystemService(PowerManager::class.java).isInteractive && !lock.isKeyguardLocked && !lock.isDeviceLocked &&
             DelegatedPanelAccess.outputIsFresh() && DelegatedDesktopAccess.isReady(this)
     }

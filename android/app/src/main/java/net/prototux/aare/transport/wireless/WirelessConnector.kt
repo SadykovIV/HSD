@@ -21,6 +21,7 @@ import net.prototux.aare.aap.wireless.AA_WIRELESS_UUID
 import net.prototux.aare.aap.wireless.JoinResult
 import net.prototux.aare.aap.wireless.WifiCredentials
 import net.prototux.aare.aap.wireless.WirelessBootstrap
+import net.prototux.aare.aap.wireless.WirelessBootstrapException
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
@@ -64,6 +65,7 @@ class WirelessConnector(context: Context, private val log: AapLog, private val o
     )
 
     private val context = context.applicationContext
+    private val access = ProjectionNetworkAccess(this.context)
     private val adapter: BluetoothAdapter? = context.getSystemService(BluetoothManager::class.java)?.adapter
 
     /**
@@ -162,6 +164,7 @@ class WirelessConnector(context: Context, private val log: AapLog, private val o
                 transport = t
                 // A dead Wi-Fi link otherwise only shows up as a TCP timeout much later.
                 net.onLost = { t.close() }
+                if (net.network != headUnitNetwork) throw WirelessException(context.getString(com.hsd.universal.R.string.projection_wifi_lost))
                 if (aborted.get()) throw WirelessException("cancelled")
                 log.i("wireless: connected, $name")
                 return t
@@ -247,7 +250,11 @@ class WirelessConnector(context: Context, private val log: AapLog, private val o
                 ready.get(options.joinTimeoutMs + 3 * options.bootstrap.messageTimeoutMs, TimeUnit.MILLISECONDS)
             } catch (e: ExecutionException) {
                 val cause = e.cause ?: e
-                throw if (cause is IOException) cause else WirelessException(cause.message ?: "wireless bootstrap failed", cause)
+                throw when (cause) {
+                    is WirelessBootstrapException -> cause
+                    is IOException -> cause
+                    else -> WirelessException(cause.message ?: "wireless bootstrap failed", cause)
+                }
             } catch (e: TimeoutException) {
                 throw WirelessException("wireless bootstrap took too long", e)
             }
@@ -265,15 +272,16 @@ class WirelessConnector(context: Context, private val log: AapLog, private val o
             for (attempt in 1..options.tcpAttempts) {
                 checkNotAborted()
                 // Bound to the head unit's network: it is not the default network (no internet).
-                val socket = network.socketFactory.createSocket()
+                val socket = access.socket(network)
                 tcp = socket
                 try {
-                    socket.connect(InetSocketAddress(address, port), options.tcpConnectTimeoutMs)
+                    access.checked { socket.connect(InetSocketAddress(address, port), options.tcpConnectTimeoutMs) }
                     return socket
                 } catch (e: IOException) {
                     last = e
                     runCatching { socket.close() }
                     log.w("wireless: TCP attempt $attempt/${options.tcpAttempts} to $ip:$port failed: ${e.message}")
+                    if (e is ProjectionNetworkDenied) throw e
                     if (attempt < options.tcpAttempts) Thread.sleep(1_000)
                 }
             }

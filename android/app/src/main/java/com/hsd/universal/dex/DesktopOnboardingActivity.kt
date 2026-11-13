@@ -1,5 +1,8 @@
 package com.hsd.universal.dex
 
+import androidx.core.view.WindowCompat
+import com.hsd.universal.compat.safeInsets
+
 import com.hsd.universal.R
 import com.hsd.universal.BuildConfig
 
@@ -13,7 +16,6 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
-import android.view.WindowInsets
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import com.hsd.universal.update.ComponentUpdatesActivity
@@ -56,12 +58,12 @@ class DesktopOnboardingActivity : Activity() {
             isFillViewport = true
             addView(body)
             setOnApplyWindowInsetsListener { view, insets ->
-                val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+                val bars = insets.safeInsets(view)
                 view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
                 insets
             }
         }
-        window.setDecorFitsSystemWindows(false)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         viewport = scroll; displayedStep = step
         setContentView(scroll)
         val y = positions.getOrNull(step) ?: 0

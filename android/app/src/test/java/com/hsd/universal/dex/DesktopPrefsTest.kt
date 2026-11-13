@@ -91,23 +91,23 @@ class DesktopPrefsTest {
     }
     @Test fun activationMethodRemembersTransportWithoutSplittingTheDelegatedBackend() {
         val context = MemoryPrefs()
-        val prefs = DexPrefs(context)
+        val prefs = DexPrefs(context, 33)
         prefs.desktopMode = DesktopModePolicy.ANDROID_DESKTOP
         assertEquals(ActivationMethod.WIFI, prefs.activationMethod)
         prefs.activationMethod = ActivationMethod.COMPUTER
         assertEquals(DesktopAccessMode.COMPUTER, prefs.accessMode)
-        assertEquals(ActivationMethod.COMPUTER, DexPrefs(context).activationMethod)
+        assertEquals(ActivationMethod.COMPUTER, DexPrefs(context, 33).activationMethod)
         prefs.activationMethod = ActivationMethod.WIFI
         assertEquals(DesktopAccessMode.COMPUTER, prefs.accessMode)
-        assertEquals(ActivationMethod.WIFI, DexPrefs(context).activationMethod)
+        assertEquals(ActivationMethod.WIFI, DexPrefs(context, 33).activationMethod)
         prefs.activationMethod = ActivationMethod.SHIZUKU
-        assertEquals(DesktopAccessMode.SHIZUKU, DexPrefs(context).accessMode)
+        assertEquals(DesktopAccessMode.SHIZUKU, DexPrefs(context, 33).accessMode)
         prefs.desktopMode = DesktopModePolicy.SAMSUNG_DEX
         prefs.activationMethod = ActivationMethod.WIFI
         assertEquals(DesktopAccessMode.COMPUTER, prefs.accessMode)
-        assertEquals(ActivationMethod.WIFI, DexPrefs(context).activationMethod)
+        assertEquals(ActivationMethod.WIFI, DexPrefs(context, 33).activationMethod)
         prefs.desktopMode = DesktopModePolicy.ANDROID_DESKTOP
-        assertEquals(ActivationMethod.SHIZUKU, DexPrefs(context).activationMethod)
+        assertEquals(ActivationMethod.SHIZUKU, DexPrefs(context, 33).activationMethod)
         assertFalse(prefs.independentRecoveryWithoutWifi)
         assertFalse(context.values.containsKey("host"))
         assertFalse(context.values.containsKey("connect_port"))
@@ -252,15 +252,15 @@ class DesktopPrefsTest {
         val context = MemoryPrefs()
         context.values.putAll(mapOf("desktop_mode" to DesktopModePolicy.SAMSUNG_DEX, "dex_activation_method" to "WIFI",
             "dex_access_backend" to "LEGACY_ADB", "has_paired" to true))
-        val prefs = DexPrefs(context)
+        val prefs = DexPrefs(context, 33)
         assertEquals(DesktopAccessMode.COMPUTER, prefs.accessMode)
         assertEquals(ActivationMethod.WIFI, prefs.activationMethod)
         assertTrue(prefs.hasPaired)
         prefs.activationMethod = ActivationMethod.DIRECT_ADB
-        assertEquals(DesktopAccessMode.LEGACY_ADB, DexPrefs(context).accessMode)
+        assertEquals(DesktopAccessMode.LEGACY_ADB, DexPrefs(context, 33).accessMode)
         prefs.activationMethod = ActivationMethod.COMPUTER
         assertTrue(prefs.persistActivationSelection(audio = true, screen = false))
-        assertEquals(ActivationMethod.COMPUTER, DexPrefs(context).activationMethod)
+        assertEquals(ActivationMethod.COMPUTER, DexPrefs(context, 33).activationMethod)
     }
 
     @Test fun streetNamesFollowTheDefaultUntilTheUserMakesAChoice() {

@@ -1,5 +1,7 @@
 package com.hsd.universal.dex
 
+import androidx.core.view.ViewCompat
+
 import com.hsd.universal.R
 import android.app.AlertDialog
 import android.content.Context
@@ -114,7 +116,7 @@ internal class DesktopSetupViews(private val context: Context) {
         fun updateSummary(value: String) {
             if (summary.text.toString() != value) summary.text = value
             summary.visibility = if (value.isEmpty()) View.GONE else View.VISIBLE
-            if (view.stateDescription?.toString().orEmpty() != value) view.stateDescription = value.takeIf { it.isNotEmpty() }
+            if (ViewCompat.getStateDescription(view)?.toString().orEmpty() != value) ViewCompat.setStateDescription(view, value.takeIf { it.isNotEmpty() })
         }
     }
 
@@ -156,7 +158,7 @@ internal class DesktopSetupViews(private val context: Context) {
             mark.text = when (granted) { true -> "✓"; false -> "✕"; null -> "?" }
             mark.setTextColor(when (granted) { true -> Color.rgb(106, 230, 157); false -> Color.rgb(255, 119, 119); null -> Color.LTGRAY })
             row.updateSummary(detail)
-            view.stateDescription = (when (granted) { true -> view.context.getString(R.string.desktop_granted); false -> view.context.getString(R.string.desktop_not_granted); null -> view.context.getString(R.string.desktop_check_in_android_settings) }) + detail
+            ViewCompat.setStateDescription(view, (when (granted) { true -> view.context.getString(R.string.desktop_granted); false -> view.context.getString(R.string.desktop_not_granted); null -> view.context.getString(R.string.desktop_check_in_android_settings) }) + detail)
         }
     }
 

@@ -12,6 +12,19 @@ object DesktopModePolicy {
     const val ANDROID_HOME_CLASS = "com.hsd.universal.desktop.AndroidDesktopActivity"
     const val DRIVEDECK_PACKAGE = PublishedDesktop.DRIVEDECK
     const val DRIVEDECK_HOME_CLASS = "ru.drivedeck.launcher.MainActivity"
+    const val UNIVERSAL_DRIVEDECK_HOME = "ru.drivedeck.launcher.HsdActivity"
+
+    fun driveDeckHome(context: android.content.Context): String {
+        val component = android.content.ComponentName(DRIVEDECK_PACKAGE, UNIVERSAL_DRIVEDECK_HOME)
+        return try {
+            val activity = context.packageManager.getActivityInfo(component, 0)
+            check(activity.enabled && activity.exported && activity.permission == "${BuildConfig.APPLICATION_ID}.permission.EMBED_DISPLAY")
+            UNIVERSAL_DRIVEDECK_HOME
+        } catch (_: android.content.pm.PackageManager.NameNotFoundException) {
+            DRIVEDECK_HOME_CLASS
+        }
+    }
+
     const val SAMSUNG_PACKAGE = "com.sec.android.app.launcher"
     const val SAMSUNG_HOME_CLASS = "com.honeyspace.dexservice.SecondaryLauncher"
     private const val SAMSUNG_HOME = "$SAMSUNG_PACKAGE/$SAMSUNG_HOME_CLASS"
@@ -37,8 +50,13 @@ object DesktopModePolicy {
     const val VIRTUAL_DISPLAY_OWN_DISPLAY_GROUP = 1 shl 11
     const val VIRTUAL_DISPLAY_ALWAYS_UNLOCKED = 1 shl 12
 
-    @JvmOverloads fun displayFlags(mode: Int, sdkInt: Int, independentLock: Boolean = false): Int {
+    @JvmOverloads fun displayFlags(mode: Int, sdkInt: Int, independentLock: Boolean = false, trusted: Boolean = true): Int {
         requireMode(mode)
+        if (!trusted) {
+            check(sdkInt in 29..32 && mode != SAMSUNG_DEX) { "Этот режим требует доверенного дисплея Android" }
+            // A public presentation containing only content launched on this display.
+            return ANDROID_DISPLAY_FLAGS and 1024.inv()
+        }
         if (mode == SAMSUNG_DEX) return DexUserServicePolicy.VIRTUAL_DISPLAY_FLAGS
         // A tap is forwarded parent -> child. Independent focus prevents the parent's DOWN
         // from clearing the embedded app's pressed state before its UP arrives. Android 13
@@ -49,7 +67,7 @@ object DesktopModePolicy {
     }
 
     /** Every launch names the owned secondary display; no default-display or phone-HOME fallback. */
-    fun homeCommand(mode: Int, displayId: Int, appPackage: String): Array<String> {
+    fun homeCommand(mode: Int, displayId: Int, appPackage: String, driveDeck: String = DRIVEDECK_HOME_CLASS): Array<String> {
         requireMode(mode)
         require(displayId > 0) { "Запуск рабочего стола на основном экране запрещён" }
         require(appPackage.matches(Regex("[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z][a-zA-Z0-9_]*)+"))) {
@@ -64,7 +82,7 @@ object DesktopModePolicy {
                 "--windowingMode", "1", "-f", "0x34000000", // NEW_TASK | CLEAR_TOP | SINGLE_TOP
                 "-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER",
                 "--es", ProjectionHost.PACKAGE, appPackage, "--ei", ProjectionHost.DISPLAY, displayId.toString(),
-                "-n", "$DRIVEDECK_PACKAGE/$DRIVEDECK_HOME_CLASS",
+                "-n", "$DRIVEDECK_PACKAGE/$driveDeck",
             )
             else -> common + arrayOf(
                 "--windowingMode", "1", "-f", "0x34000000", // NEW_TASK | CLEAR_TOP | SINGLE_TOP

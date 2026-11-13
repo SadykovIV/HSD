@@ -4,16 +4,34 @@ import android.content.Context
 import android.hardware.usb.UsbAccessory
 import android.security.KeyChain
 import android.util.AtomicFile
-import com.hsd.universal.ProjectionRoute
 import net.prototux.aare.aap.PhoneIdentity
+import net.prototux.aare.aap.PhoneDescription
+import net.prototux.aare.aap.fingerprint
 import net.prototux.aare.aap.PinStore
 import net.prototux.aare.aap.cert.SelfSignedCertificate
 import java.io.File
 import java.security.KeyStore
 import java.security.PrivateKey
 import java.security.cert.X509Certificate
+import java.time.Instant
+import java.time.Clock
 
-internal class ProjectionIdentity(private val context: Context) : PinStore {
+internal fun PhoneIdentity.projectionDescription() =
+    PhoneDescription(android.os.Build.MODEL, "HSD", instanceId = fingerprint(certificate).take(32))
+
+internal data class PhoneCertificateDates(val from: Instant, val until: Instant) {
+    constructor(cert: X509Certificate) : this(cert.notBefore.toInstant(), cert.notAfter.toInstant())
+
+    enum class Status { NOT_YET_VALID, VALID, EXPIRED }
+
+    fun at(time: Instant) = when {
+        time < from -> Status.NOT_YET_VALID
+        time > until -> Status.EXPIRED
+        else -> Status.VALID
+    }
+}
+
+internal class ProjectionIdentity(private val context: Context, private val clock: Clock = Clock.systemUTC()) : PinStore {
     private val file = AtomicFile(File(context.noBackupFilesDir, "phone.p12"))
     private val peers = context.getSharedPreferences("usb-receivers", Context.MODE_PRIVATE)
     private val settings = ProjectionRoute.prefs(context)
@@ -39,7 +57,7 @@ internal class ProjectionIdentity(private val context: Context) : PinStore {
         val edit = devices.edit().remove("changed.$id").remove("legacy.$id")
         val title = name.ifBlank { usbNames[id].orEmpty() }.trim().take(96)
         if (title.isNotBlank()) edit.putString("name.$id", title)
-        if (usedAlias != null) edit.putString("lastAlias.$id", usedAlias)
+        edit.putString("lastAlias.$id", usedAlias)
         edit.putLong("seen.$id", System.currentTimeMillis()).apply()
     }
 
@@ -58,6 +76,25 @@ internal class ProjectionIdentity(private val context: Context) : PinStore {
         .remove("lastAlias.$id").apply()
 
     fun phone(id: String): PhoneIdentity = synchronized(lock) {
+        loadPhone(id).also { identity ->
+            val now = clock.instant()
+            (listOf(identity.certificate) + identity.chain).forEachIndexed { index, certificate ->
+                val dates = PhoneCertificateDates(certificate)
+                val validity = dates.at(now)
+                AppLog.i("AA phone TLS · chain[$index] · from=${dates.from} · until=${dates.until} · phoneUTC=$now · validity=$validity", false)
+                // The leaf identifies this phone. A receiver can anchor an imported chain at
+                // different issuers, so only it can decide which CA certificates to validate.
+                if (index == 0 && validity != PhoneCertificateDates.Status.VALID) {
+                    val problem = if (validity == PhoneCertificateDates.Status.EXPIRED) R.string.aa_phone_cert_expired
+                        else R.string.aa_phone_cert_not_yet_valid
+                    throw IllegalStateException(context.getString(problem) + " " +
+                        context.getString(R.string.aa_check_certificate_dates, dates.from, dates.until, now))
+                }
+            }
+        }
+    }
+
+    private fun loadPhone(id: String): PhoneIdentity {
         val selected = assignedAlias(id) ?: defaultAlias
         val alias = selected ?: devices.getString("lastAlias.$id", null)
         usedAlias = null
@@ -67,7 +104,7 @@ internal class ProjectionIdentity(private val context: Context) : PinStore {
                 val chain = KeyChain.getCertificateChain(context, alias)
                 check(!chain.isNullOrEmpty()) { context.getString(R.string.aa_chain_unavailable) }
                 usedAlias = alias
-                return@synchronized PhoneIdentity(chain.first(), key, chain.drop(1))
+                return PhoneIdentity(chain.first(), key, chain.drop(1))
             } catch (e: InterruptedException) {
                 Thread.currentThread().interrupt()
                 throw e
@@ -94,7 +131,7 @@ internal class ProjectionIdentity(private val context: Context) : PinStore {
                 throw error
             }
         }
-        PhoneIdentity(store.getCertificate("phone") as X509Certificate, store.getKey("phone", password) as PrivateKey)
+        return PhoneIdentity(store.getCertificate("phone") as X509Certificate, store.getKey("phone", password) as PrivateKey)
     }
 
     fun receiverIds(): List<String> {

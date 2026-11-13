@@ -27,6 +27,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** All native calls run in their real shell owner. No cross-UID display callback tokens escape. */
+@android.annotation.TargetApi(37)
 class VdmHostCore private constructor(base: Context, private val clientUid: Int, private val fatal: () -> Unit) {
     init {
         check(Build.VERSION.SDK_INT >= 37) { "The independent VDM host requires Android 17" }
@@ -136,7 +137,7 @@ class VdmHostCore private constructor(base: Context, private val clientUid: Int,
                         Executor::class.java, VirtualDisplay.Callback::class.java).invoke(device, config, null, null) as VirtualDisplay
                 }
                 val id = native.display.displayId
-                val actualGroup = groupOf(native.display)
+                val actualGroup = ownedGroup(native.display)
                 check(id > 0 && actualGroup > 0 && (group < 0 || actualGroup == group)) { "VDM display is not independently grouped" }
                 check(!slots.containsKey(id))
                 group = actualGroup
@@ -179,7 +180,9 @@ class VdmHostCore private constructor(base: Context, private val clientUid: Int,
         }
         override fun displayGroup(displayId: Int): Int = synchronized(lock) {
             requireCaller()
-            if (ended || active !== this) -1 else slots[displayId]?.let { groupOf(it.display.display) } ?: -1
+            if (ended || active !== this) -1 else slots[displayId]?.let {
+                ownedGroup(it.display.display).takeIf { actual -> actual > 0 && actual == group }
+            } ?: -1
         }
         override fun ownsDisplay(displayId: Int): Boolean = synchronized(lock) {
             requireCaller(); !ended && active === this && slots.containsKey(displayId)
@@ -277,10 +280,13 @@ class VdmHostCore private constructor(base: Context, private val clientUid: Int,
             output.delete()
         }
     }
-    private fun groupOf(display: Display): Int = boundary {
+    /** Read the actual native handle in its owner process; regular app UIDs cannot read all DisplayInfo fields. */
+    private fun ownedGroup(display: Display): Int = boundary {
+        check(display.isValid && display.flags and DexUserServicePolicy.DISPLAY_TRUSTED != 0)
         val infoType = Class.forName("android.view.DisplayInfo")
         val info = infoType.getConstructor().newInstance()
         check(Display::class.java.getMethod("getDisplayInfo", infoType).invoke(display, info) == true)
+        check(infoType.getField("ownerUid").getInt(info) == Process.myUid())
         infoType.getField("displayGroupId").getInt(info)
     }
     private class ShellContext(base: Context) : ContextWrapper(base) {

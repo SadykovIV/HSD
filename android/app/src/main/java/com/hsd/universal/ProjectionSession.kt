@@ -16,11 +16,12 @@ internal interface ProjectionSession {
 /** Tracks blocking Bluetooth, listening and data sockets even when a stop races a connection. */
 internal class ProjectionResources : Closeable {
     private val releases = ArrayDeque<() -> Unit>()
-    private var closed = false
+    @Volatile var isClosed = false
+        private set
 
     fun own(release: () -> Unit) {
         synchronized(this) {
-            if (!closed) {
+            if (!isClosed) {
                 releases.addFirst(release)
                 return
             }
@@ -32,8 +33,8 @@ internal class ProjectionResources : Closeable {
     override fun close() {
         val callbacks =
             synchronized(this) {
-                if (closed) return
-                closed = true
+                if (isClosed) return
+                isClosed = true
                 releases.toList().also { releases.clear() }
             }
         callbacks.forEach { runCatching(it) }

@@ -8,7 +8,7 @@ import com.hsd.universal.aa.*
 import com.hsd.universal.dex.*
 
 /** Bind the selected Desktop profile and access method to the phone-side Android Auto session. */
-internal class DesktopProjectionSource(private val context: Context, private val output: DesktopProjectionOutput, private val hevc: Boolean,
+internal class DesktopProjectionSource(private val context: Context, private val output: DesktopProjectionOutput, private val hevc: Boolean, private val wired: Boolean,
                                private val failed: (String) -> Unit) : CarlifeLink {
     private val protocol = com.hsd.universal.ProjectionRoute.selected(context).protocol
     private val log = { line: String, ui: Boolean -> AppLog.i(line.replace("CarLife", protocol), ui) }
@@ -71,7 +71,7 @@ internal class DesktopProjectionSource(private val context: Context, private val
         idle.start()
         capture.attach(core, true) { !closed && output.freshVideo() && output.audioRate() != null && DexState.running }
         DelegatedPanelAccess.attachOutput(this) { !closed && output.freshVideo() }
-        DesktopMusicPlayback.attach(context, context, this, true, { !closed && DexState.running && output.freshVideo() },
+        DesktopMusicPlayback.attach(context, context, this, wired, { !closed && DexState.running && output.freshVideo() },
             { !prefs.usbPlaybackAudio || !core.audioViaUsb || DesktopAudioState.running })
     }
 
@@ -89,7 +89,10 @@ internal class DesktopProjectionSource(private val context: Context, private val
             return encoder
         } catch (error: Exception) {
             val codec = if (hevc) "H.265" else "H.264"
-            main.post { if (!closed) failed("Не удалось открыть энкодер $codec $frameWidth×$frameHeight при $fps кадр/с") }
+            val reason = generateSequence<Throwable>(error) { it.cause }.last()
+            AppLog.e("Projection $codec $frameWidth×$frameHeight at $fps fps", reason)
+            main.post { if (!closed) failed(context.getString(R.string.desktop_encoder_start_failure,
+                codec, frameWidth, frameHeight, fps, reason.message ?: reason.javaClass.simpleName)) }
             throw error
         }
     }
@@ -113,9 +116,9 @@ internal class DesktopProjectionSource(private val context: Context, private val
         framePolicy.update(nowMs, backlogMs, thermal.capFps(fps), overflow)?.let(core::setTargetFps)
     }
 
-    fun outputLost(hadPicture: Boolean) {
+    fun outputLost(hadPicture: Boolean, carriedAudio: Boolean) {
         if (!closed) DesktopMusicPlayback.usbOutputLost(context, this, hadPicture && DexState.running,
-            carriedAudio = core.audioViaUsb && output.audioRate() != null)
+            carriedAudio = carriedAudio && prefs.usbPlaybackAudio && core.audioViaUsb && output.audioRate() != null)
     }
 
     fun requestKeyFrame() { if (!closed) core.onCarlifeKeyFrameRequest() }

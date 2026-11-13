@@ -51,21 +51,14 @@ object Actions {
     private val usbGate = UsbScanGate { SystemClock.elapsedRealtime() }
     private val autoConnect = DexAutoConnectPolicy()
     private val detachedIdle = UsbDetachedIdle()
+    private val wiredSelection = WiredAccessorySelection()
     private var observingUsb = false
+    private var usbBus = UsbBusState.read(null)
     private const val USB_PERMISSION_TOKEN = "hsd.usb.permission.token"
 
     fun isCarLifeAccessory(accessory: UsbAccessory) = UsbAccessoryPolicy.accepts(accessory.manufacturer, accessory.model)
     private fun matchesRoute(route: ProjectionRoute, accessory: UsbAccessory) =
         route == UsbAccessoryPolicy.route(accessory.manufacturer, accessory.model)
-
-    /** Read the system's actual accessory on attach. A cable never overrides a selected wireless route. */
-    fun selectAttachedWiredRoute(ctx: Context) {
-        val selected = ProjectionRoute.selected(ctx)
-        if (!DesktopTransport.universal || !selected.wired) return
-        val actual = ctx.getSystemService(UsbManager::class.java).accessoryList.orEmpty()
-            .firstNotNullOfOrNull { UsbAccessoryPolicy.route(it.manufacturer, it.model) } ?: return
-        if (actual != selected) ProjectionRoute.save(ctx, ProjectionRoute.prefs(ctx).edit().putString("mode", actual.name))
-    }
 
     @Synchronized internal fun routeChanged(ctx: Context) {
         usbGate.reset()
@@ -104,12 +97,15 @@ object Actions {
 
     @Synchronized fun resumeUsbAutoStart() { detachedIdle.explicitConnect(); autoConnect.resume() }
 
-    /** Observe only; never launch background work from this receiver. */
-    @Synchronized fun observeUsbConnection(ctx: Context) {
+    /** Observe the system signal. Opening an accessory still goes through the permission gate. */
+    private fun registerUsbObserver(ctx: Context) {
         if (!observingUsb) {
             val app = ctx.applicationContext
-            app.registerReceiver(object : BroadcastReceiver() {
+            val initial = app.registerReceiver(object : BroadcastReceiver() {
                 override fun onReceive(context: Context, intent: Intent) {
+                    if (intent.action == UsbDetachPolicy.USB_STATE) synchronized(this@Actions) {
+                        usbBus = UsbBusState.read(intent)
+                    }
                     // Use current system state: a queued old detach must not rearm
                     // a stopped connection that is still physically present.
                     observeUsbConnection(context)
@@ -117,27 +113,41 @@ object Actions {
             }, IntentFilter().apply {
                 addAction(UsbManager.ACTION_USB_ACCESSORY_ATTACHED)
                 addAction(UsbManager.ACTION_USB_ACCESSORY_DETACHED)
+                addAction(UsbDetachPolicy.USB_STATE)
             }, Context.RECEIVER_NOT_EXPORTED)
+            usbBus = UsbBusState.read(initial)
             observingUsb = true
         }
+    }
+
+    @Synchronized fun observeUsbConnection(ctx: Context) {
+        registerUsbObserver(ctx)
         // A failed query is not evidence that the physical accessory was detached.
-        runCatching {
-            ctx.getSystemService(UsbManager::class.java).accessoryList.orEmpty()
-                .firstOrNull { matchesRoute(ProjectionRoute.selected(ctx), it) }?.let(::accessoryKey)
-        }.onSuccess { key ->
-            val reconnected = detachedIdle.idle && key != null
-            if (key == null) usbGate.reset()
-            autoConnect.observeAccessory(key)
-            detachedIdle.observeCompatibleAccessory(key != null)
-            if (reconnected) publish(UsbScanState.WAITING_FOR_ACCESSORY,
-                ctx.getString(R.string.usb_receiver_found, DesktopTransport.name), "новый аксессуар после detach")
-        }
+        runCatching { ctx.getSystemService(UsbManager::class.java).accessoryList.orEmpty() }
+            .onSuccess { observeAccessories(ctx, it) }
+    }
+
+    private fun observeAccessories(ctx: Context, list: Array<out UsbAccessory>) {
+        val selected = ProjectionRoute.selected(ctx)
+        val available = list.mapNotNull { UsbAccessoryPolicy.route(it.manufacturer, it.model) }.toSet()
+        val route = if (DesktopTransport.universal) wiredSelection.observe(selected, available) else selected
+        if (route != selected) ProjectionRoute.save(ctx, ProjectionRoute.prefs(ctx).edit().putString("mode", route.name))
+        val key = list.firstOrNull { matchesRoute(route, it) }?.let(::accessoryKey)
+        val reconnected = detachedIdle.idle && key != null
+        if (key == null) usbGate.reset()
+        autoConnect.observeAccessory(key)
+        detachedIdle.observeCompatibleAccessory(key != null)
+        if (reconnected) publish(UsbScanState.WAITING_FOR_ACCESSORY,
+            ctx.getString(R.string.usb_receiver_found, route.protocol), "новый аксессуар после detach")
     }
 
     /** Repeated refresh/attach events reuse a pending request. Explicit Connect may retry a denial. */
     @Synchronized fun scan(ctx: Context, reason: String, retryPermission: Boolean = false): UsbScanResult {
         try {
-            observeUsbConnection(ctx)
+            registerUsbObserver(ctx)
+            val usb = ctx.getSystemService(UsbManager::class.java)
+            val list = usb.accessoryList.orEmpty()
+            observeAccessories(ctx, list)
             if (ProjectionRoute.wireless(ctx) || WirelessPrefs(ctx).mode == CarLifeConnectionMode.WIFI) {
                 usbGate.reset()
                 return publish(UsbScanState.WAITING_FOR_ACCESSORY, ctx.getString(R.string.usb_wifi_selected, DesktopTransport.name), reason)
@@ -156,8 +166,6 @@ object Actions {
                 usbGate.reset() // A late USB grant must not bypass the selected backend's permission.
                 return publish(UsbScanState.FAILED, if (DexPrefs(ctx).useDelegated) ctx.getString(R.string.usb_open_activate, DesktopTransport.shortName) else ctx.getString(R.string.usb_shizuku_access, DesktopTransport.appName), reason)
             }
-            val usb = ctx.getSystemService(UsbManager::class.java)
-            val list = usb.accessoryList.orEmpty()
             val acc = list.firstOrNull { matchesRoute(ProjectionRoute.selected(ctx), it) }
             val active = BridgeService.alive && CarLifeState.running && !CarLifeState.wirelessSession
             if (BridgeService.alive && DesktopTransport.activeRoute != ProjectionRoute.selected(ctx))
@@ -169,9 +177,11 @@ object Actions {
             return when (step) {
                 UsbScanGate.Step.WAITING -> {
                     CarLifeState.accessory = ctx.getString(R.string.desktop_not_found)
-                    val detail = if (list.isEmpty()) ctx.getString(R.string.usb_wait_accessory, DesktopTransport.name) else ctx.getString(R.string.usb_unsupported_accessory, DesktopTransport.name)
+                    val prompt = if (list.isEmpty()) usbBus.waitingMessage() else R.string.usb_unsupported_accessory
+                    val detail = ctx.getString(prompt, ProjectionRoute.selected(ctx).protocol)
                     CarLifeState.setStatus(detail)
-                    publish(UsbScanState.WAITING_FOR_ACCESSORY, detail, reason)
+                    publish(UsbScanState.WAITING_FOR_ACCESSORY, detail,
+                        "$reason · connected=${usbBus.connected} configured=${usbBus.configured} accessory=${usbBus.accessory} visible=${list.size}")
                 }
                 UsbScanGate.Step.ACTIVE -> publish(UsbScanState.ALREADY_RUNNING, ctx.getString(R.string.usb_connected, DesktopTransport.name), reason)
                 UsbScanGate.Step.STARTING -> publish(UsbScanState.STARTING, ctx.getString(R.string.usb_starting, DesktopTransport.name), reason)
@@ -228,14 +238,14 @@ object Actions {
 
     /** Service lifecycle hooks keep the activity informed after scan() has returned. */
     @Synchronized fun onUsbSessionStarted(ctx: Context) {
+        if (autoConnect.stopped) return
         detachedIdle.observeCompatibleAccessory(true)
         usbGate.started()
         publish(UsbScanState.ALREADY_RUNNING, ctx.getString(R.string.usb_connected, DesktopTransport.name), "сессия запущена")
     }
 
     @Synchronized fun onUsbHandshakeFailed(accessory: UsbAccessory, detail: String) {
-        if (detachedIdle.idle) return
-        usbGate.handshakeFailed(accessoryKey(accessory), detail)
+        if (detachedIdle.idle || autoConnect.stopped || !usbGate.handshakeFailed(accessoryKey(accessory), detail)) return
         publish(UsbScanState.FAILED, detail, "сеанс USB не согласован")
     }
 
@@ -248,6 +258,7 @@ object Actions {
     @Synchronized fun onUsbSessionClosed(ctx: Context) {
         usbGate.reset()
         if (detachedIdle.idle) publish(UsbScanState.DETACHED, ctx.getString(R.string.usb_wait_reconnect), "сессия закрыта после USB detach")
+        else if (autoConnect.stopped) publish(UsbScanState.WAITING_FOR_ACCESSORY, ctx.getString(R.string.desktop_connection_stopped), "сессия остановлена")
         else publish(UsbScanState.WAITING_FOR_ACCESSORY, ctx.getString(R.string.usb_wait_accessory, DesktopTransport.name), "сессия закрыта")
     }
 

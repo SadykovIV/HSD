@@ -4,7 +4,6 @@ import aap_protobuf.service.ServiceOuterClass.Service
 import aap_protobuf.service.control.message.AudioFocusNotificationOuterClass.AudioFocusNotification
 import aap_protobuf.service.control.message.AudioFocusRequestOuterClass.AudioFocusRequest
 import aap_protobuf.service.control.message.AudioFocusRequestTypeOuterClass.AudioFocusRequestType
-import aap_protobuf.service.control.message.AuthResponseOuterClass.AuthResponse
 import aap_protobuf.service.control.message.ByeByeReasonOuterClass.ByeByeReason
 import aap_protobuf.service.control.message.ByeByeRequestOuterClass.ByeByeRequest
 import aap_protobuf.service.control.message.ByeByeResponseOuterClass.ByeByeResponse
@@ -126,13 +125,9 @@ class AapSession(
     /** The state the session was in when it closed. */
     @Volatile var closedDuring = State.VERSION
         private set
-    /**
-     * The head unit refused the phone certificate: it hung up during a TLS handshake it had
-     * started, or reported an authentication failure. (Not set for timeouts before TLS began.)
-     */
-    @Volatile var certificateRejected = false
+    /** Present only after a well-formed AUTH_COMPLETE received after TLS. */
+    @Volatile var authorization: AapAuthorization? = null
         private set
-    @Volatile private var tlsStarted = false
     @Volatile var discovery: ServiceDiscoveryResponse? = null
         private set
     var headUnitVersion: Pair<Int, Int>? = null
@@ -419,7 +414,6 @@ class AapSession(
             if (state.ordinal > State.HANDSHAKE.ordinal) return
             enterHandshake()
         }
-        tlsStarted = true
         val out = cryptor.handshake(bytes)
         log.d("TLS: got ${bytes.size} bytes, sending ${out.size}, done=${cryptor.handshakeDone}")
         if (out.isNotEmpty()) sendRaw(0, AapMessage.plaintext(ControlMsg.ENCAPSULATED_SSL, out), encrypted = false)
@@ -434,14 +428,19 @@ class AapSession(
     }
 
     private fun onAuthComplete(msg: AapMessage) {
-        val status = runCatching { AuthResponse.parseFrom(msg.bodyBytes()).status }.getOrDefault(0)
-        if (status != 0) {
-            certificateRejected = true
-            fail("head unit rejected authentication (status $status)", null)
-            return
-        }
         if (state != State.AUTH || !cryptor.handshakeDone) {
             fail("auth complete in state $state (TLS handshake done=${cryptor.handshakeDone})", null)
+            return
+        }
+        val response = try {
+            AapAuthorization.parse(msg.bodyBytes())
+        } catch (e: com.google.protobuf.InvalidProtocolBufferException) {
+            fail("malformed AUTH_COMPLETE", e)
+            return
+        }
+        authorization = response
+        if (response.code != 0) {
+            fail("head unit rejected authentication (${response.description})", null)
             return
         }
         // From here on everything is encrypted.
@@ -543,7 +542,6 @@ class AapSession(
     private fun close(reason: String, error: Throwable?) {
         if (!closed.compareAndSet(false, true)) return
         closedDuring = state
-        if (state == State.HANDSHAKE && tlsStarted && !cryptor.peerRefused) certificateRejected = true
         state = State.CLOSED
         // The engine only reports a failed read: say what actually happened.
         val why = cryptor.pinRefusal?.let { "head unit certificate not trusted (SHA-256 ${it.fingerprint})" }

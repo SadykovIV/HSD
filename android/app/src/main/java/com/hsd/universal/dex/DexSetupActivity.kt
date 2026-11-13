@@ -1,5 +1,8 @@
 package com.hsd.universal.dex
 
+import androidx.core.view.WindowCompat
+import com.hsd.universal.compat.safeInsets
+
 import com.hsd.universal.R
 import com.hsd.universal.ProjectionRoute
 import com.hsd.universal.DesktopTransport
@@ -28,7 +31,6 @@ import android.text.InputFilter
 import android.text.InputType
 import android.text.TextWatcher
 import android.view.View
-import android.view.WindowInsets
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.EditText
@@ -325,9 +327,7 @@ open class DexSetupActivity : Activity() {
                     DexState.running && CarLifeState.running -> showState(getString(R.string.desktop_waiting_for, projectionName),
                         getString(R.string.desktop_the_head_unit_is_waiting_for_video_open_on, projectionName), busy = true)
                     Actions.lastUsbResult.state == Actions.UsbScanState.FAILED && !BridgeService.alive -> {
-                        armed = false
-                        lastError = Actions.lastUsbResult.detail.orEmpty()
-                        showState(getString(R.string.desktop_usb_connection_failed), getString(R.string.desktop_reconnect_the_cable_and_tap_connect))
+                        showUsbResult(Actions.lastUsbResult)
                     }
                     Actions.lastUsbResult.state == Actions.UsbScanState.WAITING_FOR_ACCESSORY -> {
                         showUsbResult(Actions.lastUsbResult)
@@ -401,7 +401,7 @@ open class DexSetupActivity : Activity() {
         super.onCreate(savedInstanceState)
         AppLog.init(this)
         if (savedInstanceState == null && intent.action == UsbManager.ACTION_USB_ACCESSORY_ATTACHED)
-            Actions.selectAttachedWiredRoute(this)
+            Actions.observeUsbConnection(this)
         prefs = DexPrefs(this)
         launchInitialSetup = savedInstanceState == null && prefs.initialSetupAutoPending &&
             !prefs.initialSetupCompleted && !intent.getBooleanExtra(EXTRA_SHOW_ACTIVATION, false) &&
@@ -543,9 +543,9 @@ open class DexSetupActivity : Activity() {
 
     private fun buildView() {
         val frame = FrameLayout(this).apply { setBackgroundColor(ui.background) }
-        window.setDecorFitsSystemWindows(false)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         frame.setOnApplyWindowInsetsListener { view, insets ->
-            val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.ime() or WindowInsets.Type.displayCutout())
+            val bars = insets.safeInsets(view, keyboard = true)
             view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
             insets
         }
@@ -1070,7 +1070,7 @@ open class DexSetupActivity : Activity() {
 
     private fun chooseAccessMode() {
         if (accessChoiceLocked()) return
-        val methods = ActivationMethod.entries.filter { it.backend(prefs.desktopMode) != null }
+        val methods = ActivationMethod.available(prefs.desktopMode, android.os.Build.VERSION.SDK_INT)
         AlertDialog.Builder(this).setTitle(getString(R.string.desktop_activation_method))
             .setSingleChoiceItems(methods.map { getString(it.labelRes) }.toTypedArray(), methods.indexOf(prefs.activationMethod)) { dialog, index ->
                 dialog.dismiss()
@@ -2186,10 +2186,9 @@ open class DexSetupActivity : Activity() {
     }
 
     private fun usbAttached() {
-        Actions.selectAttachedWiredRoute(this)
+        Actions.observeUsbConnection(this)
         if (ProjectionRoute.wireless(this)) return
         if (phoneLaunchCommitted || PhonePairingService.active || WirelessPrefs(this).mode == CarLifeConnectionMode.WIFI) return
-        Actions.observeUsbConnection(this)
         if (stopped) return
         when {
             !CarLifeState.running && BridgeService.alive && prefs.useDesktopService && DesktopAccess.isReady(this) -> {
@@ -2220,9 +2219,8 @@ open class DexSetupActivity : Activity() {
             Actions.UsbScanState.WAITING_FOR_ACCESSORY -> {
                 monitorBridge = false
                 bridgeStartedAt = 0
-                showState(getString(R.string.desktop_ready_to_connect_automatically), if (prefs.useDesktopService)
-                    getString(R.string.desktop_open_up_on_a_head_unit_plug_in_a, projectionName)
-                else getString(R.string.desktop_open_up_on_a_head_unit_and_connect_a, projectionName))
+                showState(getString(R.string.desktop_ready_to_connect_automatically),
+                    result.detail ?: getString(R.string.desktop_open_up_on_a_head_unit_and_connect_a, projectionName))
             }
             Actions.UsbScanState.PERMISSION_REQUESTED -> showState(getString(R.string.desktop_allow_usb_access), getString(R.string.desktop_confirm_the_system_request_on_the_phone_after_that))
             Actions.UsbScanState.STARTING, Actions.UsbScanState.ALREADY_RUNNING -> {
@@ -2233,7 +2231,8 @@ open class DexSetupActivity : Activity() {
             Actions.UsbScanState.FAILED -> {
                 armed = false
                 lastError = result.detail.orEmpty()
-                showState(getString(R.string.desktop_usb_connection_failed), getString(R.string.desktop_allow_access_to_the_usb_or_reconnect_the_cable))
+                showState(getString(R.string.desktop_usb_connection_failed),
+                    result.detail ?: getString(R.string.desktop_allow_access_to_the_usb_or_reconnect_the_cable))
             }
         }
     }

@@ -165,14 +165,14 @@ class DexUserService private constructor(private val context: Context, private v
                     command(epoch, "/system/bin/wm", "set-display-windowing-mode", "-d", id.toString(), "1", required = false)
                 }
                 validateDisplay(lease)
-                access.registerParentDisplay(id, lease.token, width, height)
+                access.registerParentDisplay(checkNotNull(lease.display), lease.token, width, height)
                 if (mode == DesktopModePolicy.SAMSUNG_DEX && delegated) {
                     checkNotNull(delegatedInputGateway).configureSamsungDesktop(id, lease.token)
                 }
                 ensureActive(epoch)
                 launchDesktop(lease)
                 ensureActive(epoch)
-                Log.i(TAG, "started display=$id mode=${DesktopModePolicy.label(mode)} native=${width}x${height} density=$density flags=${DesktopModePolicy.displayFlags(mode, android.os.Build.VERSION.SDK_INT)}")
+                Log.i(TAG, "started display=$id mode=${DesktopModePolicy.label(mode)} native=${width}x${height} density=$density displayFlags=${checkNotNull(lease.display).display.flags}")
                 id
             } catch (e: Throwable) {
                 if (e is NativeDisplayReleaseUnconfirmed) terminateStuckService()
@@ -328,6 +328,8 @@ class DexUserService private constructor(private val context: Context, private v
         active.hardwareTarget = active.token
         val id = checkNotNull(active.display).display.displayId
         if (delegated) checkNotNull(runtime).launchDesktop(active.desktopMode, id)
+        // am runs as the shell UID. The public companion entry selects our signed host
+        // from the launch extras; the dedicated entry requires the HSD application UID.
         else command(active.epoch, *DesktopModePolicy.homeCommand(active.desktopMode, id, context.packageName))
         ensureActive(active.epoch)
     }
@@ -442,7 +444,7 @@ class DexUserService private constructor(private val context: Context, private v
                     val id = checkNotNull(child.display).display.displayId
                     validateChildDisplay(parent, child)
                     checkNotNull(runtime).registerChildDisplay(checkNotNull(parent.display).display.displayId,
-                        id, child.token, width, height, fullscreen)
+                        checkNotNull(child.display), child.token, width, height, fullscreen)
                     ensureChildActive(parent, child)
                     Log.i(TAG, "child display=$id parent=${parent.display?.display?.displayId} size=${width}x$height density=$density")
                     id
@@ -726,7 +728,7 @@ class DexUserService private constructor(private val context: Context, private v
 
     private fun requireDelegatedPermissions() {
         DelegatedDesktopPolicy.requirePermissions(
-            context.checkSelfPermission(DelegatedDesktopPolicy.ADD_TRUSTED_DISPLAY) == PackageManager.PERMISSION_GRANTED,
+            DelegatedDesktopAccess.supportsDisplay(context),
             context.checkSelfPermission(DelegatedDesktopPolicy.INJECT_EVENTS) == PackageManager.PERMISSION_GRANTED)
     }
 
@@ -776,7 +778,8 @@ class DexUserService private constructor(private val context: Context, private v
         val mode = display.mode
         check(metrics.widthPixels == child.width && metrics.heightPixels == child.height &&
             mode.physicalWidth == child.width && mode.physicalHeight == child.height && metrics.densityDpi == child.density &&
-            display.flags and DexUserServicePolicy.DISPLAY_TRUSTED != 0) { "Android изменил геометрию или доверие экрана виджета" }
+            (display.flags and DexUserServicePolicy.DISPLAY_TRUSTED != 0 || !DelegatedDesktopAccess.trustedDisplay(context) &&
+                checkNotNull(child.display).isLocalPresentation(child.displayName))) { "Android изменил геометрию или доверие экрана виджета" }
     }
 
     /** Only worker releases children; keep producer-before-Surface ordering on every path. */
@@ -813,7 +816,8 @@ class DexUserService private constructor(private val context: Context, private v
         val mode = display.mode
         DexUserServicePolicy.validateGeometry(display.displayId, metrics.widthPixels, metrics.heightPixels,
             mode.physicalWidth, mode.physicalHeight, metrics.densityDpi, display.flags,
-            expectedDensity = lease.density, desktopMode = lease.desktopMode, expectedWidth = lease.width, expectedHeight = lease.height)
+            expectedDensity = lease.density, desktopMode = lease.desktopMode, expectedWidth = lease.width, expectedHeight = lease.height,
+            ownedPresentation = !DelegatedDesktopAccess.trustedDisplay(context) && checkNotNull(lease.display).isLocalPresentation(DesktopModePolicy.displayName(lease.desktopMode)))
     }
 
     /** Only worker may release. A successful stop response guarantees display release precedes Surface release. */
@@ -1016,7 +1020,7 @@ class DexUserService private constructor(private val context: Context, private v
             producerLifetime: IBinder, sessionToken: IBinder): OwnedDesktopDisplay {
             val name = DesktopModePolicy.displayName(mode)
             val flags = DesktopModePolicy.displayFlags(mode, android.os.Build.VERSION.SDK_INT,
-                DelegatedDesktopAccess.canKeepDisplayUnlocked(context))
+                DelegatedDesktopAccess.canKeepDisplayUnlocked(context), DelegatedDesktopAccess.trustedDisplay(context))
             if (DesktopDisplayBackendPolicy.requiresVdm(android.os.Build.VERSION.SDK_INT, mode)) {
                 val remote = VdmHostCore.openLocalSession(context, sessionToken, Process.myPid(), context.applicationInfo.uid)
                 return VdmDisplayFamily(context, remote).create(name, surface, width, height, density, flags, parent = true)
@@ -1028,7 +1032,7 @@ class DexUserService private constructor(private val context: Context, private v
         override fun createChildDisplay(parent: OwnedDesktopDisplay, name: String, surface: Surface,
             width: Int, height: Int, density: Int): OwnedDesktopDisplay {
             val flags = EmbeddedDisplayPolicy.displayFlags(android.os.Build.VERSION.SDK_INT,
-                DelegatedDesktopAccess.canKeepDisplayUnlocked(context))
+                DelegatedDesktopAccess.canKeepDisplayUnlocked(context), DelegatedDesktopAccess.trustedDisplay(context))
             return parent.family?.create(name, surface, width, height, density, flags, parent = false)
                 ?: LocalDesktopDisplay(checkNotNull(create.invoke(displayManager, name, width, height, density,
                     surface, flags) as? VirtualDisplay) { "Android отклонил экран виджета" }, parent.nativeLifetime)
@@ -1036,9 +1040,9 @@ class DexUserService private constructor(private val context: Context, private v
 
         private val displayLocks = HashMap<Int, DexWakeLease>()
 
-        override fun registerParentDisplay(id: Int, token: IBinder, width: Int, height: Int) { enableLocalIme(id); holdDisplay(id) }
-        override fun registerChildDisplay(parentId: Int, id: Int, token: IBinder, width: Int, height: Int, fullscreen: Boolean) {
-            enableLocalIme(id); holdDisplay(id)
+        override fun registerParentDisplay(owned: OwnedDesktopDisplay, token: IBinder, width: Int, height: Int) { enableLocalIme(owned.display.displayId); holdDisplay(owned.display.displayId) }
+        override fun registerChildDisplay(parentId: Int, owned: OwnedDesktopDisplay, token: IBinder, width: Int, height: Int, fullscreen: Boolean) {
+            enableLocalIme(owned.display.displayId); holdDisplay(owned.display.displayId)
         }
         override fun unregisterDisplay(id: Int, token: IBinder) { displayLocks.remove(id)?.let { runCatching { it.release() } } }
 
@@ -1188,7 +1192,7 @@ class DexUserService private constructor(private val context: Context, private v
             val app = context.applicationContext ?: context
             DelegatedDesktopPolicy.requireOwner(Process.myUid(), app.applicationInfo.uid, Binder.getCallingUid())
             DelegatedDesktopPolicy.requirePermissions(
-                app.checkSelfPermission(DelegatedDesktopPolicy.ADD_TRUSTED_DISPLAY) == PackageManager.PERMISSION_GRANTED,
+                DelegatedDesktopAccess.supportsDisplay(app),
                 app.checkSelfPermission(DelegatedDesktopPolicy.INJECT_EVENTS) == PackageManager.PERMISSION_GRANTED)
             return DexUserService(app, true, inputGateway)
         }

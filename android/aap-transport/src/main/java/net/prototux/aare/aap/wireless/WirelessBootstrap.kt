@@ -56,6 +56,8 @@ class WirelessBootstrapException(
      * or sent something unusable): a car that isn't ready yet, so trying again later can work.
      */
     val whileNegotiating: Boolean = false,
+    /** No start/credential response before EOF or timeout. The receiver may still be starting. */
+    val interruptedExchange: Boolean = false,
 ) : Exception(message, cause)
 
 /**
@@ -213,21 +215,20 @@ class WirelessBootstrap(
         var infoRequestedAt = 0L
         var infoRetried = false
         var deadline = now() + options.messageTimeoutMs
+        var answeredVersion = false
+        fun progress() = "versionAnswered=$answeredVersion, startReceived=${start != null}, credentialsReceived=${credentials != null}"
 
         while (start == null || credentials == null) {
+            ensureOpen()
+            if (now() >= deadline) {
+                val missing = if (start == null) "WifiStartRequest" else "WifiInfoResponse"
+                throw fail("timed out after ${options.messageTimeoutMs} ms waiting for $missing (${progress()})", interruptedExchange = true)
+            }
             val retryAt = if (infoRequestedAt != 0L && !infoRetried) infoRequestedAt + options.infoRetryMs else Long.MAX_VALUE
             val event = inbox.poll(maxOf(0, minOf(deadline, retryAt) - now()), TimeUnit.MILLISECONDS)
             ensureOpen()
             if (event == null) {
-                if (now() >= deadline) {
-                    val waitingFor = when {
-                        start == null && credentials == null -> "a WifiStartRequest (is a projection already running on the head unit?)"
-                        start == null -> "a WifiStartRequest after the credentials"
-                        else -> "a WifiInfoResponse"
-                    }
-                    throw fail("timed out after ${options.messageTimeoutMs} ms waiting for $waitingFor")
-                }
-                if (now() >= retryAt) {
+                if (now() < deadline && now() >= retryAt) {
                     // Also nudges openauto if our first request got stuck behind another frame.
                     log.w("wireless: no credentials yet, asking again")
                     send(WppMessageId.INFO_REQUEST, ByteArray(0))
@@ -238,15 +239,17 @@ class WirelessBootstrap(
             val frame = when (event) {
                 is Inbound.End -> throw fail(
                     "head unit closed the Bluetooth link before sending " +
-                        if (start == null) "its WifiStartRequest" else "the Wi-Fi credentials",
+                        (if (start == null) "its WifiStartRequest" else "the Wi-Fi credentials") + " (${progress()})",
                     cause = event.error,
+                    interruptedExchange = true,
                 )
                 is Inbound.Message -> event.frame
             }
             when (frame.id) {
                 WppMessageId.VERSION_REQUEST -> {
                     answerVersionRequest(frame.payload)
-                    deadline = now() + options.messageTimeoutMs
+                    if (!answeredVersion) deadline = now() + options.messageTimeoutMs
+                    answeredVersion = true
                 }
                 WppMessageId.START_REQUEST -> {
                     val request = parse("WifiStartRequest") { WifiStartRequest.parseFrom(frame.payload) }
@@ -256,19 +259,19 @@ class WirelessBootstrap(
                         sendQuietly(WppMessageId.START_RESPONSE, startResponse(null, WppStatus.INVALID_HOST))
                         throw fail("head unit sent an invalid port ${request.port}", WppStatus.INVALID_HOST)
                     }
-                    if (start != null) log.w("wireless: repeated WifiStartRequest, using the latest one")
+                    if (start == null) deadline = now() + options.messageTimeoutMs
+                    else log.w("wireless: repeated WifiStartRequest, using the latest one")
                     start = request
                     // A phone that already has the credentials skips the info request.
                     if (credentials == null && infoRequestedAt == 0L) {
                         send(WppMessageId.INFO_REQUEST, ByteArray(0))
                         infoRequestedAt = now()
                     }
-                    deadline = now() + options.messageTimeoutMs
                 }
                 WppMessageId.INFO_RESPONSE -> {
+                    if (credentials == null) deadline = now() + options.messageTimeoutMs
                     credentials = parseCredentials(frame.payload)
                     log.i("wireless: credentials $credentials" + if (start == null) " (unsolicited, waiting for WifiStartRequest)" else "")
-                    deadline = now() + options.messageTimeoutMs
                 }
                 else -> onOtherMessage(frame)
             }
@@ -492,8 +495,9 @@ class WirelessBootstrap(
         if (closed.get()) throw WirelessBootstrapException("wireless bootstrap cancelled")
     }
 
-    private fun fail(message: String, status: Int = WppStatus.WIFI_NETWORK_UNAVAILABLE, cause: Throwable? = null) =
-        WirelessBootstrapException(message, status, cause, whileNegotiating = state == State.NEGOTIATING)
+    private fun fail(message: String, status: Int = WppStatus.WIFI_NETWORK_UNAVAILABLE, cause: Throwable? = null,
+        interruptedExchange: Boolean = false) =
+        WirelessBootstrapException(message, status, cause, whileNegotiating = state == State.NEGOTIATING, interruptedExchange = interruptedExchange)
             .also { log.e("wireless: $message", cause) }
 
     private fun now() = System.nanoTime() / 1_000_000

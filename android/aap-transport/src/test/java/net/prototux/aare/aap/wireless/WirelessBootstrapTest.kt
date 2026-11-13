@@ -230,6 +230,7 @@ class WirelessBootstrapTest {
         val e = failure as WirelessBootstrapException
         assertEquals(WppStatus.PHONE_WIFI_DISABLED, e.status)
         assertFalse("a Wi-Fi problem on the phone isn't the car not being ready", e.whileNegotiating)
+        assertFalse(e.interruptedExchange)
         assertNull(phone.ready.poll())
         assertNull("the phone closes the link after a failure", readWppFrame(phoneToHu.input))
     }
@@ -252,6 +253,7 @@ class WirelessBootstrapTest {
         start(Phone { JoinResult.Joined() }, WirelessBootstrap.Options(messageTimeoutMs = 300, keepaliveIntervalMs = 0, frameGapMs = 0))
         awaitEnd()
         assertTrue(failure?.message.orEmpty(), failure?.message.orEmpty().contains("timed out"))
+        assertTrue((failure as WirelessBootstrapException).interruptedExchange)
         assertTrue((failure as WirelessBootstrapException).whileNegotiating)
     }
 
@@ -266,6 +268,23 @@ class WirelessBootstrapTest {
         hu.send(WppMessageId.INFO_RESPONSE, infoResponse())
         hu.expect(WppMessageId.START_RESPONSE)
         assertNotNull(phone.ready.poll(2, TimeUnit.SECONDS))
+    }
+
+    @Test(timeout = 10_000)
+    fun repeatedVersionExchangeDoesNotPostponeAMissingStartRequest() {
+        val phone = Phone { error("No Wi-Fi credentials were received") }
+        start(phone, WirelessBootstrap.Options(messageTimeoutMs = 500, frameGapMs = 0, pingIntervalMs = 0))
+        hu.send(WppMessageId.VERSION_REQUEST, versionRequest())
+        hu.expect(WppMessageId.VERSION_RESPONSE)
+        val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+        while (!finished.await(80, TimeUnit.MILLISECONDS) && System.nanoTime() < end) {
+            runCatching { hu.send(WppMessageId.VERSION_REQUEST, versionRequest()) }
+        }
+        assertEquals(0L, finished.count)
+        val message = failure?.message.orEmpty()
+        assertTrue(message, "WifiStartRequest" in message && "versionAnswered=true" in message &&
+            "startReceived=false" in message && "credentialsReceived=false" in message)
+        assertTrue(phone.ready.isEmpty())
     }
 
     @Test(timeout = 10_000)
@@ -310,6 +329,7 @@ class WirelessBootstrapTest {
         awaitEnd()
         assertTrue(failure is WirelessBootstrapException)
         assertFalse("cancelling isn't retried", (failure as WirelessBootstrapException).whileNegotiating)
+        assertFalse((failure as WirelessBootstrapException).interruptedExchange)
     }
 
     @Test(timeout = 10_000)

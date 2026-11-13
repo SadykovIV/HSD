@@ -21,7 +21,7 @@ internal object DriveDeckPermissions {
         catch (_: RuntimeException) { return Snapshot(Availability.UNTRUSTED, null, "Установлен несовместимый DriveDeck. Используйте адаптированный APK из комплекта ${BuildConfig.BRAND}.") }
             ?: return Snapshot(Availability.MISSING, null, "Сначала установите DriveDeck · ${BuildConfig.BRAND} из комплекта или каталога компонентов.")
         val service = try {
-            context.packageManager.getServiceInfo(listener(), PackageManager.ComponentInfoFlags.of(0))
+            context.packageManager.getServiceInfo(listener(), 0)
         } catch (_: PackageManager.NameNotFoundException) { null }
         if (service == null || !service.enabled || !service.exported || !service.applicationInfo.enabled ||
             service.permission != "android.permission.BIND_NOTIFICATION_LISTENER_SERVICE") {

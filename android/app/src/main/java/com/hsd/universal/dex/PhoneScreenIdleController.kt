@@ -1,5 +1,7 @@
 package com.hsd.universal.dex
 
+import com.hsd.universal.compat.hostDisplay
+
 import com.hsd.universal.BuildConfig
 
 import com.hsd.universal.DesktopTransport
@@ -54,7 +56,8 @@ internal class PhoneScreenIdleController(
     private var manualOutsideTimer = false
     private var savedBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
     private data class BarAppearance(val statusColor: Int, val navColor: Int, val dividerColor: Int,
-        val statusContrast: Boolean, val navContrast: Boolean, val lightFlags: Int, val hidStatus: Boolean)
+        val statusContrast: Boolean, val navContrast: Boolean, val lightStatus: Boolean, val lightNav: Boolean,
+        val hidStatus: Boolean)
     private var savedBars: BarAppearance? = null
     private var savedFocus: View? = null
     private val savedAccessibility = ArrayList<Pair<View, Int>>()
@@ -75,7 +78,7 @@ internal class PhoneScreenIdleController(
             watching = true
             readTimeout()
         }
-        if (activity.display?.displayId == Display.DEFAULT_DISPLAY) phoneWindow = this
+        if (activity.hostDisplay?.displayId == Display.DEFAULT_DISPLAY) phoneWindow = this
         focused = activity.hasWindowFocus()
         refresh()
     }
@@ -145,7 +148,7 @@ internal class PhoneScreenIdleController(
     }
 
     private fun eligible(): Boolean {
-        if (!started || activity.isFinishing || activity.isDestroyed || activity.display?.displayId != Display.DEFAULT_DISPLAY ||
+        if (!started || activity.isFinishing || activity.isDestroyed || activity.hostDisplay?.displayId != Display.DEFAULT_DISPLAY ||
             !prefs.desktopPanelControl || (!isEnabled() && !manualOutsideTimer) || !isConnected()) return false
         if (Build.VERSION.SDK_INT >= 35) presentation?.observe()
         if (!focused) {
@@ -220,20 +223,23 @@ internal class PhoneScreenIdleController(
     @Suppress("DEPRECATION") // These window colors still apply on pre-edge-to-edge Android devices.
     private fun darkenBars(decor: View) {
         val window = activity.window
-        val bars = window.insetsController ?: return
-        val insets = decor.rootWindowInsets
-        val hideStatus = insets != null && insets.isVisible(WindowInsets.Type.navigationBars()) && insets.isVisible(WindowInsets.Type.statusBars())
+        val bars = androidx.core.view.WindowCompat.getInsetsController(window, decor) ?: return
+        val insets = androidx.core.view.ViewCompat.getRootWindowInsets(decor)
+        val hideStatus = insets != null && insets.isVisible(androidx.core.view.WindowInsetsCompat.Type.navigationBars()) &&
+            insets.isVisible(androidx.core.view.WindowInsetsCompat.Type.statusBars())
         savedBars = BarAppearance(window.statusBarColor, window.navigationBarColor, window.navigationBarDividerColor,
-            window.isStatusBarContrastEnforced, window.isNavigationBarContrastEnforced, bars.systemBarsAppearance and LIGHT_BARS, hideStatus)
+            window.isStatusBarContrastEnforced, window.isNavigationBarContrastEnforced,
+            bars.isAppearanceLightStatusBars, bars.isAppearanceLightNavigationBars, hideStatus)
         window.statusBarColor = Color.BLACK
         window.navigationBarColor = Color.BLACK
         window.navigationBarDividerColor = Color.BLACK
         window.isStatusBarContrastEnforced = false
         window.isNavigationBarContrastEnforced = false
-        bars.setSystemBarsAppearance(LIGHT_BARS, LIGHT_BARS)
+        bars.isAppearanceLightStatusBars = true
+        bars.isAppearanceLightNavigationBars = true
         // Hiding navigation starts Android's first-use immersive tutorial. That system window
         // takes focus and would immediately dismiss the curtain on a newly configured phone.
-        if (hideStatus) bars.hide(WindowInsets.Type.statusBars())
+        if (hideStatus) bars.hide(androidx.core.view.WindowInsetsCompat.Type.statusBars())
     }
 
     @Suppress("DEPRECATION")
@@ -246,9 +252,10 @@ internal class PhoneScreenIdleController(
         window.navigationBarDividerColor = saved.dividerColor
         window.isStatusBarContrastEnforced = saved.statusContrast
         window.isNavigationBarContrastEnforced = saved.navContrast
-        window.insetsController?.let { bars ->
-            bars.setSystemBarsAppearance(saved.lightFlags, LIGHT_BARS)
-            if (saved.hidStatus) bars.show(WindowInsets.Type.statusBars())
+        androidx.core.view.WindowCompat.getInsetsController(window, window.decorView)?.let { bars ->
+            bars.isAppearanceLightStatusBars = saved.lightStatus
+            bars.isAppearanceLightNavigationBars = saved.lightNav
+            if (saved.hidStatus) bars.show(androidx.core.view.WindowInsetsCompat.Type.statusBars())
         }
     }
 
@@ -298,6 +305,5 @@ internal class PhoneScreenIdleController(
             if (window.isCurtainVisible) window.dismiss()
             return true
         }
-        private const val LIGHT_BARS = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
     }
 }

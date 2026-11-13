@@ -3,6 +3,10 @@ package com.hsd.universal
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothManager
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.net.nsd.NsdManager
+import android.net.nsd.NsdServiceInfo
 import android.os.Bundle
 import android.os.SystemClock
 import android.util.Base64
@@ -10,6 +14,7 @@ import com.hsd.universal.ProjectionRoute
 import com.hsd.universal.carplay.AccessoryAuthentication
 import com.hsd.universal.carplay.CarPlayBootstrap
 import io.github.shaonialife.cardeck.iap2.Iap2Csm
+import io.github.shaonialife.cardeck.iap2.asString
 import io.github.shaonialife.cardeck.transport.Iap2LinkChannel
 import io.github.shaonialife.cardeck.transport.StreamDuplexStream
 import java.io.DataInputStream
@@ -25,6 +30,8 @@ import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import java.security.spec.PKCS8EncodedKeySpec
 import java.util.UUID
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.TimeUnit
 
 /** The two emulators use a per-run test CA. The release APK only trusts its accessory CA assets. */
 @SuppressLint("MissingPermission")
@@ -122,11 +129,13 @@ internal class CarPlayRadioProbe(private val context: Context, private val args:
         fun send(id: Int, body: ByteArray = byteArrayOf()) =
             check(channel.sendControl(Iap2Csm.encode(id, body)))
         var accepted = false
+        var receivedId = false
         val deadline = SystemClock.elapsedRealtime() + 45_000
         while (channel.isAlive && SystemClock.elapsedRealtime() < deadline) {
             val bytes = channel.recvControl(250) ?: continue
             for (frame in parser.offer(bytes)) when (frame.messageId) {
-                0x1d00 -> send(0x1d01, Iap2Csm.u16List(7, intArrayOf(0x4300)))
+                0x1d00 -> send(0x1d01, Iap2Csm.u16List(6, intArrayOf(0x4301)) +
+                    Iap2Csm.u16List(7, intArrayOf(0x4e0e)))
                 0xaa00 -> send(0xaa01, Iap2Csm.param(0, data("chain")))
                 0xaa02 -> {
                     val digest = Iap2Csm.parseParams(frame.body).single { it.id == 0 }.value
@@ -139,18 +148,32 @@ internal class CarPlayRadioProbe(private val context: Context, private val args:
                     send(0xaa03, Iap2Csm.param(0, signature))
                 }
                 0xaa05 -> accepted = true
+                0x4e0e -> {
+                    check(accepted)
+                    receivedId = Iap2Csm.parseParams(frame.body).single { it.id == 0 }.asString()
+                        .equals(arg("peer"), ignoreCase = true)
+                }
                 0xaa04 -> error("Phone rejected accessory signature")
                 0x4300 -> {
-                    check(accepted)
+                    check(accepted && receivedId) { "CarPlay availability arrived before the authenticated phone transport identifier" }
                     val network =
                         Iap2Csm.group(
                             1,
                             Iap2Csm.string(0, arg("ssid")),
                             Iap2Csm.string(1, arg("pass")),
-                            Iap2Csm.string(3, addr.hostAddress!!),
+                            if (initiates) byteArrayOf() else Iap2Csm.string(3, addr.hostAddress!!),
                             Iap2Csm.u8(4, 2),
                         )
-                    send(0x4301, network + Iap2Csm.u16(2, ip.localPort))
+                    if (initiates) {
+                        // This head unit drops Bluetooth after delivering Wi-Fi credentials. Its
+                        // endpoint is only published over Bonjour once the radio handoff is over.
+                        send(0x4301, network)
+                        SystemClock.sleep(300)
+                        channel.close()
+                        publishEndpoint(ip.localPort, life)
+                    } else {
+                        send(0x4301, network + Iap2Csm.u32(2, ip.localPort.toLong()))
+                    }
                     ip.accept().use { client ->
                         client.soTimeout = 8000
                         val payload =
@@ -171,5 +194,33 @@ internal class CarPlayRadioProbe(private val context: Context, private val args:
             }
         }
         error("Receiver did not complete Bluetooth bootstrap")
+    }
+
+    @Suppress("DEPRECATION")
+    private fun publishEndpoint(port: Int, life: ProjectionResources) {
+        val connectivity = context.getSystemService(ConnectivityManager::class.java)
+        val wifi = connectivity.allNetworks.first {
+            connectivity.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+        }
+        val nsd = context.getSystemService(NsdManager::class.java)
+        val registered = CompletableFuture<Unit>()
+        val listener = object : NsdManager.RegistrationListener {
+            override fun onServiceRegistered(info: NsdServiceInfo) { registered.complete(Unit) }
+            override fun onRegistrationFailed(info: NsdServiceInfo, code: Int) {
+                registered.completeExceptionally(IllegalStateException("Bonjour registration failed ($code)"))
+            }
+            override fun onServiceUnregistered(info: NsdServiceInfo) {}
+            override fun onUnregistrationFailed(info: NsdServiceInfo, code: Int) {}
+        }
+        val service = NsdServiceInfo().also {
+            it.serviceName = "HSD QA receiver"
+            it.serviceType = "_airplay._tcp"
+            it.network = wifi
+            it.port = port
+            it.setAttribute("features", "0x0,0x20")
+        }
+        nsd.registerService(service, NsdManager.PROTOCOL_DNS_SD, listener)
+        life.own { nsd.unregisterService(listener) }
+        registered.get(8, TimeUnit.SECONDS)
     }
 }

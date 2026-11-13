@@ -25,7 +25,8 @@ internal object DesktopActivationCoordinator {
         DelegatedPanelAccess.hasPermission(context), DelegatedPanelAccess.unsupportedThisActivation,
         Build.VERSION.SDK_INT >= 37 && DexPrefs(context).desktopMode != DesktopModePolicy.SAMSUNG_DEX,
         VdmHostLink.isReady, IndependentRecoveryAccess.needsApply(context),
-        IndependentRecoveryAccess.requiresLiveVerification(context), DesktopUsbDebugging.confirmedMissing(context))
+        IndependentRecoveryAccess.requiresLiveVerification(context), DesktopUsbDebugging.confirmedMissing(context),
+        DesktopAudioAccess.unsupportedThisActivation)
 
     fun request(context: Context, needs: DesktopReadinessPolicy.Requirements,
                 explicit: Boolean, allowAcquireGrants: Boolean = true, current: () -> Boolean): Request =

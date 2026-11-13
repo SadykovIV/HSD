@@ -12,15 +12,24 @@ internal interface OwnedDesktopDisplay {
     val display: Display
     val nativeLifetime: IBinder
     val family: VdmDisplayFamily? get() = null
+    // The framework returns this native VirtualDisplay only to its creator. An ID alone is insufficient.
+    fun isLocalPresentation(expectedName: String): Boolean = android.os.Build.VERSION.SDK_INT in 29..32 &&
+        this is LocalDesktopDisplay && nativeLifetime.isBinderAlive && display.isValid &&
+        display.displayId > 0 && display.name == expectedName
     fun resize(width: Int, height: Int, density: Int)
     fun release()
 }
 
 internal class LocalDesktopDisplay(private val native: VirtualDisplay,
     override val nativeLifetime: IBinder) : OwnedDesktopDisplay {
+    @Volatile private var released = false
+    val presentation = object : ILocalPresentation.Stub() {
+        override fun currentDisplayId(): Int = if (!released && nativeLifetime.isBinderAlive && native.display.isValid)
+            native.display.displayId else -1
+    }
     override val display: Display get() = native.display
     override fun resize(width: Int, height: Int, density: Int) = native.resize(width, height, density)
-    override fun release() = native.release()
+    override fun release() { released = true; native.release() }
 }
 
 /** The caller must retire its producer process, retaining consumer surfaces until native death. */

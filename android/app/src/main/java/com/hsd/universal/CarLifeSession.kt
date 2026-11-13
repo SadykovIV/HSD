@@ -1041,7 +1041,7 @@ class CarLifeSession(
     override fun videoStats(): LinkVideoStats {
         val bytes = transport.queuedVideoBytes
         val rate = transport.drainBytesPerSec
-        return LinkVideoStats(rate, VideoQueueLimit.backlogMs(bytes, rate), transport.queuedVideoFrames, bytes)
+        return LinkVideoStats(rate, maxOf(transport.videoWriteAgeMs, VideoQueueLimit.backlogMs(bytes, rate)), transport.queuedVideoFrames, bytes)
     }
 
     /**

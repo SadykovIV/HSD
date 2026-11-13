@@ -1,10 +1,12 @@
 package com.hsd.universal.update
 
+import androidx.core.view.WindowCompat
+import com.hsd.universal.compat.safeInsets
+
 import com.hsd.universal.R
 import com.hsd.universal.dex.DesktopPermissionList
 import android.app.Activity
 import android.os.Bundle
-import android.view.WindowInsets
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import com.hsd.universal.dex.DesktopSetupViews
@@ -22,11 +24,11 @@ class ComponentPermissionsActivity : Activity() {
             isFillViewport = true
             addView(root)
             setOnApplyWindowInsetsListener { view, insets ->
-                val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+                val bars = insets.safeInsets(view)
                 view.setPadding(bars.left, bars.top, bars.right, bars.bottom); insets
             }
         }
-        window.setDecorFitsSystemWindows(false)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         setContentView(scroll)
         val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; root.addView(this) }
         ui.button(header, getString(R.string.set_back)) { finish() }

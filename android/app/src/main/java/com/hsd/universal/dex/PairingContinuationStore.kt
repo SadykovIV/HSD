@@ -1,5 +1,7 @@
 package com.hsd.universal.dex
 
+import com.hsd.universal.compat.readUpTo
+
 import android.content.Context
 import android.os.SystemClock
 import android.provider.Settings
@@ -28,7 +30,7 @@ internal object PairingContinuationStore {
 
     @Synchronized fun consume(context: Context, prompt: String): PairingContinuationPolicy.Request? {
         val request = runCatching {
-            val bytes = file(context).openRead().use { it.readNBytes(2049) }
+            val bytes = file(context).openRead().use { it.readUpTo(2049) }
             check(bytes.size <= 2048)
             val json = JSONObject(String(bytes, Charsets.UTF_8))
             PairingContinuationPolicy.Request(json.getString("attempt"), json.getString("prompt"),

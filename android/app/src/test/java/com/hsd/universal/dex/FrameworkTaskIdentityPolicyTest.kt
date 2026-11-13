@@ -14,6 +14,13 @@ class FrameworkTaskIdentityPolicyTest {
             parse("TaskInfo{userId=0 taskId=10 displayId=0 isRunning=true ", 10))
     }
 
+    @Test fun android10And11StackPrefixStillRequiresTheActualTaskId() {
+        val observed = "TaskInfo{userId=10 stackId=31 taskId=42 displayId=4 isRunning=true baseIntent=Intent {"
+        assertEquals(FrameworkTaskIdentityPolicy.Identity(4, 10, 42), parse(observed))
+        assertNull(parse(observed, 31))
+        assertNull(parse(observed.replace("stackId=31", "stackId=31 extra=9")))
+    }
+
     @Test fun api37EffectiveUidPrefixStillRequiresAConsistentTaskAndBoundedIdentity() {
         val current = "TaskInfo{userId=0 taskId=92 effectiveUid=10238 displayId=4 isRunning=true baseIntent=Intent {"
         assertEquals(FrameworkTaskIdentityPolicy.Identity(4, 0, 92), parse(current, 92))

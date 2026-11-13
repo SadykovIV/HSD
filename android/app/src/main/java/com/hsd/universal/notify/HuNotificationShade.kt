@@ -90,7 +90,9 @@ internal class HuNotificationShade(context: Context) : AutoCloseable {
             detach()
             if (failedDisplay == id) return
             try {
-                val ctx = app.createDisplayContext(display).createWindowContext(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, null)
+                val scoped = app.createDisplayContext(display)
+                val ctx = if (android.os.Build.VERSION.SDK_INT >= 30)
+                    scoped.createWindowContext(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY, null) else scoped
                 uiContext = ctx
                 manager = ctx.getSystemService(WindowManager::class.java)
                 @Suppress("DEPRECATION") val metrics = android.util.DisplayMetrics().also { display.getRealMetrics(it) }

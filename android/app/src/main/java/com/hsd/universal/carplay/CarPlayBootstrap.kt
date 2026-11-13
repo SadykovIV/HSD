@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Network
 import com.hsd.universal.AppLog
+import com.hsd.universal.R
 import com.hsd.universal.ProjectionRoute
 import com.hsd.universal.ProjectionResources
 import io.github.shaonialife.cardeck.iap2.Iap2Csm
@@ -22,8 +23,27 @@ import net.prototux.aare.aap.AapLog
 import net.prototux.aare.aap.wireless.*
 import net.prototux.aare.transport.wireless.HeadUnitNetwork
 
-private val PHONE_IAP2 = UUID.fromString("00000000-deca-fade-deca-deafdecacafe")
 private val ACCESSORY_IAP2 = UUID.fromString("00000000-deca-fade-deca-deafdecacaff")
+
+/** A socket accepted for hands-free or closed immediately by the HU must not win the iAP2 race. */
+@SuppressLint("MissingPermission")
+private class IapCandidate(private val socket: BluetoothSocket) : java.io.Closeable {
+    @Volatile private var channel: Iap2LinkChannel? = null
+    val link get() = checkNotNull(channel)
+
+    fun negotiate(outgoing: Boolean) {
+        if (outgoing) socket.connect()
+        val candidate = Iap2LinkChannel(StreamDuplexStream(socket.inputStream, socket.outputStream, socket::close))
+        channel = candidate
+        if (!candidate.awaitReady(15_000)) throw java.io.IOException("Bluetooth connected but iAP2 did not synchronize")
+    }
+
+    override fun close() {
+        // Closing the socket wakes a blocking connect/read/write, including a racing channel creation.
+        runCatching(socket::close)
+        channel?.close()
+    }
+}
 
 internal data class CarPlayEndpoint(
     val network: Network,
@@ -58,36 +78,36 @@ internal class CarPlayBootstrap(
         fun trace(message: String) = AppLog.i("CarPlay Bluetooth · $message", false)
         val cached = runCatching { device.uuids?.any { it.uuid == ACCESSORY_IAP2 } }.getOrNull()
         trace("bonded · accessory iAP2 in SDP cache=${cached ?: "unknown"}")
-        if (context.checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED)
+        if (android.os.Build.VERSION.SDK_INT < 31 || context.checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED)
             runCatching { if (adapter.isDiscovering) adapter.cancelDiscovery() }
-        val socket = connectCarPlayRfcomm(life, incoming = { resources ->
-            adapter.listenUsingRfcommWithServiceRecord("iAP2", PHONE_IAP2).use { listener ->
-                resources.own(listener::close)
+        val candidate = connectCarPlayRfcomm(life, incoming = { resources ->
+            val listener = CarPlayBluetoothService.claim(adapter)
+            resources.own { CarPlayBluetoothService.release(listener) }
+            try {
                 trace("local iAP2 service registered · waiting for selected head unit")
-                var candidate: BluetoothSocket
-                while (true) {
-                    candidate = listener.accept()
-                    if (candidate.remoteDevice == device) break
-                    candidate.close()
-                }
-                resources.own(candidate::close)
-                candidate
+                dialCarPlayRfcomm(resources, open = {
+                    var socket = listener.accept()
+                    while (socket.remoteDevice != device) {
+                        socket.close()
+                        socket = listener.accept()
+                    }
+                    IapCandidate(socket)
+                }, connect = { it.negotiate(false) }, log = ::trace, initialRetryMs = 0, role = "incoming")
+            } finally {
+                CarPlayBluetoothService.release(listener)
             }
         }, outgoing = { resources ->
             dialCarPlayRfcomm(resources, open = {
                 check(adapter.isEnabled && device.bondState == BluetoothDevice.BOND_BONDED) {
                     "Проверьте Bluetooth и сопряжение с магнитолой"
                 }
-                device.createRfcommSocketToServiceRecord(ACCESSORY_IAP2)
-            }, connect = BluetoothSocket::connect, log = ::trace)
+                IapCandidate(device.createRfcommSocketToServiceRecord(ACCESSORY_IAP2))
+            }, connect = { it.negotiate(true) }, log = ::trace)
         }, log = ::trace)
-        val link =
-            Iap2LinkChannel(
-                StreamDuplexStream(socket.inputStream, socket.outputStream, socket::close)
-            )
-        life.own(link::close)
+        val link = candidate.link
         val wifi = HeadUnitNetwork(context, AapLog.Stdout, 60_000, requireIpv4 = false)
         life.own(wifi::release)
+        var stage = R.string.carplay_stage_identification
         var bonjour: CarPlayDiscovery? = null
         var direct: Pair<String, Int>? = null
         var peerKey: ByteArray? = null
@@ -108,24 +128,29 @@ internal class CarPlayBootstrap(
                     4 -> WifiSecurity.WPA3_PERSONAL
                     else -> error("Неподдерживаемая защита сети CarPlay ($sec)")
                 }
+            stage = R.string.carplay_stage_wifi
             status("CarPlay · подключаюсь к сети магнитолы")
             val result = wifi.join(WifiCredentials(ssid, password, null, security, sec, null))
             if (result is JoinResult.Failed) error("Не удалось подключиться к Wi-Fi магнитолы: ${result.message}")
             val network = checkNotNull(wifi.network) { "Соединение с Wi-Fi магнитолы завершено" }
-            bonjour = CarPlayDiscovery(context, network, local, life).also { it.start() }
+            bonjour = CarPlayDiscovery(context, network, local, life, ::trace).also { it.start() }
+            stage = R.string.carplay_stage_discovery
+            trace("Wi-Fi joined · waiting for CarPlay endpoint")
         }
         var authenticated = false
         var identified = false
-        var accepts = emptyList<Int>()
+        var setup: CarPlayWirelessSetup? = null
         val parser = Iap2Csm.Parser()
         fun send(id: Int, body: ByteArray = byteArrayOf()) =
             check(link.sendControl(Iap2Csm.encode(id, body)))
-        check(link.awaitReady(15_000)) { "Магнитола не ответила на iAP2" }
         trace("iAP2 link ready")
         send(0x1d00)
         val deadline = android.os.SystemClock.elapsedRealtime() + 110_000
-        while (link.isAlive && android.os.SystemClock.elapsedRealtime() < deadline) {
+        while (!life.isClosed && android.os.SystemClock.elapsedRealtime() < deadline) {
+            // Some receivers release Bluetooth as soon as they hand off to Wi-Fi. Drain the
+            // last iAP2 reply and let discovery on the authenticated Wi-Fi network finish.
             val chunk = link.recvControl(250)
+            if (chunk == null && !link.isAlive && bonjour == null) break
             if (chunk != null)
                 for (frame in parser.offer(chunk)) {
                     val fields = Iap2Csm.parseParams(frame.body)
@@ -134,13 +159,18 @@ internal class CarPlayBootstrap(
                         0x1d01 -> {
                             check(!identified)
                             identified = true
-                            accepts = fields.firstOrNull { it.id == 7 }?.asU16List().orEmpty()
+                            val sends = fields.filter { it.id == 6 }.flatMap { it.asU16List() }
+                            val receives = fields.filter { it.id == 7 }.flatMap { it.asU16List() }
+                            setup = CarPlayWirelessSetup(sends, receives)
+                            trace("identified · advertises start=${0x4300 in receives || 0x4301 in sends}, Wi-Fi config=${0x5702 in receives || 0x5703 in sends}")
                             send(0x1d02)
+                            stage = R.string.carplay_stage_certificate
                             send(0xaa00)
                         }
                         0xaa01 -> {
                             check(identified && !authenticated)
                             val nonce = auth.challenge(requireNotNull(value(0)))
+                            stage = R.string.carplay_stage_signature
                             send(0xaa02, Iap2Csm.param(0, nonce))
                         }
                         0xaa03 -> {
@@ -151,19 +181,9 @@ internal class CarPlayBootstrap(
                             }
                             authenticated = true
                             send(0xaa05)
-                            if (0x4e09 in accepts) send(0x4e09, Iap2Csm.string(0, "HSD"))
-                            if (0x4e0d in accepts) send(0x4e0d, Iap2Csm.u8(0, 1))
-                            if (accepts.isEmpty() || 0x4300 in accepts)
-                                send(
-                                    0x4300,
-                                    Iap2Csm.group(0, Iap2Csm.u8(0, 0)) +
-                                        Iap2Csm.group(
-                                            1,
-                                            Iap2Csm.u8(0, 1),
-                                            Iap2Csm.string(1, local),
-                                        ),
-                                )
-                            if (accepts.isEmpty() || 0x5702 in accepts) send(0x5702)
+                            trace("accessory verified · requesting Wi-Fi session")
+                            stage = R.string.carplay_stage_credentials
+                            checkNotNull(setup).announce(local, ::send)
                         }
                         0x5703 -> {
                             check(authenticated)
@@ -181,7 +201,6 @@ internal class CarPlayBootstrap(
                             val key = value(4)?.toString(Charsets.US_ASCII)?.trimEnd('\u0000')
                             if (key != null && key.matches(Regex("[0-9a-fA-F]{64}")))
                                 peerKey = key.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-                            if (0x4e0e in accepts) send(0x4e0e, Iap2Csm.string(0, local))
                         }
                     }
                 }
@@ -192,6 +211,7 @@ internal class CarPlayBootstrap(
             if (authenticated && target != null)
                 return CarPlayEndpoint(net, target.first, target.second, local, remote, peerKey)
         }
-        error("Магнитола не объявила службу беспроводного CarPlay")
+        val phase = context.getString(stage)
+        error(context.getString(if (link.isAlive || bonjour != null) R.string.carplay_setup_timeout else R.string.carplay_setup_closed, phase))
     }
 }

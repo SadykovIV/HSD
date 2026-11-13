@@ -209,6 +209,8 @@ open class BridgeService : Service() {
                 // A queued old broadcast must not stop a new accessory or a wireless session.
                 observePhysicalUsbDetach("USB accessory detached broadcast")
             }
+            if (intent.action == UsbDetachPolicy.USB_STATE && !isInitialStickyBroadcast &&
+                !intent.getBooleanExtra("connected", true)) observePhysicalUsbDetach("USB disconnected")
         }
     }
 
@@ -217,7 +219,7 @@ open class BridgeService : Service() {
         val present = runCatching {
             getSystemService(UsbManager::class.java).accessoryList.orEmpty().any(Actions::isCarLifeAccessory)
         }.getOrNull()
-        if (!UsbDetachPolicy.confirmedDetached(lastSessionWasUsb, present)) return false
+        if (!UsbDetachPolicy.confirmedDetached(lastSessionWasUsb, present, UsbDetachPolicy.cableConnected(this))) return false
         if (physicalUsbDetached) return true
         physicalUsbDetached = true
         com.hsd.universal.dex.DesktopMusicPlayback.physicalDetach(this)
@@ -257,6 +259,7 @@ open class BridgeService : Service() {
         nm.createNotificationChannel(NotificationChannel(CHANNEL, getString(R.string.notif_channel_bridge), NotificationManager.IMPORTANCE_LOW))
         registerReceiver(detachReceiver, IntentFilter().apply {
             addAction(UsbManager.ACTION_USB_ACCESSORY_DETACHED)
+            addAction(UsbDetachPolicy.USB_STATE)
             addAction(UsbManager.ACTION_USB_ACCESSORY_ATTACHED)
             addAction(MainActivity.ACTION_PERMISSION)
         }, Context.RECEIVER_EXPORTED)
@@ -1094,7 +1097,7 @@ open class BridgeService : Service() {
             onHuSize = { w, hh -> aaPrefs.saveHuSize(w, hh) },
             onNavigationInterestChanged = { main.post { if (!stopRequested && session === sref[0]) clusterNavigation?.subscriptionChanged() } },
             onDesktopOutputLost = { owner, hadPicture ->
-                val carriedAudio = h.core.audioViaUsb
+                val carriedAudio = dexPrefs.usbPlaybackAudio && h.core.audioViaUsb
                 main.post {
                     if (!stopRequested && session === owner)
                         com.hsd.universal.dex.DesktopMusicPlayback.usbOutputLost(this, owner, hadPicture && DexState.running, carriedAudio)
@@ -1104,7 +1107,7 @@ open class BridgeService : Service() {
         sref[0] = s
         session = s
         com.hsd.universal.dex.DesktopMusicPlayback.attach(applicationContext, this, s,
-            desktopOutput,
+            transport.caps.kind == TransportCaps.USB_AOA.kind,
             ready = { session === s && DexState.running && s.hasFreshDesktopVideo() },
             audioReady = { !DexPrefs(this).usbPlaybackAudio || !h.core.audioViaUsb ||
                 com.hsd.universal.dex.DesktopAudioState.running })

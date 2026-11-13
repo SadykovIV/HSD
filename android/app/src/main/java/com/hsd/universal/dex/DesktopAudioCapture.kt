@@ -15,6 +15,8 @@ import java.lang.reflect.InvocationTargetException
 import java.util.concurrent.atomic.AtomicBoolean
 
 object DesktopAudioAccess {
+    @Volatile internal var unsupportedThisActivation = false
+
     fun hasPermission(context: Context): Boolean =
         context.checkSelfPermission(DesktopAudioPolicy.PERMISSION) == PackageManager.PERMISSION_GRANTED &&
             context.checkSelfPermission(DesktopAudioPolicy.ROUTING_PERMISSION) == PackageManager.PERMISSION_GRANTED
@@ -107,6 +109,7 @@ class DesktopAudioCapture(context: Context) {
                 !enabled -> R.string.desktop_sound_switched_off
                 !delegated -> R.string.desktop_sound_available_in_computer_access_mode
                 !ready -> R.string.desktop_for_sound_activate_access
+                !permission && DesktopAudioAccess.unsupportedThisActivation -> R.string.desktop_capture_unavailable_bluetooth
                 !permission -> R.string.desktop_for_sound_re_activate_access_with_the_audio_parameter
                 !usb -> R.string.desktop_sound_i_m_waiting_to_connect
                 !current.isCarlifeStarted -> R.string.desktop_sound_awaiting_launch

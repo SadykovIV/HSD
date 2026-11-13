@@ -58,7 +58,7 @@ internal class CarPlayProjection(
                             air = session
                             CarLifeState.auth = "iAP2 · Pair Verify"
                             CarLifeState.protocol = "CarPlay"
-                            val source = DesktopProjectionSource(context, this, false, ::stop)
+                            val source = DesktopProjectionSource(context, this, false, false, ::stop)
                             desktop = source
                             delivery.start(SystemClock.elapsedRealtime())
                             main.postDelayed(frameTimeout, 55_000)

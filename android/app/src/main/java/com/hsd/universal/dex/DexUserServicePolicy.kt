@@ -60,14 +60,14 @@ internal object DexUserServicePolicy {
 
     fun validateGeometry(id: Int, logicalW: Int, logicalH: Int, physicalW: Int, physicalH: Int, density: Int,
         flags: Int, expectedDensity: Int = DENSITY, desktopMode: Int = DesktopModePolicy.SAMSUNG_DEX,
-        expectedWidth: Int = WIDTH, expectedHeight: Int = HEIGHT) {
+        expectedWidth: Int = WIDTH, expectedHeight: Int = HEIGHT, ownedPresentation: Boolean = false) {
         DesktopModePolicy.requireMode(desktopMode)
         requireDensity(expectedDensity)
         requireDimensions(expectedWidth, expectedHeight)
         check(id > 0 && logicalW == expectedWidth && logicalH == expectedHeight && physicalW == expectedWidth && physicalH == expectedHeight && density == expectedDensity) {
             "Android не предоставил отдельный экран ${expectedWidth}×${expectedHeight}/$expectedDensity без масштабирования"
         }
-        check(flags and DISPLAY_TRUSTED != 0) { "Android не предоставил доверенный виртуальный экран" }
+        check(flags and DISPLAY_TRUSTED != 0 || ownedPresentation && desktopMode != DesktopModePolicy.SAMSUNG_DEX) { "Android не предоставил доверенный виртуальный экран" }
         check(desktopMode != DesktopModePolicy.SAMSUNG_DEX || flags and DISPLAY_ALLOWS_CONTENT_MODE_SWITCH != 0) {
             "One UI не разрешил системный оконный режим для виртуального экрана"
         }

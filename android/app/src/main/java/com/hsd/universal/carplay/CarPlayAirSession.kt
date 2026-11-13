@@ -5,6 +5,7 @@ import android.util.Base64
 import com.hsd.universal.AutoAudioEncoder
 import com.hsd.universal.AppLog
 import com.hsd.universal.ProjectionResources
+import net.prototux.aare.transport.wireless.ProjectionNetworkAccess
 import io.github.shaonialife.cardeck.airplay.*
 import java.net.*
 import java.security.SecureRandom
@@ -27,6 +28,7 @@ internal class CarPlayAirSession(
     private val failed: (Exception) -> Unit,
 ) {
     private var eventSender: AirPlayWire? = null
+    private val networkAccess = ProjectionNetworkAccess(context)
     private var eventIap: CarPlayIapChannel? = null
     lateinit var video: CarPlayVideo
         private set
@@ -43,18 +45,18 @@ internal class CarPlayAirSession(
 
     private fun tcp(port: Int): Socket {
         require(port in 1..65535)
-        val s = ep.network.socketFactory.createSocket()
+        val s = networkAccess.socket(ep.network)
         life.own(s::close)
         s.tcpNoDelay = true
         s.soTimeout = 12_000
-        s.connect(InetSocketAddress(ep.host, port), 7000)
+        networkAccess.checked { s.connect(InetSocketAddress(ep.host, port), 7000) }
         return s
     }
 
     private fun udp() =
         DatagramSocket(null).also {
             life.own(it::close)
-            ep.network.bindSocket(it)
+            networkAccess.checked { ep.network.bindSocket(it) }
             it.bind(InetSocketAddress(0))
         }
 

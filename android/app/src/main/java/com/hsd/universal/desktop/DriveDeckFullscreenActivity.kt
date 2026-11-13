@@ -1,6 +1,10 @@
 package com.hsd.universal.desktop
 
-import com.hsd.universal.shared.ProjectionHost
+import androidx.core.view.WindowCompat
+import com.hsd.universal.compat.hostDisplay
+import com.hsd.universal.compat.safeInsets
+import com.hsd.universal.compat.hideDesktopBars
+
 import android.app.Activity
 import android.app.ActivityOptions
 import android.content.ComponentName
@@ -14,15 +18,12 @@ import android.os.Bundle
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
-import android.view.WindowInsets
-import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.ImageButton
 import android.widget.TextView
 import android.widget.Toast
 import com.hsd.universal.R
-import com.hsd.universal.dex.DesktopModePolicy
 import com.hsd.universal.embed.EmbeddedGatewayPolicy
 import com.hsd.universal.embed.EmbeddedSessionRegistry
 import kotlin.math.roundToInt
@@ -36,26 +37,28 @@ class DriveDeckFullscreenActivity : Activity() {
     private lateinit var home: ImageButton
     private var leaving = false
     private var target: ComponentName? = null
+    private var parentProof: Any? = null
 
-    private val parentId get() = display?.displayId ?: -1
+    private val parentId get() = hostDisplay?.displayId ?: -1
     private fun config(pkg: String? = null) = runCatching {
         EmbeddedSessionRegistry.renderConfig(parentId, ownDesktop = false, packageName = pkg)
     }.getOrNull()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (config() == null) { finish(); return }
+        parentProof = EmbeddedSessionRegistry.captureParent(parentId)
+        if (parentProof == null || config() == null) { finish(); return }
         setShowWhenLocked(true)
         if (Build.VERSION.SDK_INT == Build.VERSION_CODES.TIRAMISU) {
             // A touchable host can otherwise take focus from the Android 13 child between DOWN and UP.
             window.addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
         }
-        window.setDecorFitsSystemWindows(false)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         val root = FrameLayout(this).apply {
             layoutDirection = View.LAYOUT_DIRECTION_LTR
             setBackgroundColor(Color.BLACK)
             setOnApplyWindowInsetsListener { v, i ->
-                val bars = i.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout())
+                val bars = i.safeInsets(v)
                 v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
                 i
             }
@@ -128,10 +131,7 @@ class DriveDeckFullscreenActivity : Activity() {
         if (isFinishing || !::pane.isInitialized) return
         if (config() == null) { finish(); return }
         hardwareBack?.resume()
-        window.insetsController?.apply {
-            hide(WindowInsets.Type.systemBars())
-            systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        }
+        window.hideDesktopBars()
         pane.refreshBuffer()
     }
 
@@ -169,12 +169,7 @@ class DriveDeckFullscreenActivity : Activity() {
     private fun goHome() {
         if (leaving || isFinishing) return
         leaving = true
-        if (config() != null) {
-            val target = ComponentName(DesktopModePolicy.DRIVEDECK_PACKAGE, DesktopModePolicy.DRIVEDECK_HOME_CLASS)
-            val home = Intent.makeMainActivity(target).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
-                .putExtra(ProjectionHost.PACKAGE, packageName).putExtra(ProjectionHost.DISPLAY, parentId)
-            runCatching { startActivity(home, ActivityOptions.makeBasic().setLaunchDisplayId(parentId).toBundle()) }
-        }
+        parentProof?.let { EmbeddedSessionRegistry.requestHome(parentId, it) }
         finish()
     }
 

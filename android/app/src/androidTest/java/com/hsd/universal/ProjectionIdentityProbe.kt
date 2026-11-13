@@ -26,7 +26,16 @@ internal fun checkReceiverIdentities(base: Context): Bundle {
         check(first.receiverIds() == listOf(legacy) && first.get(legacy) == setOf(old))
         val id = "lan|192.0.2.2"
         val bluetooth = "bt|00:11:22:33:44:55"
-        val identity = fingerprint(first.phone(id).certificate)
+        val certificate = first.phone(id).certificate
+        val identity = fingerprint(certificate)
+        val dates = PhoneCertificateDates(certificate)
+        fun at(time: java.time.Instant) = ProjectionIdentity(isolated, java.time.Clock.fixed(time, java.time.ZoneOffset.UTC)).phone(id)
+        for (time in listOf(dates.from, dates.until)) check(fingerprint(at(time).certificate) == identity)
+        for ((time, message) in listOf(dates.from.minusMillis(1) to R.string.aa_phone_cert_not_yet_valid,
+            dates.until.plusMillis(1) to R.string.aa_phone_cert_expired)) {
+            val failure = runCatching { at(time) }.exceptionOrNull()
+            check(failure is IllegalStateException && failure.message.orEmpty().startsWith(isolated.getString(message)))
+        }
         first.add(id, old)
         first.authenticated(id, "DiAuto")
         val second = ProjectionIdentity(isolated)

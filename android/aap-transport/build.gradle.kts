@@ -3,7 +3,7 @@ plugins { id("com.android.library") }
 android {
     namespace = "com.hsd.aap"
     compileSdk = 37
-    defaultConfig { minSdk = 33 }
+    defaultConfig { minSdk = 29 }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

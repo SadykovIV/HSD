@@ -1,5 +1,8 @@
 package com.hsd.universal
 
+import androidx.core.view.WindowCompat
+import com.hsd.universal.compat.safeInsets
+
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
@@ -18,7 +21,6 @@ import android.security.KeyChain
 import android.text.InputType
 import android.view.Gravity
 import android.view.View
-import android.view.WindowInsets
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -26,6 +28,7 @@ import android.widget.Toast
 import com.hsd.universal.DesktopTransport
 import com.hsd.universal.ProjectionRoute
 import com.hsd.universal.dex.DesktopSetupViews
+import com.hsd.universal.carplay.CarPlayBluetoothService
 import java.text.DateFormat
 import java.util.Date
 
@@ -59,7 +62,7 @@ internal class ProjectionSettingsActivity : Activity() {
         port = state?.getString("port") ?: prefs.getInt("lanPort", 5288).toString()
         request = state?.getString("request")
         askedForLocation = state?.getBoolean("location") == true
-        window.setDecorFitsSystemWindows(false)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         content = ui.column().apply {
             setPadding(ui.dp(16), ui.dp(12), ui.dp(16), ui.dp(20))
             isFocusableInTouchMode = true
@@ -68,7 +71,7 @@ internal class ProjectionSettingsActivity : Activity() {
             isFillViewport = true
             setBackgroundColor(ui.background)
             setOnApplyWindowInsetsListener { view, insets ->
-                val bars = insets.getInsets(WindowInsets.Type.systemBars() or WindowInsets.Type.ime() or WindowInsets.Type.displayCutout())
+                val bars = insets.safeInsets(view, keyboard = true)
                 view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
                 insets
             }
@@ -191,12 +194,12 @@ internal class ProjectionSettingsActivity : Activity() {
                 ui.navigation(card, getString(R.string.mock_bt_headunit), peerName.ifBlank { peer.ifBlank { getString(R.string.desktop_select_bluetooth_device) } }) {
                     withPermissions("pick")
                 }
-                ui.navigation(card, getString(R.string.desktop_bluetooth_settings), getString(R.string.desktop_pair_a_new_head_unit)) {
-                    startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
-                }
                 if (route == ProjectionRoute.CARPLAY) {
-                    ui.navigation(card, getString(R.string.desktop_make_phone_discoverable), getString(R.string.desktop_use_for_initial_pairing_when_the_head_unit_searches)) {
+                    ui.navigation(card, getString(R.string.desktop_pair_a_new_head_unit), getString(R.string.carplay_pairing_hint)) {
                         withPermissions("discoverable")
+                    }
+                    ui.navigation(card, getString(R.string.carplay_pair_from_phone), getString(R.string.carplay_pair_from_phone_hint)) {
+                        withPermissions("searchHeadUnit")
                     }
                     val bonds = getSharedPreferences("carplay-identities", MODE_PRIVATE)
                     if (peer.isNotEmpty() && bonds.contains("peer.$peer"))
@@ -205,6 +208,8 @@ internal class ProjectionSettingsActivity : Activity() {
                                 .setMessage(peerName.ifBlank { peer }).setNegativeButton(getString(R.string.mock_cancel), null)
                                 .setPositiveButton(getString(R.string.desktop_forget)) { _, _ -> bonds.edit().remove("peer.$peer").apply(); capture(); render() }.show()
                         }
+                } else ui.navigation(card, getString(R.string.desktop_bluetooth_settings), getString(R.string.desktop_pair_a_new_head_unit)) {
+                    startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
                 }
             }
         }
@@ -309,20 +314,25 @@ internal class ProjectionSettingsActivity : Activity() {
     private fun withPermissions(action: String) {
         val required = buildList {
             if (action == "discoverable") {
-                add(Manifest.permission.BLUETOOTH_ADVERTISE)
+                if (android.os.Build.VERSION.SDK_INT >= 31) {
+                    add(Manifest.permission.BLUETOOTH_ADVERTISE)
+                    add(Manifest.permission.BLUETOOTH_CONNECT)
+                }
                 return@buildList
             }
             if (!route.wired && Build.VERSION.SDK_INT >= 37) add(Manifest.permission.ACCESS_LOCAL_NETWORK)
             if (route == ProjectionRoute.CARLIFE_WIFI) addAll(com.hsd.universal.link.car.WirelessCarLife.missingPermissions(this@ProjectionSettingsActivity))
             if (route == ProjectionRoute.WIRELESS_AA || route == ProjectionRoute.CARPLAY) {
-                add(Manifest.permission.BLUETOOTH_CONNECT)
-                add(Manifest.permission.NEARBY_WIFI_DEVICES)
-                if (!askedForLocation && checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                if (android.os.Build.VERSION.SDK_INT >= 31) add(Manifest.permission.BLUETOOTH_CONNECT)
+                if (android.os.Build.VERSION.SDK_INT >= 33) add(Manifest.permission.NEARBY_WIFI_DEVICES)
+                if ((!askedForLocation || android.os.Build.VERSION.SDK_INT < 33) &&
+                    checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
                     add(Manifest.permission.ACCESS_COARSE_LOCATION)
                     add(Manifest.permission.ACCESS_FINE_LOCATION)
                 }
             }
-            if (route == ProjectionRoute.CARPLAY && action == "save") add(Manifest.permission.BLUETOOTH_SCAN)
+            if (route == ProjectionRoute.CARPLAY && action == "save" && android.os.Build.VERSION.SDK_INT >= 31)
+                add(Manifest.permission.BLUETOOTH_SCAN)
         }.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
         if (required.isEmpty()) perform(action)
         else {
@@ -344,16 +354,33 @@ internal class ProjectionSettingsActivity : Activity() {
         else Toast.makeText(this, getString(R.string.desktop_to_connect_provide_the_requested_access_in_the_android), Toast.LENGTH_LONG).show()
     }
 
+    @SuppressLint("MissingPermission")
     private fun perform(action: String) {
         when (action) {
             "pick" -> pickBondedDevice()
-            "discoverable" -> {
+            "discoverable", "searchHeadUnit" -> {
                 try {
-                    startActivityForResult(Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE), REQUEST_DISCOVERABLE)
+                    val adapter = getSystemService(BluetoothManager::class.java)?.adapter
+                    if (adapter?.isEnabled != true) {
+                        startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
+                        return
+                    }
+                    CarPlayBluetoothService.prepare(adapter)
+                    if (action == "searchHeadUnit") {
+                        startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
+                    } else {
+                        startActivityForResult(Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE)
+                            .putExtra(BluetoothAdapter.EXTRA_DISCOVERABLE_DURATION, CarPlayBluetoothService.PAIRING_SECONDS), REQUEST_DISCOVERABLE)
+                    }
                 } catch (_: ActivityNotFoundException) {
+                    CarPlayBluetoothService.cancelPreparation()
                     Toast.makeText(this, getString(R.string.desktop_open_bluetooth_settings_and_make_the_phone_discoverable), Toast.LENGTH_LONG).show()
                 } catch (_: SecurityException) {
+                    CarPlayBluetoothService.cancelPreparation()
                     Toast.makeText(this, getString(R.string.desktop_allow_hsd_to_access_nearby_devices), Toast.LENGTH_LONG).show()
+                } catch (e: java.io.IOException) {
+                    CarPlayBluetoothService.cancelPreparation()
+                    Toast.makeText(this, getString(R.string.carplay_pairing_failed), Toast.LENGTH_LONG).show()
                 }
             }
             else -> save()
@@ -362,8 +389,11 @@ internal class ProjectionSettingsActivity : Activity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == REQUEST_DISCOVERABLE && resultCode > 0)
-            Toast.makeText(this, getString(R.string.desktop_phone_visible_select_it_on_the_head_unit_and, resultCode), Toast.LENGTH_LONG).show()
+        if (requestCode == REQUEST_DISCOVERABLE) {
+            if (resultCode > 0)
+                Toast.makeText(this, getString(R.string.desktop_phone_visible_select_it_on_the_head_unit_and, resultCode), Toast.LENGTH_LONG).show()
+            else CarPlayBluetoothService.cancelPreparation()
+        }
     }
 
     private companion object { const val REQUEST_DISCOVERABLE = 2 }
@@ -374,7 +404,10 @@ internal class ProjectionSettingsActivity : Activity() {
         if (devices.isEmpty()) {
             AlertDialog.Builder(this).setTitle(getString(R.string.desktop_paired_devices))
                 .setMessage(getString(R.string.desktop_pair_the_phone_with_the_head_unit_then_select))
-                .setPositiveButton(getString(R.string.step_bluetooth_primary)) { _, _ -> startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }
+                .setPositiveButton(getString(R.string.step_bluetooth_primary)) { _, _ ->
+                    if (route == ProjectionRoute.CARPLAY) withPermissions("discoverable")
+                    else startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
+                }
                 .setNegativeButton(getString(R.string.mock_cancel), null).show()
             return
         }
@@ -405,6 +438,7 @@ internal class ProjectionSettingsActivity : Activity() {
             if (peer.isEmpty()) { pickBondedDevice(); return }
             edit.putString("bluetoothPeer", peer).putString("bluetoothPeerName", peerName)
         }
+        if (route != ProjectionRoute.CARPLAY) CarPlayBluetoothService.cancelPreparation()
         ProjectionRoute.save(this, edit)
         finish()
     }

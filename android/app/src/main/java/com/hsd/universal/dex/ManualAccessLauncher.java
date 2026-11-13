@@ -65,7 +65,7 @@ public final class ManualAccessLauncher {
                 return 0;
             }
             check(Process.myUid() == 2000, "Запустите команду из обычного ADB shell (UID 2000), без root.");
-            check(Build.VERSION.SDK_INT >= 33, "Нужен Android 13 или новее.");
+            check(Build.VERSION.SDK_INT >= 29, "Нужен Android 10 или новее.");
             // A shell-owned, non-symlink lock serializes two manual invocations. No keys or IDs are stored.
             try (FileChannel channel = FileChannel.open(Paths.get(deskAa ? "/data/local/tmp/hsd-universal-manual-access.lock" : "/data/local/tmp/hsd-manual-access.lock"),
                     StandardOpenOption.CREATE, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS);
@@ -121,11 +121,13 @@ public final class ManualAccessLauncher {
     private static int packageUid() throws Exception {
         String paths = run(5000, "pm", "path", ManualAccessPolicy.PACKAGE);
         check(paths.startsWith("package:/"), "Для активации установите " + ManualAccessPolicy.PACKAGE + ".");
-        String packages = run(5000, "cmd", "package", "list", "packages", "-U", "--user", "current", ManualAccessPolicy.PACKAGE);
+        String user = run(5000, "am", "get-current-user").trim();
+        check(user.matches("[0-9]+"), "Не удалось определить активного пользователя Android.");
+        String packages = run(5000, "cmd", "package", "list", "packages", "-U", "--user", user, ManualAccessPolicy.PACKAGE);
         Matcher match = UID_LINE.matcher(packages);
         check(match.find(), "Не удалось проверить UID " + ManualAccessPolicy.APP_NAME + ".");
         int uid = Integer.parseInt(match.group(1));
-        check(!match.find() && uid >= 10000 && uid % 100000 >= 10000, "Неоднозначный UID " + ManualAccessPolicy.APP_NAME + ".");
+        check(!match.find() && uid / 100000 == Integer.parseInt(user) && uid % 100000 >= 10000, "Неоднозначный UID " + ManualAccessPolicy.APP_NAME + ".");
         return uid;
     }
 
@@ -295,9 +297,11 @@ public final class ManualAccessLauncher {
     }
 
     private static void requireCapabilities(JSONObject status, ManualAccessPolicy.Options options) throws IOException {
-        check(Boolean.TRUE.equals(status.opt("mediaControl")),
+        check(Build.VERSION.SDK_INT < 33 || Boolean.TRUE.equals(status.opt("mediaControl")),
             "Работает предыдущая активация без управления музыкой. Завершите доступ в " + ManualAccessPolicy.APP_NAME + " и активируйте его снова. Текущие права не изменены.");
-        check(!options.audio || Boolean.TRUE.equals(status.opt("playbackAudio")),
+        boolean audioUnavailable = Boolean.TRUE.equals(status.opt("audioUnsupported"));
+        if (options.audio && audioUnavailable) System.out.println("Android не предоставил захват звука. Для музыки выберите Bluetooth на магнитоле.");
+        check(!options.audio || audioUnavailable || Boolean.TRUE.equals(status.opt("playbackAudio")),
             "Доступ уже работает без USB-звука. Включите USB-звук в " + ManualAccessPolicy.APP_NAME + ", завершите доступ в приложении и повторите команду с --audio.");
         if (options.screen && !Boolean.TRUE.equals(status.opt("panelControl"))) {
             check(Boolean.TRUE.equals(status.opt("panelUnsupported")),

@@ -2,8 +2,33 @@ package com.hsd.universal.ui
 
 import org.junit.Assert.*
 import org.junit.Test
+import com.hsd.universal.ProjectionRoute
 
 class UsbScanGateTest {
+    @Test fun delayedEnumerationSelectsTheNewWiredRouteOnlyOnce() {
+        val routes = WiredAccessorySelection()
+        val aa = ProjectionRoute.USB
+        val carLife = ProjectionRoute.CARLIFE_USB
+        assertEquals(carLife, routes.observe(carLife, emptySet()))
+        assertEquals(aa, routes.observe(carLife, setOf(aa)))
+        assertEquals(carLife, routes.observe(carLife, setOf(aa)))
+        routes.observe(carLife, emptySet())
+        assertEquals(carLife, routes.observe(carLife, setOf(carLife, aa)))
+        assertEquals(ProjectionRoute.CARPLAY, routes.observe(ProjectionRoute.CARPLAY, emptySet()))
+        assertEquals(ProjectionRoute.CARPLAY, routes.observe(ProjectionRoute.CARPLAY, setOf(aa)))
+    }
+
+    @Test fun lateFailureFromOldAccessoryPreservesCurrentPermissionRequest() {
+        val gate = UsbScanGate { 0 }
+        gate.decide("old", true, false, false)
+        gate.decide("new", false, false, false)
+        val token = gate.pendingToken!!
+        assertFalse(gate.handshakeFailed("old", "closed during TLS"))
+        assertNull(gate.failureDetail)
+        assertTrue(gate.permissionResult("new", token, true))
+        assertEquals(UsbScanGate.Step.START, gate.decide("new", true, false, false))
+    }
+
     @Test fun failedHandshakeBlocksPollingUntilExplicitRetryOrNewAttachment() {
         val gate = UsbScanGate { 100_000 }
         gate.handshakeFailed("HONOR-hu", "No new VERSION_REQUEST")

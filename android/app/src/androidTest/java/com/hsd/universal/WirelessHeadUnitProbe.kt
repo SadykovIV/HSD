@@ -4,6 +4,7 @@ import aap_protobuf.aaw.WifiInfoResponseOuterClass.WifiInfoResponse
 import aap_protobuf.aaw.WifiStartRequestOuterClass.WifiStartRequest
 import aap_protobuf.aaw.WifiStartResponseOuterClass.WifiStartResponse
 import aap_protobuf.aaw.WifiVersionRequestOuterClass.WifiVersionRequest
+import aap_protobuf.aaw.WifiVersionResponseOuterClass.WifiVersionResponse
 import aap_protobuf.service.wifiprojection.message.AccessPointTypeOuterClass.AccessPointType
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothManager
@@ -22,7 +23,7 @@ import net.prototux.aare.aap.wireless.*
  * RFCOMM.
  */
 @SuppressLint("MissingPermission")
-internal class WirelessHeadUnitProbe(private val context: Context) {
+internal class WirelessHeadUnitProbe(private val context: Context, private val ssid: String, private val password: String) {
     fun run(): Bundle {
         val bluetooth = context.getSystemService(BluetoothManager::class.java)!!.adapter!!
         val wifi =
@@ -41,7 +42,16 @@ internal class WirelessHeadUnitProbe(private val context: Context) {
                 )
                 .use { service ->
                     android.util.Log.i("HsdRadioProbe", "Listening for RFCOMM")
+                    // A receiver can be discoverable before its projection process is ready.
+                    // Close the first exchange after VERSION and require the app to reconnect.
+                    service.accept(65_000).use { early ->
+                        writeWppFrame(early.outputStream, WppMessageId.VERSION_REQUEST,
+                            WifiVersionRequest.newBuilder().setMajor(4).setMinor(2).build().toByteArray())
+                        val response = readWppFrame(early.inputStream)
+                        check(response?.id == WppMessageId.VERSION_RESPONSE)
+                    }
                     service.accept(65_000).use { bt ->
+                        result.putBoolean("wireless_reconnected_before_start", true)
                         val out = bt.outputStream
                         fun send(id: Int, payload: com.google.protobuf.MessageLite) =
                             writeWppFrame(out, id, payload.toByteArray())
@@ -49,26 +59,27 @@ internal class WirelessHeadUnitProbe(private val context: Context) {
                             WppMessageId.VERSION_REQUEST,
                             WifiVersionRequest.newBuilder().setMajor(4).setMinor(2).build(),
                         )
-                        send(
-                            WppMessageId.START_REQUEST,
-                            WifiStartRequest.newBuilder()
-                                .setIpAddress(wifi.hostAddress)
-                                .setPort(tcp.localPort)
-                                .build(),
-                        )
                         val deadline = SystemClock.elapsedRealtime() + 65000
                         while (SystemClock.elapsedRealtime() < deadline) {
                             val frame = readWppFrame(bt.inputStream) ?: error("RFCOMM closed")
                             android.util.Log.i("HsdRadioProbe", "WPP message ${frame.id}")
                             when (frame.id) {
+                                WppMessageId.VERSION_RESPONSE -> {
+                                    val response = WifiVersionResponse.parseFrom(frame.payload)
+                                    check(response.hasDeviceInfo() && response.deviceInfo.deviceId.isNotBlank() &&
+                                        response.deviceInfo.deviceName.isNotBlank()) { "Phone identity missing from wireless version response" }
+                                    result.putBoolean("wireless_phone_identity", true)
+                                    send(WppMessageId.START_REQUEST, WifiStartRequest.newBuilder()
+                                        .setIpAddress(wifi.hostAddress).setPort(tcp.localPort).build())
+                                }
                                 WppMessageId.PING_REQUEST ->
                                     writeWppFrame(out, WppMessageId.PING_RESPONSE, frame.payload)
                                 WppMessageId.INFO_REQUEST ->
                                     send(
                                         WppMessageId.INFO_RESPONSE,
                                         WifiInfoResponse.newBuilder()
-                                            .setSsid("HSD-QA")
-                                            .setPassword("hsd-avd-wireless")
+                                            .setSsid(ssid)
+                                            .setPassword(password)
                                             .setSecurityMode(WppSecurityMode.WPA2_PERSONAL)
                                             .setAccessPointType(AccessPointType.DYNAMIC)
                                             .build(),

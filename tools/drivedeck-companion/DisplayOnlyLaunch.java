@@ -31,24 +31,8 @@ public final class DisplayOnlyLaunch {
     private static final String BACK = "headswap_fullscreen_back";
     private static final String HOME = "headswap_fullscreen_home";
     private DisplayOnlyLaunch() {}
-    public static Activity activity(Context context) {
-        for (int i = 0; i < 12 && context != null; i++) {
-            if (context instanceof Activity) return (Activity) context;
-            if (!(context instanceof ContextWrapper)) return null;
-            Context base = ((ContextWrapper) context).getBaseContext();
-            if (base == context) return null;
-            context = base;
-        }
-        return null;
-    }
-    public static int displayId(Context context) {
-        try {
-            Activity activity = activity(context);
-            if (activity == null || activity.isFinishing() || activity.isDestroyed()) return -1;
-            Display display = activity.getDisplay();
-            return display == null || !display.isValid() || display.getDisplayId() <= 0 ? -1 : display.getDisplayId();
-        } catch (RuntimeException e) { return -1; }
-    }
+    public static Activity activity(Context context) { return HostedDisplay.activity(context); }
+    public static int displayId(Context context) { return HostedDisplay.displayId(context); }
     public static boolean allowed(Context context) { return displayId(context) > 0; }
     private static Bundle options(Context context, Intent intent) {
         int id = displayId(context);

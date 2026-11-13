@@ -167,7 +167,7 @@ internal class PanelLaunchSession(
 
     private fun publicLauncher(target: ComponentName): Boolean {
         val query = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER).setPackage(target.packageName)
-        return app.packageManager.queryIntentActivities(query, PackageManager.ResolveInfoFlags.of(0)).any {
+        return app.packageManager.queryIntentActivities(query, 0).any {
             val info = it.activityInfo
             if (info.packageName != target.packageName || info.name != target.className || !info.enabled ||
                 !info.applicationInfo.enabled || !info.exported || !info.permission.isNullOrEmpty()) return@any false

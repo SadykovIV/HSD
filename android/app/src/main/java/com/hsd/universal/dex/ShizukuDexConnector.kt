@@ -130,7 +130,7 @@ class ShizukuDexConnector(context: Context, private val core: AaBridgeCore,
                 val access = DexPrivilegeAccess.status(context)
                 check(access == DexPrivilegeAccess.Status.READY) { bindFailureMessage(access) }
                 bindStartedAt = SystemClock.elapsedRealtime()
-                AppLog.i("Shizuku UserService bind requested · server API ${Shizuku.getVersion()}.${Shizuku.getServerPatchVersion()}", false)
+                AppLog.i("Shizuku UserService bind requested · server API ${Shizuku.getVersion()}", false)
                 bindRequested = true
                 Shizuku.bindUserService(args, connection)
             } catch (e: Exception) { fail(e.message ?: context.getString(R.string.desktop_shizuku_unavailable), Failure.HELPER_UNAVAILABLE) }

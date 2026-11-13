@@ -23,6 +23,7 @@ internal class DelegatedInputGateway(context: Context,
     private val onNativeProducer: (IBinder) -> Unit = {}) : IDelegatedInputGateway.Stub() {
     private val context = context.applicationContext
     private val registry = DelegatedInputRegistry()
+    private val presentations = HashMap<Int, ILocalPresentation>()
     private val imeRoutes = DelegatedImeRoutes()
     private val displayWakeLocks = DesktopDisplayWakeLocks(this.context)
     @Volatile private var liveDisplayIds: Set<Int> = emptySet()
@@ -56,6 +57,7 @@ internal class DelegatedInputGateway(context: Context,
         registry.begin(generation, token, allowFullscreen)
         vdmSession = null
         nativeProducerLifetime = null
+        presentations.clear()
         imeRoutes.clear()
         panelParent = null
         DexState.independentPhoneLock = null
@@ -64,6 +66,7 @@ internal class DelegatedInputGateway(context: Context,
     }
     @Synchronized fun deactivate() {
         displayWakeLocks.close()
+        presentations.clear()
         imeRoutes.clear()
         panelParent = null
         DexState.independentPhoneLock = null
@@ -86,9 +89,10 @@ internal class DelegatedInputGateway(context: Context,
         return opened
     }
 
-    @Synchronized override fun registerParent(displayId: Int, token: IBinder, width: Int, height: Int) {
-        requireActive(); requireTrustedDisplay(displayId)
+    @Synchronized override fun registerParent(displayId: Int, token: IBinder, width: Int, height: Int, presentation: ILocalPresentation?) {
+        requireActive(); requireOwnedDisplay(displayId, presentation)
         registry.registerParent(displayId, token, width, height)
+        if (presentation != null) presentations[displayId] = presentation
         val entry = registry.requireDisplay(displayId, token)
         panelParent = entry
         DexState.independentPhoneLock = displays.getDisplay(displayId)?.let(DesktopDisplayIsolation::confirmedIndependence)
@@ -101,22 +105,23 @@ internal class DelegatedInputGateway(context: Context,
         requireActive()
         val parent = registry.requireDisplay(displayId, parentToken)
         check(parent === panelParent && parent.parent == null && DexPrefs(context).desktopMode == DesktopModePolicy.SAMSUNG_DEX)
-        requireTrustedDisplay(displayId)
+        requireOwnedDisplay(displayId)
         val display = checkNotNull(displays.getDisplay(displayId))
         check(display.name == DesktopModePolicy.displayName(DesktopModePolicy.SAMSUNG_DEX) &&
             display.flags and DexUserServicePolicy.DISPLAY_ALLOWS_CONTENT_MODE_SWITCH != 0)
         ShellDisplayIme.configureSamsungDesktop(displayId, Process.myUid())
     }
 
-    override fun registerChild(parentId: Int, displayId: Int, token: IBinder, width: Int, height: Int) =
-        registerChild(parentId, displayId, token, width, height, fullscreen = false)
+    override fun registerChild(parentId: Int, displayId: Int, token: IBinder, width: Int, height: Int, presentation: ILocalPresentation?) =
+        registerChild(parentId, displayId, token, width, height, presentation, fullscreen = false)
 
-    override fun registerFullscreenChild(parentId: Int, displayId: Int, token: IBinder, width: Int, height: Int) =
-        registerChild(parentId, displayId, token, width, height, fullscreen = true)
+    override fun registerFullscreenChild(parentId: Int, displayId: Int, token: IBinder, width: Int, height: Int, presentation: ILocalPresentation?) =
+        registerChild(parentId, displayId, token, width, height, presentation, fullscreen = true)
 
-    @Synchronized private fun registerChild(parentId: Int, displayId: Int, token: IBinder, width: Int, height: Int, fullscreen: Boolean) {
-        requireActive(); requireTrustedDisplay(parentId); requireTrustedDisplay(displayId)
+    @Synchronized private fun registerChild(parentId: Int, displayId: Int, token: IBinder, width: Int, height: Int, presentation: ILocalPresentation?, fullscreen: Boolean) {
+        requireActive(); requireOwnedDisplay(parentId); requireOwnedDisplay(displayId, presentation)
         registry.registerChild(parentId, displayId, token, width, height, fullscreen)
+        if (presentation != null) presentations[displayId] = presentation
         registerIme(registry.requireDisplay(displayId, token))
         displayWakeLocks.hold(displayId)
         liveDisplayIds = registry.registeredDisplayIds()
@@ -144,7 +149,7 @@ internal class DelegatedInputGateway(context: Context,
                 !(parent.token as IBinder).isBinderAlive || !token.isBinderAlive ||
                 !DelegatedDesktopAccess.isReady(context)) return@refresh false
             val source = try {
-                requireTrustedDisplay(entry.id)
+                requireOwnedDisplay(entry.id)
                 val ownerUid = displayOwnerUid(entry.id)
                 val fromHelper = ownerUid == Process.myUid() && backend !== ShellDisplayIme &&
                     ShellPanelClient.enableLocalIme(entry.id) && ShellPanelClient.imeConnection === backend
@@ -169,7 +174,7 @@ internal class DelegatedInputGateway(context: Context,
     override fun childImeVisibility(displayId: Int, token: IBinder): Int {
         val child = synchronized(this) {
             requireActive()
-            requireTrustedDisplay(displayId)
+            requireOwnedDisplay(displayId)
             registry.requireDisplay(displayId, token).also { check(it.parent != null) }
         }
         val ownerUid = synchronized(this) { displayOwnerUid(displayId) }
@@ -187,7 +192,7 @@ internal class DelegatedInputGateway(context: Context,
     }
 
     @Synchronized override fun resizeDisplay(displayId: Int, token: IBinder, width: Int, height: Int) {
-        requireActive(); requireTrustedDisplay(displayId)
+        requireActive(); requireOwnedDisplay(displayId)
         registry.resize(displayId, token, width, height)
     }
 
@@ -202,6 +207,7 @@ internal class DelegatedInputGateway(context: Context,
         }
         registry.unregister(displayId, token)
         liveDisplayIds = registry.registeredDisplayIds()
+        presentations.keys.retainAll(liveDisplayIds)
         displayWakeLocks.retain(liveDisplayIds)
     }
 
@@ -209,7 +215,7 @@ internal class DelegatedInputGateway(context: Context,
         try {
             requireActive()
             val owned = registry.requireDisplay(displayId, token)
-            requireTrustedDisplay(displayId)
+            requireOwnedDisplay(displayId)
             when (event) {
                 is MotionEvent -> {
                     require(event.source == InputDevice.SOURCE_MOUSE || event.source == InputDevice.SOURCE_TOUCHSCREEN)
@@ -250,7 +256,7 @@ internal class DelegatedInputGateway(context: Context,
     override fun childTaskState(displayId: Int, token: IBinder, packageName: String): Int {
         val owned = synchronized(this) {
             requireActive()
-            requireTrustedDisplay(displayId)
+            requireOwnedDisplay(displayId)
             registry.requireDisplay(displayId, token).also { check(it.parent != null) { "Ожидался экран виджета" } }
         }
         EmbeddedDisplayPolicy.requirePackage(packageName)
@@ -280,7 +286,7 @@ internal class DelegatedInputGateway(context: Context,
         val parent = synchronized(this) {
             registry.requireDisplay(parentId, token).also {
                 check(it === panelParent && it.parent == null) { "Панель доступна только родительскому рабочему столу" }
-                if (off) requireTrustedDisplay(parentId)
+                if (off) requireOwnedDisplay(parentId)
             }
         }
         phonePanel.setOff(parentId, token, off) { panelParent === parent }
@@ -290,26 +296,35 @@ internal class DelegatedInputGateway(context: Context,
         check(Binder.getCallingUid() == Process.myUid()) { "Шлюз ввода доступен только ${DesktopTransport.shortName}" }
     }
     private fun requireActive() { requireCaller(); check(DelegatedDesktopAccess.isReady(context)) { "Доступ завершён" } }
-    private fun requireTrustedDisplay(id: Int) {
+    private fun requireOwnedDisplay(id: Int, presentation: ILocalPresentation? = presentations[id]) {
         require(id > 0) { "Ввод на основной экран телефона запрещён" }
         val display = checkNotNull(displays.getDisplay(id)) { "Экран уже закрыт" }
-        check(display.isValid && display.flags and 128 != 0) { "Ожидался доверенный отдельный экран" }
-        check(DesktopDisplayIsolation.ownerUid(display) == displayOwnerUid(id)) {
-            "Экран принадлежит другому процессу"
+        check(display.isValid) { "Экран уже закрыт" }
+        val trusted = display.flags and DexUserServicePolicy.DISPLAY_TRUSTED != 0
+        if (presentation != null) {
+            // The non-exported same-UID producer holds the native VirtualDisplay. Registration
+            // requires a live session token and can never move that lease to another display.
+            check(vdmSession == null && presentation.currentDisplayId() == id && DesktopImePolicy.isSupportedName(display.name))
+            check(trusted || android.os.Build.VERSION.SDK_INT in 29..32 && !DelegatedDesktopAccess.trustedDisplay(context)) {
+                "Android не подтвердил собственный экран HSD"
+            }
+        } else if (vdmSession != null) {
+            check(trusted)
+            displayOwnerUid(id) // The authenticated native owner checks UID, live handle and exact family group.
+        } else {
+            check(trusted && DesktopDisplayIsolation.ownerUid(display) == Process.myUid()) {
+                "Android не подтвердил владельца доверенного экрана"
+            }
         }
     }
 
     private fun displayOwnerUid(id: Int): Int {
         val family = vdmSession ?: return Process.myUid()
         check(nativeProducerLifetime?.isBinderAlive == true &&
-            VdmHostLink.ownsDisplay(id, family.asBinder()) && family.ownsDisplay(id)) {
+            VdmHostLink.ownsDisplay(id, family.asBinder())) {
             "Экран не принадлежит текущей службе ${DesktopTransport.shortName}"
         }
-        val group = family.displayGroup(id)
-        check(group > 0 && DesktopDisplayIsolation.groupId(checkNotNull(displays.getDisplay(id))) == group) {
-            "Группа независимого экрана изменилась"
-        }
-        return 2000 // Accepted only with the authenticated current family, never by UID alone.
+        return VdmHostPolicy.SHELL_UID
     }
 
     companion object {

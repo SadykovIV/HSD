@@ -1,5 +1,7 @@
 package com.hsd.universal.desktop
 
+import com.hsd.universal.compat.hostDisplay
+
 import com.hsd.universal.R
 import com.hsd.universal.BuildConfig
 
@@ -180,7 +182,7 @@ internal class DesktopAppPane(
 
     fun refreshBuffer(width: Int = view.width, height: Int = view.height) {
         val output = current ?: return
-        val parent = activity.display?.displayId ?: return
+        val parent = activity.hostDisplay?.displayId ?: return
         if (width <= 0 || height <= 0) return
         work.execute {
             val pkg = output.appPackage
@@ -246,7 +248,7 @@ internal class DesktopAppPane(
         val dashboard = dashboardLaunch
         val attach = attachSession
         val notificationTicket = notification
-        val parent = activity.display?.displayId ?: -1
+        val parent = activity.hostDisplay?.displayId ?: -1
         val width = view.width
         val height = view.height
         work.execute {

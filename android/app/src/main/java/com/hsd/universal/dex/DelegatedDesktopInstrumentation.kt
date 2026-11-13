@@ -76,6 +76,7 @@ class DelegatedDesktopInstrumentation : Instrumentation() {
                 .put("displayHelper", active && ShellPanelClient.isConnected)
                 .put("panelNeedsHelper", active && panelReady && DelegatedPanelAccess.usesShellBackend())
                 .put("mediaControl", active && context.checkSelfPermission(DelegatedDesktopAccess.MEDIA_CONTENT_CONTROL) == android.content.pm.PackageManager.PERMISSION_GRANTED)
+                .put("audioUnsupported", active && DesktopAudioAccess.unsupportedThisActivation)
                 .put("playbackAudio", active && requestAudio && DesktopAudioAccess.hasPermission(context))
                 .put("panelControl", active && panelReady && DelegatedPanelAccess.hasPermission(context))
                 .put("panelUnsupported", active && DelegatedPanelAccess.unsupportedThisActivation)
@@ -118,7 +119,9 @@ class DelegatedDesktopInstrumentation : Instrumentation() {
             automation.adoptShellPermissionIdentity(*permissions.toTypedArray())
             adoptedHere = true
             check(DelegatedDesktopAccess.hasPermissions(context)) { "Android не предоставил все права рабочего стола и управления музыкой. Повторите явную активацию ${com.hsd.universal.DesktopTransport.shortName}." }
-            check(!requestAudio || DesktopAudioAccess.hasPermission(context)) { "Android не разрешил захват звука приложений" }
+            val playbackAudio = requestAudio && DesktopAudioAccess.hasPermission(context)
+            DesktopAudioAccess.unsupportedThisActivation = requestAudio && !playbackAudio && android.os.Build.VERSION.SDK_INT < 33
+            check(!requestAudio || playbackAudio || DesktopAudioAccess.unsupportedThisActivation) { "Android не разрешил захват звука приложений" }
             // Some ROMs retire the helper together with the ADB process group on USB handoff.
             // The gateway can still set LOCAL using the live activation and its own display leases.
             activationToken?.let { token ->
@@ -154,7 +157,7 @@ class DelegatedDesktopInstrumentation : Instrumentation() {
                     permissions.remove(PhonePowerActivity.PERMISSION)
                     automation.adoptShellPermissionIdentity(*permissions.toTypedArray())
                     check(DelegatedDesktopAccess.hasPermissions(context) &&
-                        (!requestAudio || DesktopAudioAccess.hasPermission(context))) { "Не удалось сохранить основной доступ ${DesktopTransport.shortName}" }
+                        (!playbackAudio || DesktopAudioAccess.hasPermission(context))) { "Не удалось сохранить основной доступ ${DesktopTransport.shortName}" }
                     DelegatedPanelAccess.unsupportedThisActivation = true
                 }
             }
@@ -179,8 +182,8 @@ class DelegatedDesktopInstrumentation : Instrumentation() {
             ready = true
             writeHeartbeat(true)
             PhoneActivationStatus.clearPriorFailure(context)
-            AppLog.i("ACTIVATION ready: audio=$requestAudio panel=$panelReady", false)
-            Log.i(DelegatedDesktopAccess.LOG_TAG, "READY protocol=1 uid=${Process.myUid()} pid=${Process.myPid()} permissions=${permissions.joinToString(",")} playbackAudio=$requestAudio panelControl=$panelReady")
+            AppLog.i("ACTIVATION ready: audio=$playbackAudio panel=$panelReady", false)
+            Log.i(DelegatedDesktopAccess.LOG_TAG, "READY protocol=1 uid=${Process.myUid()} pid=${Process.myPid()} permissions=${permissions.joinToString(",")} playbackAudio=$playbackAudio panelControl=$panelReady")
             runCatching { sendStatus(0, Bundle().apply { putString("hsd_access", "ready") }) }
             // USB detach and producer/service shutdown must never count this latch down.
             while (!stop.await(5, TimeUnit.SECONDS)) {
@@ -208,6 +211,7 @@ class DelegatedDesktopInstrumentation : Instrumentation() {
                     if (recoveryFile.readFully().toString(Charsets.US_ASCII) == record.encode()) recoveryFile.delete()
                 }
             }
+            DesktopAudioAccess.unsupportedThisActivation = false
             DelegatedPanelAccess.unsupportedThisActivation = false
             // A failed adoption must not drop another package's active delegation.
             if (adoptedHere) runCatching { automation?.dropShellPermissionIdentity() }

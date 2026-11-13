@@ -6,18 +6,31 @@ plugins {
 
 val releaseKeys = providers.environmentVariable("HSD_SIGNING_PROPERTIES").orNull?.let { path ->
     Properties().apply { file(path).inputStream().use { load(it) } }
+} ?: providers.environmentVariable("HSD_KEYSTORE").orNull?.let { path ->
+    val password = providers.environmentVariable("HSD_STORE_PASSWORD").get()
+    Properties().apply {
+        setProperty("storeFile", path)
+        setProperty("storePassword", password)
+        setProperty("keyAlias", providers.environmentVariable("HSD_KEY_ALIAS").getOrElse("hsd-release"))
+        setProperty("keyPassword", providers.environmentVariable("HSD_KEY_PASSWORD").getOrElse(password))
+    }
 }
 
 android {
     namespace = "com.hsd.universal"
     compileSdk = 37
+    ndkVersion = "27.2.12479018"
+    externalNativeBuild.cmake {
+        path = file("src/main/cpp/CMakeLists.txt")
+        version = "3.22.1"
+    }
 
     defaultConfig {
         applicationId = "com.hsd.universal"
-        minSdk = 33
+        minSdk = 29
         targetSdk = 37
-        versionCode = 71
-        versionName = "0.7.3"
+        versionCode = 80
+        versionName = "0.8.0"
         testInstrumentationRunner = "com.hsd.universal.DriveDeckAapProbe"
         buildConfigField("boolean", "PHONE_PROJECTION", "true")
         buildConfigField("boolean", "WIRELESS_BETA", "true")

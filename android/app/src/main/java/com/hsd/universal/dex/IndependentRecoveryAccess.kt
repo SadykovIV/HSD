@@ -1,5 +1,7 @@
 package com.hsd.universal.dex
 
+import com.hsd.universal.compat.readUpTo
+
 import com.hsd.universal.DesktopTransport
 
 import android.content.Context
@@ -400,7 +402,7 @@ internal object IndependentRecoveryAccess {
     private fun clear(context: Context) { file(context).delete(); readinessProof.clear() }
     private fun read(context: Context): IndependentRecoveryPolicy.Record? = runCatching {
         val source = file(context)
-        val bytes = source.openRead().use { it.readNBytes(2049) }
+        val bytes = source.openRead().use { it.readUpTo(2049) }
         check(bytes.size <= 2048)
         val json = JSONObject(bytes.toString(Charsets.UTF_8))
         check(json.getInt("version") == 1)

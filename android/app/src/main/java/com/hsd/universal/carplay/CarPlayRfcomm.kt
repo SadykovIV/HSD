@@ -76,6 +76,7 @@ internal fun <T : Closeable> dialCarPlayRfcomm(
     connect: (T) -> Unit,
     log: (String) -> Unit,
     initialRetryMs: Long = 3_000,
+    role: String = "outgoing",
 ): T {
     val stopped = CountDownLatch(1)
     val current = AtomicReference<T?>()
@@ -97,7 +98,7 @@ internal fun <T : Closeable> dialCarPlayRfcomm(
             return socket
         } catch (e: IOException) {
             if (stopped.count == 0L) break
-            log("RFCOMM outgoing attempt $attempt · ${bluetoothError(e)} · retry in ${delayMs} ms")
+            log("RFCOMM $role attempt $attempt · ${bluetoothError(e)} · retry in ${delayMs} ms")
         } finally {
             if (!connected && current.compareAndSet(socket, null)) runCatching(socket::close)
         }

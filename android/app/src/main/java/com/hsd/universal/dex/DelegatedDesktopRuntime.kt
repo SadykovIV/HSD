@@ -27,7 +27,7 @@ internal class DelegatedDesktopRuntime(private val context: Context, private val
         producerLifetime: IBinder, sessionToken: IBinder): OwnedDesktopDisplay {
         DesktopModePolicy.requireMode(mode)
         val name = DesktopModePolicy.displayName(mode)
-        val flags = DesktopModePolicy.displayFlags(mode, Build.VERSION.SDK_INT, independentLock)
+        val flags = DesktopModePolicy.displayFlags(mode, Build.VERSION.SDK_INT, independentLock, DelegatedDesktopAccess.trustedDisplay(context))
         if (DesktopDisplayBackendPolicy.requiresVdm(Build.VERSION.SDK_INT, mode)) {
             val family = VdmDisplayFamily(context, inputGateway.openVdmSession(producerLifetime, sessionToken))
             return family.create(name, surface, width, height, density, flags, parent = true)
@@ -37,7 +37,7 @@ internal class DelegatedDesktopRuntime(private val context: Context, private val
 
     override fun createChildDisplay(parent: OwnedDesktopDisplay, name: String, surface: Surface,
         width: Int, height: Int, density: Int): OwnedDesktopDisplay {
-        val flags = EmbeddedDisplayPolicy.displayFlags(Build.VERSION.SDK_INT, independentLock)
+        val flags = EmbeddedDisplayPolicy.displayFlags(Build.VERSION.SDK_INT, independentLock, DelegatedDesktopAccess.trustedDisplay(context))
         return parent.family?.create(name, surface, width, height, density, flags, parent = false)
             ?: LocalDesktopDisplay(create(name, surface, width, height, density, flags), parent.nativeLifetime)
     }
@@ -61,20 +61,22 @@ internal class DelegatedDesktopRuntime(private val context: Context, private val
         inputGateway.injectInput(id, checkNotNull(inputLeases[id]) { "Экран ввода уже закрыт" }, event, actionButton)
     }
 
-    override fun registerParentDisplay(id: Int, token: IBinder, width: Int, height: Int) {
+    override fun registerParentDisplay(owned: OwnedDesktopDisplay, token: IBinder, width: Int, height: Int) {
+        val id = owned.display.displayId
         check(id > 0 && !inputLeases.containsKey(id)) { "Неверный собственный экран ввода" }
         // Remember before IPC: if registration succeeded but its reply was lost, cleanup
         // must still revoke this exact token before releasing the producer.
         inputLeases[id] = token
-        inputGateway.registerParent(id, token, width, height)
+        inputGateway.registerParent(id, token, width, height, (owned as? LocalDesktopDisplay)?.presentation)
     }
 
-    override fun registerChildDisplay(parentId: Int, id: Int, token: IBinder, width: Int, height: Int, fullscreen: Boolean) {
+    override fun registerChildDisplay(parentId: Int, owned: OwnedDesktopDisplay, token: IBinder, width: Int, height: Int, fullscreen: Boolean) {
+        val id = owned.display.displayId
         EmbeddedDisplayPolicy.requireChildId(id, parentId)
         check(inputLeases.containsKey(parentId) && !inputLeases.containsKey(id)) { "Родительский экран ввода уже закрыт" }
         inputLeases[id] = token
-        if (fullscreen) inputGateway.registerFullscreenChild(parentId, id, token, width, height)
-        else inputGateway.registerChild(parentId, id, token, width, height)
+        if (fullscreen) inputGateway.registerFullscreenChild(parentId, id, token, width, height, (owned as? LocalDesktopDisplay)?.presentation)
+        else inputGateway.registerChild(parentId, id, token, width, height, (owned as? LocalDesktopDisplay)?.presentation)
     }
 
     override fun resizeRegisteredDisplay(id: Int, token: IBinder, width: Int, height: Int) {
@@ -90,7 +92,8 @@ internal class DelegatedDesktopRuntime(private val context: Context, private val
 
     override fun launchDesktop(mode: Int, id: Int) {
         val component = DelegatedDesktopPolicy.desktopComponent(mode, id, context.packageName)
-        launch(id, ComponentName(component.packageName, component.className), component.ownActivity, requireLauncher = false,
+        val activity = if (mode == DesktopModePolicy.DRIVEDECK) DesktopModePolicy.driveDeckHome(context) else component.className
+        launch(id, ComponentName(component.packageName, activity), component.ownActivity, requireLauncher = false,
             secondaryHome = mode == DesktopModePolicy.SAMSUNG_DEX)
     }
 

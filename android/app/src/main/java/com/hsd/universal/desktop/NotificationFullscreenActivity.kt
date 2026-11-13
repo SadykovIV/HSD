@@ -1,5 +1,9 @@
 package com.hsd.universal.desktop
 
+import androidx.core.view.WindowCompat
+import com.hsd.universal.compat.hostDisplay
+import com.hsd.universal.compat.hideDesktopBars
+
 import android.app.Activity
 import android.content.Intent
 import android.graphics.Color
@@ -9,7 +13,6 @@ import android.os.Bundle
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
-import android.view.WindowInsets
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.ImageButton
@@ -27,7 +30,7 @@ class NotificationFullscreenActivity : Activity() {
     private var mode = -1
     @Volatile internal var launchVisible = false
         private set
-    private val parentId get() = display?.displayId ?: -1
+    private val parentId get() = hostDisplay?.displayId ?: -1
     private fun current() = proof?.let { EmbeddedSessionRegistry.isCurrentParent(parentId, it) } == true
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -38,7 +41,7 @@ class NotificationFullscreenActivity : Activity() {
         if (mode != DesktopModePolicy.ANDROID_DESKTOP && mode != DesktopModePolicy.DRIVEDECK) { finish(); return }
         setShowWhenLocked(true)
         if (Build.VERSION.SDK_INT == 33) window.addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
-        window.setDecorFitsSystemWindows(false)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         val root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
         pane = DesktopAppPane(this, onOpened = {}, onHome = ::home,
             onError = { Toast.makeText(this, getString(R.string.desktop_notification_is_no_longer_available_or_the_application_has), Toast.LENGTH_LONG).show(); home() },
@@ -62,7 +65,7 @@ class NotificationFullscreenActivity : Activity() {
         if (!current()) { finish(); return }
         launchVisible = true
         hardwareBack?.resume()
-        window.insetsController?.hide(WindowInsets.Type.systemBars())
+        window.hideDesktopBars()
         if (::pane.isInitialized) pane.refreshBuffer()
     }
     override fun onPause() {

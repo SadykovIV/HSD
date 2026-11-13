@@ -5,10 +5,15 @@ import android.bluetooth.BluetoothManager
 import android.net.InetAddresses
 import net.prototux.aare.aap.AapLog
 import net.prototux.aare.aap.Transport
+import net.prototux.aare.aap.PhoneIdentity
+import net.prototux.aare.aap.wireless.WirelessBootstrap
+import net.prototux.aare.aap.wireless.WirelessBootstrapException
 import net.prototux.aare.transport.wireless.WirelessConnector
+import net.prototux.aare.transport.wireless.ProjectionNetworkDenied
 import com.hsd.universal.carplay.CarPlayRecovery
 import com.hsd.universal.dex.DexSetupActivity
 import com.hsd.universal.ui.Actions
+import com.hsd.universal.ui.UsbDetachPolicy
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -54,7 +59,10 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
     }
     private val detached = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            if (device != null && usb.autoAccessory() == null) {
+            if (isInitialStickyBroadcast || device == null ||
+                intent.action == UsbDetachPolicy.USB_STATE && intent.getBooleanExtra("connected", true)) return
+            val present = runCatching { usb.autoAccessory() != null }.getOrNull()
+            if (UsbDetachPolicy.confirmedDetached(true, present, UsbDetachPolicy.cableConnected(context))) {
                 com.hsd.universal.dex.DesktopMusicPlayback.physicalDetach(this@AutoEndpoint)
                 Actions.onUsbDetached(service)
                 finish(service.getString(R.string.wl_usb_to_air_title))
@@ -65,7 +73,9 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
     init {
         getSystemService(NotificationManager::class.java)!!.createNotificationChannel(
             NotificationChannel(CHANNEL, service.getString(R.string.desktop_head_unit_projection), NotificationManager.IMPORTANCE_LOW))
-        registerReceiver(detached, IntentFilter(UsbManager.ACTION_USB_ACCESSORY_DETACHED), RECEIVER_EXPORTED)
+        registerReceiver(detached, IntentFilter(UsbManager.ACTION_USB_ACCESSORY_DETACHED).apply {
+            addAction(UsbDetachPolicy.USB_STATE)
+        }, RECEIVER_NOT_EXPORTED)
     }
 
     override fun start(intent: Intent?, startId: Int): Int {
@@ -124,9 +134,9 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
                     carPlay(lifetime, publish, ended)
                 } else {
                     val identity = ProjectionIdentity(this)
-                    val (transport, peer) = openAuto(mode, attached, lifetime,identity)
+                    val (transport, peer, phone) = openAuto(mode, attached, lifetime, identity)
                     lifetime.own(transport::close)
-                    AutoProjection(this, transport, identity.phone(peer), identity, peer, publish, ended) {
+                    AutoProjection(this, transport, phone, identity, peer, publish, ended) {
                         main.post {
                             if (mode == ProjectionRoute.USB && ticket == generation && !stopping && !CarLifeState.running) {
                                 CarLifeState.running = true
@@ -143,43 +153,61 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
                     } else lifetime.close()
                 }
             } catch (error: Exception) {
-                val transient = error is java.io.IOException && error !is javax.net.ssl.SSLException ||
-                    error is net.prototux.aare.aap.wireless.WirelessBootstrapException && error.whileNegotiating
-                main.post { if (ticket == generation) complete(service.getString(R.string.desktop_could_not_connect, error.message), transient) }
+                val interruptedExchange = error is WirelessBootstrapException && error.interruptedExchange
+                val transient = interruptedExchange || error is java.io.IOException &&
+                    error !is javax.net.ssl.SSLException && error !is ProjectionNetworkDenied
+                main.post {
+                    if (ticket != generation) return@post
+                    if (mode == ProjectionRoute.WIRELESS_AA && interruptedExchange && reconnectUntil == 0L)
+                        reconnectUntil = android.os.SystemClock.elapsedRealtime() + 30_000L
+                    complete(service.getString(R.string.desktop_could_not_connect, error.message), transient)
+                }
             }
         }
     }
 
-    private fun openAuto(mode: ProjectionRoute, attached: UsbAccessory?, lifetime: ProjectionResources, identity: ProjectionIdentity): Pair<Transport,String> {
+    private data class AutoConnection(val transport: Transport, val peer: String, val phone: PhoneIdentity)
+
+    private fun openAuto(mode: ProjectionRoute, attached: UsbAccessory?, lifetime: ProjectionResources, identity: ProjectionIdentity): AutoConnection {
         val settings = ProjectionRoute.prefs(this)
         return when (mode) {
             ProjectionRoute.USB -> {
                 val accessory = checkNotNull(attached)
-                val id = identity.usbPeer(accessory)
-                UsbAccessoryTransport(usb, accessory) to id
+                val peer = identity.usbPeer(accessory)
+                val phone = identity.phone(peer)
+                AutoConnection(UsbAccessoryTransport(usb, accessory), peer, phone)
             }
             ProjectionRoute.LAN_SERVER -> {
                 val ip = InetAddresses.parseNumericAddress(settings.getString("lanPeer", null)
                     ?: error(service.getString(R.string.desktop_enter_the_head_unit_s_ip_address_in_connection)))
+                val peer = "lan|${ip.hostAddress}"
+                val phone = identity.phone(peer)
                 val listener = HeadUnitListener(ip)
                 lifetime.own(listener::close)
-                listener.use { it.accept() } to "lan|${ip.hostAddress}"
+                AutoConnection(listener.use { it.accept() }, peer, phone)
             }
             ProjectionRoute.LAN_CLIENT -> {
                 val address = InetAddresses.parseNumericAddress(settings.getString("lanPeer", null)
                     ?: error(service.getString(R.string.desktop_enter_the_head_unit_s_ip_address_in_connection)))
                 val port = settings.getInt("lanPort", 5288)
+                val peer = "lan|${address.hostAddress}"
+                val phone = identity.phone(peer)
                 val socket = localSocketFor(getSystemService(android.net.ConnectivityManager::class.java)!!, address)
                 lifetime.own(socket::close)
                 socket.connect(java.net.InetSocketAddress(address, port), 8000)
-                net.prototux.aare.aap.SocketTransport(socket, "Android Auto LAN · ${address.hostAddress}:$port") to "lan|${address.hostAddress}"
+                AutoConnection(net.prototux.aare.aap.SocketTransport(socket, "Android Auto LAN · ${address.hostAddress}:$port"), peer, phone)
             }
             ProjectionRoute.WIRELESS_AA -> {
                 val address = settings.getString("bluetoothPeer", null) ?: error(service.getString(R.string.desktop_select_a_paired_head_unit))
                 val bluetooth = getSystemService(BluetoothManager::class.java)?.adapter ?: error(service.getString(R.string.desktop_bluetooth_unavailable))
-                val attempt = WirelessConnector(this, protocolLog).Attempt(bluetooth.getRemoteDevice(address))
+                val peer = "bt|$address"
+                val phone = identity.phone(peer)
+                val description = phone.projectionDescription()
+                val options = WirelessConnector.Options(bootstrap = WirelessBootstrap.Options(
+                    instanceId = description.instanceId, deviceName = description.deviceName))
+                val attempt = WirelessConnector(this, protocolLog, options).Attempt(bluetooth.getRemoteDevice(address))
                 lifetime.own(attempt::abort)
-                attempt.run() to "bt|$address"
+                AutoConnection(attempt.run(), peer, phone)
             }
             else -> error(service.getString(R.string.desktop_this_connection_does_not_use_android_auto, mode.label(service)))
         }
@@ -280,6 +308,7 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
         retryPending = false
         CarLifeState.running = false
         unregisterReceiver(detached)
+        com.hsd.universal.dex.DesktopMusicPlayback.serviceDestroyed(this, false)
         projection?.stop(getString(R.string.desktop_connection_stopped))
         resources?.close()
         worker.shutdownNow()

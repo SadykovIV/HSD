@@ -3,8 +3,8 @@ package com.hsd.universal.dex
 /** Limits for the two navigator tiles. Independent of phone display settings and parent geometry. */
 internal object EmbeddedDisplayPolicy {
     const val MAX_CHILDREN = 2
-    @JvmOverloads fun displayFlags(sdkInt: Int, independentLock: Boolean = false): Int =
-        DesktopModePolicy.displayFlags(DesktopModePolicy.DRIVEDECK, sdkInt, independentLock)
+    @JvmOverloads fun displayFlags(sdkInt: Int, independentLock: Boolean = false, trusted: Boolean = true): Int =
+        DesktopModePolicy.displayFlags(DesktopModePolicy.DRIVEDECK, sdkInt, independentLock, trusted)
     private const val LONG_EDGE = com.hsd.universal.shared.DesktopRenderPolicy.LONG_EDGE
     private const val SHORT_EDGE = com.hsd.universal.shared.DesktopRenderPolicy.SHORT_EDGE
     const val MAX_DENSITY = 1280

@@ -19,6 +19,7 @@ import kotlin.system.exitProcess
 
 /** Shell-owned process launched only after explicit app activation. No TCP ADB changes. */
 @Keep
+@android.annotation.TargetApi(37)
 class VdmHostMain private constructor(private val args: VdmHostPolicy.Args) {
     private var core: VdmHostCore? = null
     private var appUid = -1

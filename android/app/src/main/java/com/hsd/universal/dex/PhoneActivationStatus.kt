@@ -33,7 +33,7 @@ object PhoneActivationStatus {
         val partial = phase == PhoneActivationPolicy.READY_WITHOUT_PANEL
         if (phase == "READY" || partial) {
             val ready = DelegatedDesktopAccess.isReady(context) &&
-                (!request.optBoolean("audio") || DesktopAudioAccess.hasPermission(context)) &&
+                (!request.optBoolean("audio") || DesktopAudioAccess.hasPermission(context) || DesktopAudioAccess.unsupportedThisActivation) &&
                 (if (partial) request.optBoolean("screen") && DelegatedPanelAccess.unsupportedThisActivation
                  else !request.optBoolean("screen") || DelegatedPanelAccess.hasPermission(context))
             return if (ready) Snapshot(Phase.READY, if (partial) PhoneActivationPolicy.PANEL_MESSAGE else "Доступ включён на телефоне", started, activationBinding = binding)

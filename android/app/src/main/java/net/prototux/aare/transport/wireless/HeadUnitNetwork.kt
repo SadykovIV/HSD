@@ -15,13 +15,16 @@ import android.net.wifi.WifiManager
 import android.net.wifi.WifiNetworkSpecifier
 import android.os.Build
 import android.annotation.TargetApi
+import com.hsd.universal.R
 import net.prototux.aare.aap.AapLog
 import net.prototux.aare.aap.wireless.JoinResult
 import net.prototux.aare.aap.wireless.WifiCredentials
 import net.prototux.aare.aap.wireless.WifiSecurity
 import net.prototux.aare.aap.wireless.WppStatus
+import java.io.IOException
 import java.net.Inet4Address
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CancellationException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 
@@ -47,6 +50,7 @@ internal class HeadUnitNetwork(
     private val context = context.applicationContext
     private val connectivity = context.getSystemService(ConnectivityManager::class.java)
     private val wifi = context.getSystemService(WifiManager::class.java)
+    private val access = ProjectionNetworkAccess(this.context)
 
     /** The joined network; null until [join] succeeded. */
     @Volatile var network: Network? = null
@@ -57,7 +61,7 @@ internal class HeadUnitNetwork(
     @Volatile var onLost: (() -> Unit)? = null
 
     private var callback: ConnectivityManager.NetworkCallback? = null
-    @Volatile private var pending: CompletableFuture<JoinResult>? = null
+    @Volatile private var pending: CompletableFuture<*>? = null
     @Volatile private var released = false
 
     /** Blocks until the phone has an IPv4 address on the head unit's network, or fails. */
@@ -78,37 +82,33 @@ internal class HeadUnitNetwork(
         }
         val request = NetworkRequest.Builder()
             .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
             .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .setNetworkSpecifier(specifier)
             .build()
-        val result = CompletableFuture<JoinResult>()
+        val result = CompletableFuture<Pair<Network, LinkProperties>?>()
         pending = result
         val cb = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(n: Network) {
                 log.i("wireless: \"${credentials.ssid}\" available as $n")
-                network = n
-                connectivity.getLinkProperties(n)?.let { if (localAddress(it) != null) result.complete(joined(it)) }
+                if (!released) network = n
             }
 
             // onAvailable can come before DHCP results are visible; wait for an IPv4 address.
             override fun onLinkPropertiesChanged(n: Network, lp: LinkProperties) {
-                if (n == network && localAddress(lp) != null) result.complete(joined(lp))
+                if (n == network && localAddress(lp) != null) result.complete(n to lp)
             }
 
             // Not found within the timeout, or the user declined the dialog.
             override fun onUnavailable() {
-                result.complete(JoinResult.Failed(WppStatus.WIFI_NETWORK_UNAVAILABLE,
-                    "network \"${credentials.ssid}\" not found, or the connection request was declined"))
+                result.complete(null)
             }
 
             override fun onLost(n: Network) {
                 if (n != network) return
                 log.w("wireless: lost the head unit's network \"${credentials.ssid}\"")
-                if (!result.isDone) {
-                    network = null
-                } else {
-                    onLost?.invoke()
-                }
+                network = null
+                if (!result.complete(null)) onLost?.invoke()
             }
         }
         callback = cb
@@ -119,7 +119,18 @@ internal class HeadUnitNetwork(
             return JoinResult.Failed(WppStatus.WIFI_NETWORK_UNAVAILABLE, "cancelled")
         }
         return try {
-            result.get(timeoutMs + 5_000, TimeUnit.MILLISECONDS)
+            val (target, properties) = result.get(timeoutMs + 5_000, TimeUnit.MILLISECONDS)
+                ?: return JoinResult.Failed(WppStatus.WIFI_NETWORK_UNAVAILABLE,
+                    context.getString(R.string.projection_wifi_unavailable))
+            // The callback and DHCP do not grant this UID permission to bind. Verify before
+            // telling the head unit SUCCESS, using the same socket operation as projection.
+            access.socket(target).use { }
+            if (network == target && !released) joined(properties)
+            else JoinResult.Failed(WppStatus.WIFI_NETWORK_UNAVAILABLE, context.getString(R.string.projection_wifi_lost))
+        } catch (error: IOException) {
+            JoinResult.Failed(WppStatus.WIFI_NETWORK_UNAVAILABLE, error.message.orEmpty())
+        } catch (_: CancellationException) {
+            JoinResult.Failed(WppStatus.WIFI_NETWORK_UNAVAILABLE, "cancelled")
         } catch (e: TimeoutException) {
             JoinResult.Failed(WppStatus.WIFI_NETWORK_UNAVAILABLE, "no address on \"${credentials.ssid}\" after ${timeoutMs / 1000} s")
         }
@@ -128,7 +139,7 @@ internal class HeadUnitNetwork(
     /** Drops the network request (Android then disconnects from the head unit). Idempotent. */
     fun release() {
         released = true
-        pending?.complete(JoinResult.Failed(WppStatus.WIFI_NETWORK_UNAVAILABLE, "cancelled"))
+        pending?.cancel(false)
         callback?.let { runCatching { connectivity.unregisterNetworkCallback(it) } }
         callback = null
         network = null
@@ -237,12 +248,15 @@ internal class HeadUnitNetwork(
         val found = CompletableFuture<Network>()
         val listen = NetworkRequest.Builder()
             .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+            .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
             .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .build()
         val cb = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             // Since Android 12 the SSID is only in the capabilities' WifiInfo, and only with this flag.
             object : ConnectivityManager.NetworkCallback(ConnectivityManager.NetworkCallback.FLAG_INCLUDE_LOCATION_INFO) {
                 override fun onCapabilitiesChanged(n: Network, caps: NetworkCapabilities) {
+                    if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) ||
+                        !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_RESTRICTED)) return
                     val info = caps.transportInfo as? WifiInfo ?: return
                     val securityMatches = when (c.security) {
                         WifiSecurity.WPA2_PERSONAL -> info.currentSecurityType == WifiInfo.SECURITY_TYPE_PSK
@@ -273,16 +287,32 @@ internal class HeadUnitNetwork(
             runCatching { connectivity.unregisterNetworkCallback(cb) }
             return null
         }
-        // Keep the listen callback for the session: it reports when that network goes away.
+        // A passive callback can see a network that this UID cannot use. Ask Android
+        // for our own specifier request in that case.
+        try {
+            access.socket(n).use { }
+        } catch (error: IOException) {
+            runCatching { connectivity.unregisterNetworkCallback(cb) }
+            if (error is ProjectionNetworkDenied && access.vpnActive())
+                return JoinResult.Failed(WppStatus.WIFI_NETWORK_UNAVAILABLE, error.message.orEmpty())
+            log.i("wireless: existing Wi-Fi could not be bound (${error.javaClass.simpleName}); requesting a session network")
+            return null
+        }
         log.i("wireless: already connected to \"$ssid\", using that network")
         network = n
         callback = cb
+        if (released || connectivity.getLinkProperties(n) == null) {
+            runCatching { connectivity.unregisterNetworkCallback(cb) }
+            network = null
+            return null
+        }
         return joined(lp)
     }
 
     private fun onExistingLost(n: Network, found: CompletableFuture<Network>) {
         if (n != network || !found.isDone) return
         log.w("wireless: lost the head unit's network \"$ssid\"")
+        network = null
         onLost?.invoke()
     }
 

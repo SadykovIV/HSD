@@ -27,12 +27,17 @@ object DelegatedDesktopAccess {
 
     val ownsActivation: Boolean get() = bootstrap.hasOwner()
 
+    internal fun trustedDisplay(context: Context) = android.os.Build.VERSION.SDK_INT >= 30 &&
+        context.checkSelfPermission(ADD_TRUSTED_DISPLAY) == PackageManager.PERMISSION_GRANTED
+
+    internal fun supportsDisplay(context: Context) = android.os.Build.VERSION.SDK_INT < 33 || trustedDisplay(context)
+
     /** Also usable in the separate app-UID producer process, which has no bootstrap registry. */
     fun hasPermissions(context: Context): Boolean = runCatching {
-        context.checkSelfPermission(ADD_TRUSTED_DISPLAY) == PackageManager.PERMISSION_GRANTED &&
+        supportsDisplay(context) &&
             context.checkSelfPermission(INJECT_EVENTS) == PackageManager.PERMISSION_GRANTED &&
             context.checkSelfPermission(REAL_GET_TASKS) == PackageManager.PERMISSION_GRANTED &&
-            context.checkSelfPermission(MEDIA_CONTENT_CONTROL) == PackageManager.PERMISSION_GRANTED
+            (android.os.Build.VERSION.SDK_INT < 33 || context.checkSelfPermission(MEDIA_CONTENT_CONTROL) == PackageManager.PERMISSION_GRANTED)
     }.getOrDefault(false)
 
     /** Optional capability; unsupported lock isolation never invalidates ordinary activation. */

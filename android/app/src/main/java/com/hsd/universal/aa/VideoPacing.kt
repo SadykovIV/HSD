@@ -4,7 +4,7 @@ package com.hsd.universal.aa
 class LinkVideoStats(
     /** Скорость слива очереди в USB, байт/с (0 = ещё не измерена). */
     val drainBytesPerSec: Double,
-    /** Байты видео в очереди / скорость слива, мс. */
+    /** Оценка задержки отправителя, включая время незавершённой записи, мс. */
     val backlogMs: Long,
     val queueFrames: Int,
     val queueBytes: Long,

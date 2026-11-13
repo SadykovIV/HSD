@@ -29,7 +29,7 @@ import java.util.concurrent.atomic.AtomicLong
  * (kRepeatLastFrameCount) и умолкает: на статичном экране AA через секунду ГУ остался бы без кадров.
  */
 class GlRelay(
-    private val outSurface: Surface,
+    private val outSurface: Surface?,
     private val width: Int,
     private val height: Int,
     private val idleRedrawMs: Long = 100,
@@ -43,7 +43,11 @@ class GlRelay(
     limitHighFps: Boolean = false,
     preserveSourceTimestamps: Boolean = false,
     private val viewport: VideoViewport? = null,
+    private val imageSink: ((Long) -> Unit)? = null,
+    private val onImageError: (String) -> Unit = {},
 ) {
+    class SurfaceSize(actual: IntArray, width: Int, height: Int) :
+        IllegalStateException("Encoder EGL surface is ${actual[0]}×${actual[1]}, requested ${width}×${height}")
     private val gate = FrameGate(targetFps, limitHighFps)
     private val sourceClock = if (preserveSourceTimestamps) SurfaceFrameClock() else null
     private val thread = HandlerThread("aa-gl-relay")
@@ -86,6 +90,7 @@ class GlRelay(
     private var lastFreshNs = 0L
     @Volatile private var released = false
     private var lastDrawNs = 0L
+    private var imageFailed = false
     @Volatile private var initError: Throwable? = null
 
     /** Сюда декодер выводит кадры. */
@@ -127,6 +132,7 @@ class GlRelay(
         }
         initError?.let {
             stop()
+            if (it is SurfaceSize) throw it
             throw IllegalStateException("инициализация GL: ${it.message}", it)
         }
         handler.postDelayed(tick, 20)
@@ -244,15 +250,22 @@ class GlRelay(
         check(EGL14.eglInitialize(display, ver, 0, ver, 1)) { "eglInitialize" }
         val cfgAttrs = intArrayOf(
             EGL14.EGL_RED_SIZE, 8, EGL14.EGL_GREEN_SIZE, 8, EGL14.EGL_BLUE_SIZE, 8, EGL14.EGL_ALPHA_SIZE, 8,
-            EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT, EGL_RECORDABLE_ANDROID, 1, EGL14.EGL_NONE,
-        )
+            EGL14.EGL_SURFACE_TYPE, if (imageSink == null) EGL14.EGL_WINDOW_BIT else EGL14.EGL_PBUFFER_BIT,
+            EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
+        ) + if (imageSink == null) intArrayOf(EGL_RECORDABLE_ANDROID, 1, EGL14.EGL_NONE) else intArrayOf(EGL14.EGL_NONE)
         val cfgs = arrayOfNulls<EGLConfig>(1)
         val n = IntArray(1)
         check(EGL14.eglChooseConfig(display, cfgAttrs, 0, cfgs, 0, 1, n, 0) && n[0] > 0) { "eglChooseConfig" }
         context = EGL14.eglCreateContext(display, cfgs[0], EGL14.EGL_NO_CONTEXT, intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 2, EGL14.EGL_NONE), 0)
         check(context != EGL14.EGL_NO_CONTEXT) { "eglCreateContext" }
-        eglSurface = EGL14.eglCreateWindowSurface(display, cfgs[0], outSurface, intArrayOf(EGL14.EGL_NONE), 0)
-        check(eglSurface != EGL14.EGL_NO_SURFACE) { "eglCreateWindowSurface" }
+        eglSurface = if (imageSink == null) EGL14.eglCreateWindowSurface(display, cfgs[0], checkNotNull(outSurface),
+            intArrayOf(EGL14.EGL_NONE), 0)
+        else EGL14.eglCreatePbufferSurface(display, cfgs[0], intArrayOf(EGL14.EGL_WIDTH, width, EGL14.EGL_HEIGHT, height, EGL14.EGL_NONE), 0)
+        check(eglSurface != EGL14.EGL_NO_SURFACE) { "Cannot create encoder EGL surface" }
+        val dimensions = IntArray(2)
+        check(EGL14.eglQuerySurface(display, eglSurface, EGL14.EGL_WIDTH, dimensions, 0) &&
+            EGL14.eglQuerySurface(display, eglSurface, EGL14.EGL_HEIGHT, dimensions, 1)) { "Cannot query encoder EGL surface" }
+        if (dimensions[0] != width || dimensions[1] != height) throw SurfaceSize(dimensions, width, height)
         check(EGL14.eglMakeCurrent(display, eglSurface, eglSurface, context)) { "eglMakeCurrent" }
 
         program = buildProgram(VERTEX, FRAGMENT)
@@ -344,8 +357,19 @@ class GlRelay(
         lastDrawNs = SystemClock.elapsedRealtimeNanos()
         // Native input keeps the source buffer PTS, including time spent waiting for GL/FPS.
         // AA retains its existing relay-time behavior because decoder timestamps are media time.
-        EGLExt.eglPresentationTimeANDROID(display, eglSurface, sourcePts ?: System.nanoTime())
-        EGL14.eglSwapBuffers(display, eglSurface)
+        val pts = sourcePts ?: System.nanoTime()
+        if (imageSink != null) {
+            if (!imageFailed) try {
+                imageSink.invoke(pts)
+            } catch (e: Exception) {
+                imageFailed = true
+                onImageError(e.message ?: e.javaClass.simpleName)
+            }
+        }
+        else {
+            EGLExt.eglPresentationTimeANDROID(display, eglSurface, pts)
+            EGL14.eglSwapBuffers(display, eglSurface)
+        }
     }
 
     private fun buildProgram(vs: String, fs: String): Int {

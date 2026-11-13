@@ -33,23 +33,36 @@ import java.util.concurrent.TimeUnit
 class DriveDeckAapProbe : Instrumentation() {
     private var checkCertificates = false
     private var wirelessReceiver = false
+    private var wirelessSsid = "HSD-QA"
+    private var wirelessPassword = "hsd-avd-wireless"
+    private var usbMusic = false
     private var carPlayRadio: Bundle? = null
     private var carLifeUsbPort: Int? = null
     private var carLifeHudPort: Int? = null
     private var carLifeGesturePort: Int? = null
     private var carPlay = false
+    private var bonjour = false
     private var shizuku = false
     private var modern = false
     private var screen: ProjectionScreenCase? = null
     private var displayOnly = false
+    private var authRefusal: Int? = null
+    private var silentAuth = false
+    private var v4 = false
+    private var checkUsbWait = false
+    private var networkPolicy: String? = null
     private var oldUsbFrames = 0
     private var hevc = false
     override fun onCreate(arguments: Bundle?) {
         super.onCreate(arguments)
         checkCertificates = arguments?.getString("protocol") == "certificates"
         wirelessReceiver = arguments?.getString("protocol") == "wireless-receiver"
+        wirelessSsid = arguments?.getString("ssid") ?: wirelessSsid
+        wirelessPassword = arguments?.getString("pass") ?: wirelessPassword
+        usbMusic = arguments?.getString("protocol") == "usb-music-pause"
         carPlayRadio = arguments?.takeIf { it.getString("protocol") in setOf("carplay-radio-receiver", "carplay-radio-sender") }
         carPlay = arguments?.getString("protocol") == "carplay"
+        bonjour = arguments?.getString("protocol") == "carplay-discovery"
         if (arguments?.getString("protocol") == "carlife-usb")
             carLifeUsbPort = arguments.getString("fixturePort")?.toInt() ?: 7240
         if (arguments?.getString("protocol") == "carlife-hud")
@@ -58,10 +71,16 @@ class DriveDeckAapProbe : Instrumentation() {
             carLifeGesturePort = requireNotNull(arguments.getString("fixturePort")).toInt()
         shizuku = arguments?.getString("backend") == "shizuku"
         modern = arguments?.getString("protocol") == "6.1"
+        v4 = arguments?.getString("protocol") == "4.0"
+        checkUsbWait = arguments?.getString("protocol") == "usb-wait"
+        networkPolicy = arguments?.getString("networkPolicy")
         hevc = arguments?.getString("codec") == "h265"
         val name = arguments?.getString("screen")
         displayOnly = name?.endsWith("-display") == true
         screen = name?.removeSuffix("-display")?.let(ProjectionScreenCase::named)
+        val auth = arguments?.getString("authRefusal")
+        silentAuth = auth == "silent"
+        if (!silentAuth) authRefusal = auth?.toInt()?.also { require(it < 0) }
         oldUsbFrames = arguments?.getString("oldUsbFrames")?.toInt() ?: 0
         start()
     }
@@ -71,6 +90,57 @@ class DriveDeckAapProbe : Instrumentation() {
         try {
             check(Build.HARDWARE in listOf("ranchu", "goldfish")) { "Disposable emulator required" }
             val context = targetContext
+            networkPolicy?.let { state ->
+                // A WifiNetworkSpecifier request requires a foreground owner on Android 10+.
+                startActivitySync(Intent(context, ProjectionSettingsActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                val access = net.prototux.aare.transport.wireless.ProjectionNetworkAccess(context)
+                val manager = context.getSystemService(android.net.ConnectivityManager::class.java)
+                @Suppress("DEPRECATION")
+                val wifi = manager.allNetworks.first { network ->
+                    val caps = manager.getNetworkCapabilities(network)
+                    caps?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) == true &&
+                        !caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN)
+                }
+                val deny = state == "vpn"
+                check(access.vpnActive() == deny) { "Unexpected VPN state" }
+                if (deny) {
+                    val error = runCatching { access.socket(wifi).use { } }.exceptionOrNull()
+                    check(error is net.prototux.aare.transport.wireless.ProjectionNetworkDenied &&
+                        error.message == context.getString(R.string.projection_network_vpn)) { "Expected Wi-Fi binding denial, got $error" }
+                    result.putString("WiFi_policy", "VPN active: ${error.cause?.message}; HSD reported VPN policy")
+                } else {
+                    access.socket(wifi).use { }
+                    result.putString("WiFi_policy", "Wi-Fi bind permitted")
+                }
+                val network = net.prototux.aare.transport.wireless.HeadUnitNetwork(context, net.prototux.aare.aap.AapLog.Stdout, 20000)
+                try {
+                    val credentials = net.prototux.aare.aap.wireless.WifiCredentials(wirelessSsid, wirelessPassword,
+                        null, net.prototux.aare.aap.wireless.WifiSecurity.WPA2_PERSONAL, 2, null)
+                    val joined = network.join(credentials)
+                    if (deny) check(joined is net.prototux.aare.aap.wireless.JoinResult.Failed &&
+                        joined.message == context.getString(R.string.projection_network_vpn)) { "Unexpected join result: $joined" }
+                    else {
+                        check(joined is net.prototux.aare.aap.wireless.JoinResult.Joined) {
+                            (joined as? net.prototux.aare.aap.wireless.JoinResult.Failed)?.message.orEmpty()
+                        }
+                        access.socket(checkNotNull(network.network)).use { }
+                    }
+                    result.putString("WiFi_join", if (deny) "Refused before reporting success to head unit" else "Accessible head unit network selected")
+                } finally {
+                    network.release()
+                }
+                finish(Activity.RESULT_OK, result); return
+            }
+            if (bonjour) {
+                checkCarPlayDiscovery(context)
+                result.putString("CarPlay_Bonjour", "Selected the CarPlay receiver among three AirPlay services")
+                finish(Activity.RESULT_OK, result); return
+            }
+            if (usbMusic) {
+                UsbMusicPauseProbe(this).run()
+                result.putString("usb_music", "camera kept playing; unplug paused once")
+                finish(Activity.RESULT_OK, result); return
+            }
             carLifeGesturePort?.let { port ->
                 result.putString("gesture", checkCarLifeGestureAudio(port))
                 result.putString("result", "PASS")
@@ -87,7 +157,7 @@ class DriveDeckAapProbe : Instrumentation() {
                 finish(Activity.RESULT_OK, checkReceiverIdentities(context)); return
             }
             if (wirelessReceiver) {
-                result.putAll(WirelessHeadUnitProbe(context).run()); finish(Activity.RESULT_OK,result);return
+                result.putAll(WirelessHeadUnitProbe(context, wirelessSsid, wirelessPassword).run()); finish(Activity.RESULT_OK,result);return
             }
             carPlayRadio?.let { args ->
                 val probe = CarPlayRadioProbe(context,args) {
@@ -123,10 +193,30 @@ class DriveDeckAapProbe : Instrumentation() {
                         if (shizuku) useShizuku = true else useDelegated = true
                         usbPlaybackAudio = !shizuku
                     }
+                    if (checkUsbWait) {
+                        val actions = com.hsd.universal.ui.Actions
+                        check(context.getSystemService(android.hardware.usb.UsbManager::class.java).accessoryList.isNullOrEmpty())
+                        val bus = com.hsd.universal.ui.UsbBusState.read(context.registerReceiver(null,
+                            android.content.IntentFilter(com.hsd.universal.ui.UsbDetachPolicy.USB_STATE)))
+                        val route = ProjectionRoute.selected(context)
+                        check(route.wired)
+                        val waiting = actions.scan(context, "emulator USB enumeration")
+                        check(waiting.state == com.hsd.universal.ui.Actions.UsbScanState.WAITING_FOR_ACCESSORY &&
+                            waiting.detail == context.getString(bus.waitingMessage(), route.protocol)) { waiting.toString() }
+                        actions.stopBridge(context)
+                        actions.onUsbSessionClosed(context)
+                        check(actions.lastUsbResult.detail == context.getString(R.string.desktop_connection_stopped))
+                        result.putString("USB_wait", waiting.detail)
+                        finish(Activity.RESULT_OK, result); return
+                    }
                     check(installedDriveDeck(context)) { "Install the matching DriveDeck companion" }
-                    val fixtureApps = setOf("com.android.settings", "com.google.android.deskclock")
+                    val clock = listOf("com.google.android.deskclock", "com.android.deskclock").first {
+                        context.packageManager.getLaunchIntentForPackage(it) != null
+                    }
+                    val fixtureApps = setOf("com.android.settings", clock)
                     fun splitReady(display: Int) = tasks(context).let { activities ->
-                        activities.any { it.first == display && it.second == DesktopModePolicy.DRIVEDECK_HOME_CLASS } &&
+                        val home = if (shizuku) DesktopModePolicy.DRIVEDECK_HOME_CLASS else DesktopModePolicy.driveDeckHome(context)
+                        activities.any { it.first == display && it.second == home } &&
                             activities.filter { it.first > 0 && it.first != display }.map { it.third }.containsAll(fixtureApps)
                     }
                     carLifeUsbPort?.let { port ->
@@ -164,13 +254,33 @@ class DriveDeckAapProbe : Instrumentation() {
                     val closed = CountDownLatch(1)
                     val test = screen
                     file.outputStream().buffered().use videoTest@{ video ->
-                        val hu = HeadUnitSimulator(car, width = test?.panelW ?: 1280, height = test?.panelH ?: 720,
+                        val rejected = authRefusal
+                        val sender = identity.phone("qa-wired")
+                        val receiverClock = when (rejected) {
+                            -23 -> java.util.Date(sender.certificate.notBefore.time - 1000)
+                            -24 -> java.util.Date(sender.certificate.notAfter.time + 1000)
+                            else -> null
+                        }
+                        val hu = HeadUnitSimulator(car, authorizationStatus = if (silentAuth) null else if (receiverClock != null) 0 else rejected ?: 0,
+                            receiverClock = receiverClock,
+                            protocolVersion = if (v4 || rejected != null || silentAuth) 4 to 0 else if (modern) 6 to 1 else 1 to 6, width = test?.panelW ?: 1280, height = test?.panelH ?: 720,
                             previousUsbFrames = oldUsbFrames, offeredModes = test?.modes, offeredIndices = test?.indices ?: listOf(0), maxUnacked = if (modern) 1 else 4, modernNoAcks = modern, videoOut = video, videoCodec = codec)
-                        val projection = AutoProjection(context, phone, identity.phone("qa-wired"), pins, "qa-wired",
+                        val projection = AutoProjection(context, phone, sender, pins, "qa-wired",
                             { statuses.add(it) }, { statuses.add(it); closed.countDown() })
                         try {
                             runOnMainSync { projection.start() }
                             hu.start()
+                            if (rejected != null || silentAuth) {
+                                check(closed.await(18, TimeUnit.SECONDS))
+                                check(hu.discoveryRequest.count == 1L && hu.videoFrames.get() == 0)
+                                val detail = statuses.last()
+                                if (silentAuth) check("no AUTH_COMPLETE" in detail && "STATUS_" !in detail) { detail }
+                                else check("$rejected (STATUS_" in detail) { detail }
+                                if (receiverClock != null) check(sender.certificate.notBefore.toInstant().toString() in detail &&
+                                    sender.certificate.notAfter.toInstant().toString() in detail) { detail }
+                                result.putString("AA_4_0_authorization", statuses.last())
+                                return@videoTest
+                            }
                             val firstFrameDeadline = SystemClock.elapsedRealtime() + 60_000
                             while (hu.firstVideoFrame.count > 0 && closed.count > 0 &&
                                 SystemClock.elapsedRealtime() < firstFrameDeadline) SystemClock.sleep(100)
@@ -192,6 +302,7 @@ class DriveDeckAapProbe : Instrumentation() {
                             check(pins.get("qa-wired").contains(fingerprint(hu.huCert.certificate)))
                             check(hu.openedChannels.containsAll(listOf(hu.video, hu.input)))
                             await { DexState.running && DexState.displayId > 0 && hu.codecConfigs.get() > 0 && hu.videoFrames.get() >= 20 }
+                            result.putInt("received_video_frames", hu.videoFrames.get())
                             val display = DexState.displayId
                             fun size(id: Int) = context.getSystemService(android.hardware.display.DisplayManager::class.java)
                                 ?.getDisplay(id)?.mode?.let { it.physicalWidth to it.physicalHeight }
@@ -231,7 +342,7 @@ class DriveDeckAapProbe : Instrumentation() {
                                 await("AAP tap returning to split view") { splitReady(display) }
                                 result.putString("AAP_touch", "Fullscreen Home restored DriveDeck and both apps")
                             } finally { removeMonitor(monitor) }
-                            if (!shizuku) {
+                            if (!shizuku && DesktopAudioAccess.hasPermission(context)) {
                                 await("USB playback capture · " + DesktopAudioState.status(targetContext)) { DesktopAudioState.running }
                                 val tone = fixtureAudio()
                                 try {
@@ -239,6 +350,9 @@ class DriveDeckAapProbe : Instrumentation() {
                                     await("non-silent AAP audio") { hu.nonSilentAudioChunks.get() > 0 }
                                     result.putInt("AAP_audio_packets_with_signal", hu.nonSilentAudioChunks.get())
                                 } finally { tone.release() }
+                            } else {
+                                check(!DesktopAudioState.running)
+                                result.putString("audio", "external playback; capture unavailable")
                             }
                             hu.requestFocusNative()
                             SystemClock.sleep(350)
@@ -306,7 +420,7 @@ class DriveDeckAapProbe : Instrumentation() {
             Triple(id, top.className, top.packageName)
         }
     private fun homeButton(view: View): View? {
-        if (view.contentDescription == "Домой в DriveDeck") return view
+        if (view.contentDescription == view.context.getString(R.string.desktop_drivedeck_home)) return view
         if (view is ViewGroup) for (i in 0 until view.childCount) homeButton(view.getChildAt(i))?.let { return it }
         return null
     }

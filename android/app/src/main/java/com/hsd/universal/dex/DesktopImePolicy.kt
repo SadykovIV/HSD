@@ -106,6 +106,9 @@ internal object ShellDisplayIme {
      * getImeDisplayId() only predicts where an IME could appear, even if there is no keyboard. */
     fun isVisible(id: Int, ownerUid: Int): Boolean {
         requireOwned(id, ownerUid)
+        // The per-display window-insets query used below is available since Android 13.
+        // Older systems report the per-display IME state as unknown.
+        if (Build.VERSION.SDK_INT < 33) throw UnsupportedOperationException("Per-display InsetsState query unavailable")
         val state = insetsType.getConstructor().newInstance()
         if (Build.VERSION.SDK_INT == 33) {
             queryInsets.invoke(windowManager, WindowManager.LayoutParams(), id, state)
@@ -115,9 +118,10 @@ internal object ShellDisplayIme {
         queryInsets.invoke(windowManager, id, null, state)
         val size = insetsType.getMethod("sourceSize").invoke(state) as Int
         val sourceAt = insetsType.getMethod("sourceAt", Int::class.javaPrimitiveType)
+        val imeType = WindowInsets.Type.ime()
         return (0 until size).any {
             val source = sourceAt.invoke(state, it)
-            source.javaClass.getMethod("getType").invoke(source) == WindowInsets.Type.ime() &&
+            source.javaClass.getMethod("getType").invoke(source) == imeType &&
                 source.javaClass.getMethod("isVisible").invoke(source) == true
         }
     }

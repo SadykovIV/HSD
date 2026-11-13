@@ -93,7 +93,7 @@ internal object HuNotifications {
         val composed = NotificationsLogic.compose(label, title, text,
             messages?.text?.toString()?.take(4000), messages?.person?.name?.toString()?.take(256),
             extras.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE)?.toString()?.take(256))
-        n.contentIntent?.takeIf { HuNotificationActionPolicy.allowed(it.isActivity,
+        n.contentIntent?.takeIf { android.os.Build.VERSION.SDK_INT >= 31 && HuNotificationActionPolicy.allowed(it.isActivity,
             it.creatorPackage == sbn.packageName, it.creatorUid == sbn.uid,
             it.creatorUserHandle == Process.myUserHandle()) }?.let {
             actions[sbn.key] = Action(sbn.key, sbn.packageName, sbn.postTime, it, epoch)

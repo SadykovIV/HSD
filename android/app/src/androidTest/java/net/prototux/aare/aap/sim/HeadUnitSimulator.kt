@@ -95,6 +95,9 @@ class HeadUnitSimulator(
      * does, even the ones aasdk's definitions call required.
      */
     omitZeroFields: Boolean = false,
+    private val authorizationStatus: Int? = 0,
+    private val receiverClock: java.util.Date? = null,
+    private val protocolVersion: Pair<Int, Int> = if (modernNoAcks) 6 to 1 else 1 to 6,
     val huCert: PhoneIdentity = SelfSignedCertificate.generate("AARE simulated head unit").let {
         PhoneIdentity(it.certificate, it.keyPair.private)
     },
@@ -144,7 +147,7 @@ class HeadUnitSimulator(
                     transport.output.write(byteArrayOf((it % 4).toByte(), 11, 0, 4, 1, 2, 3, 4))
                 }
                 transport.output.flush()
-                sendPlain(0, ControlMsg.VERSION_REQUEST, if (modernNoAcks) byteArrayOf(0, 6, 0, 1) else byteArrayOf(0, 1, 0, 6))
+                sendPlain(0, ControlMsg.VERSION_REQUEST, java.nio.ByteBuffer.allocate(4).putShort(protocolVersion.first.toShort()).putShort(protocolVersion.second.toShort()).array())
                 while (true) handle(reader.read())
             } catch (e: Throwable) {
                 if (byeBye.count > 0L) error = e
@@ -194,9 +197,16 @@ class HeadUnitSimulator(
             ControlMsg.ENCAPSULATED_SSL -> {
                 val out = cryptor.handshake(m.bodyBytes())
                 if (out.isNotEmpty()) sendPlain(0, ControlMsg.ENCAPSULATED_SSL, out)
-                if (cryptor.handshakeDone && !tlsUp) {
-                    sendPlain(0, ControlMsg.AUTH_COMPLETE, AuthResponse.newBuilder().apply { if (writeZeros) setStatus(0) }.build().toByteArray())
-                    tlsUp = true
+                if (cryptor.handshakeDone && !tlsUp && authorizationStatus != null) {
+                    val status = receiverClock?.let { clock ->
+                        try {
+                            cryptor.peerCertificates.first().checkValidity(clock)
+                            0
+                        } catch (_: java.security.cert.CertificateNotYetValidException) { -23 }
+                          catch (_: java.security.cert.CertificateExpiredException) { -24 }
+                    } ?: authorizationStatus
+                    sendPlain(0, ControlMsg.AUTH_COMPLETE, AuthResponse.newBuilder().apply { if (writeZeros || status != 0) setStatus(status) }.build().toByteArray())
+                    tlsUp = status == 0
                 }
             }
             ControlMsg.SERVICE_DISCOVERY_REQUEST -> {

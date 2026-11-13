@@ -1,7 +1,6 @@
 package com.hsd.universal
 
 import android.net.ConnectivityManager
-import android.net.IpPrefix
 import android.net.NetworkCapabilities
 import java.net.NetworkInterface
 import java.net.NoRouteToHostException
@@ -60,11 +59,21 @@ private fun lanAddresses(connectivity: ConnectivityManager, peer: InetAddress?):
         if (!nic.isUp || nic.isLoopback || nic.name in managed) continue
         for (link in nic.interfaceAddresses) {
             val length = link.networkPrefixLength.toInt()
-            if (length > 0 && (peer == null || IpPrefix(link.address, length).contains(peer)))
+            if (length > 0 && (peer == null || sharesNetworkPrefix(link.address, peer, length)))
                 sources += LanAddress(link.address, null)
         }
     }
     return sources
+}
+
+internal fun sharesNetworkPrefix(address: InetAddress, peer: InetAddress, bits: Int): Boolean {
+    val local = address.address
+    val remote = peer.address
+    if (local.size != remote.size || bits !in 1..local.size * 8) return false
+    val whole = bits / 8
+    for (i in 0 until whole) if (local[i] != remote[i]) return false
+    val tail = bits % 8
+    return tail == 0 || ((local[whole].toInt() xor remote[whole].toInt()) and (255 shl (8 - tail)) and 255) == 0
 }
 
 internal fun receiverLocalAddresses(connectivity: ConnectivityManager, peer: InetAddress?): List<InetAddress> {
