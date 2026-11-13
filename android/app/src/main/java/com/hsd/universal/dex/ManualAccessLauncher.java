@@ -73,7 +73,7 @@ public final class ManualAccessLauncher {
                 check(lock != null, "Другая ручная активация ещё выполняется. Дождитесь её завершения.");
                 int uid = packageUid();
                 String runAsUid = run(5000, "run-as", ManualAccessPolicy.PACKAGE, "--user", Integer.toString(uid / 100000), "id", "-u").trim();
-                check(runAsUid.equals(Integer.toString(uid)), "Нельзя безопасно прочитать статус этого APK через run-as. Используйте подготовленную debug-сборку " + ManualAccessPolicy.APP_NAME + ".");
+                check(runAsUid.equals(Integer.toString(uid)), "Android не предоставил доступ к данным " + ManualAccessPolicy.APP_NAME + " через run-as. Проверьте, что команда активации запущена для установленного APK и текущего пользователя Android.");
                 boolean newActivation = activate(uid, options, phoneRequestToken);
                 rememberControllerAddress(uid);
                 if (newActivation) {
