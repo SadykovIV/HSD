@@ -11,17 +11,8 @@ HSD builds on **[HeadSwap Desktop](https://github.com/SadykovIV/headswap_desk)**
 | CarPlay | Wireless |
 
 HSD runs on Android 13 and later. You can also select Android Desktop or, on compatible Samsung phones, Samsung DeX.
-
-[![Yandex Maps and Yandex Music running side by side in DriveDeck](docs/drivedeck.png)](docs/drivedeck.png)
-
-<details>
-<summary>DriveDeck in the car</summary>
-
 ![DriveDeck on the author’s head unit, with music on the left and the map on the right](docs/hsd-head-unit.jpg)
-
-*AI illustration based on the author’s photo.*
-
-</details>
+[![Yandex Maps and Yandex Music running side by side in DriveDeck](docs/drivedeck.png)](docs/drivedeck.png)
 
 [![HSD 0.7.3 on the phone: home, connection types and settings](docs/hsd-interface-en.png)](docs/hsd-interface-en.png)
 
