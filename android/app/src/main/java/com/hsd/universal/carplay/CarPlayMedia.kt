@@ -1,6 +1,8 @@
 package com.hsd.universal.carplay
 
 import com.hsd.universal.AnnexB
+import com.hsd.universal.AppLog
+import com.hsd.universal.AutoAudioEncoder
 import java.util.Arrays
 import io.github.shaonialife.cardeck.airplay.AirPlayCrypto
 import io.github.shaonialife.cardeck.airplay.TimingServer
@@ -102,6 +104,8 @@ internal class CarPlayAudio(
     private val streamType: Int,
     private val key: ByteArray,
     val rate: Int,
+    private val encoder: AutoAudioEncoder? = null,
+    private val latencyMs: Long = 250L,
 ) {
     private val pending = ByteArray(352 * 4)
     private var used = 0
@@ -110,7 +114,11 @@ internal class CarPlayAudio(
     private var syncAt = 0L
 
     @Synchronized
-    fun offer(pcm: ByteArray) {
+    fun offer(pcm: ByteArray, ptsUs: Long = System.nanoTime() / 1000) {
+        if (encoder != null) {
+            encoder.offer(pcm, 0, ptsUs, rate, false) { frame, _ -> send(frame, 1024) }
+            return
+        }
         var pos = 0
         while (pos < pcm.size) {
             val n = minOf(pcm.size - pos, pending.size - used)
@@ -123,38 +131,43 @@ internal class CarPlayAudio(
                 pending[i] = pending[i + 1]
                 pending[i + 1] = b
             }
-            val h =
-                ByteBuffer.allocate(12)
-                    .apply {
-                        put(0x80.toByte())
-                        put(((if (counter == 0L) 0x80 else 0) or (streamType and 127)).toByte())
-                        putShort(counter.toShort())
-                        putInt(time.toInt())
-                        putInt(0)
-                    }
-                    .array()
-            val nonce = AirPlayCrypto.nonce64(counter)
-            val data =
-                h +
-                    AirPlayCrypto.chachaSeal(key, nonce, pending, h.copyOfRange(4, 12)) +
-                    nonce.copyOfRange(4, 12)
-            udp.send(DatagramPacket(data, data.size, host, port))
-            val now = System.nanoTime()
-            if (control in 1..65535 && (syncAt == 0L || now - syncAt >= 1_000_000_000)) {
-                val sync =
-                    AudioSyncPacket.build(
-                        (counter and 65535).toInt(),
-                        time,
-                        time + rate / 4,
-                        TimingServer.ntpFromNanos(now),
-                        syncAt == 0L,
-                    )
-                udp.send(DatagramPacket(sync, sync.size, host, control))
-                syncAt = now
-            }
-            counter++
-            time += 352
+            send(pending, 352)
             used = 0
         }
+    }
+
+    private fun send(payload: ByteArray, samples: Int) {
+        val h =
+            ByteBuffer.allocate(12)
+                .apply {
+                    put(0x80.toByte())
+                    put(((if (counter == 0L) 0x80 else 0) or (streamType and 127)).toByte())
+                    putShort(counter.toShort())
+                    putInt(time.toInt())
+                    putInt(0)
+                }
+                .array()
+        val nonce = AirPlayCrypto.nonce64(counter)
+        val data =
+            h +
+                AirPlayCrypto.chachaSeal(key, nonce, payload, h.copyOfRange(4, 12)) +
+                nonce.copyOfRange(4, 12)
+        udp.send(DatagramPacket(data, data.size, host, port))
+        val now = System.nanoTime()
+        if (control in 1..65535 && (syncAt == 0L || now - syncAt >= 1_000_000_000)) {
+            val sync =
+                AudioSyncPacket.build(
+                    (counter and 65535).toInt(),
+                    time,
+                    time + rate * latencyMs / 1000,
+                    TimingServer.ntpFromNanos(now),
+                    syncAt == 0L,
+                )
+            udp.send(DatagramPacket(sync, sync.size, host, control))
+            syncAt = now
+        }
+        if (counter == 0L) AppLog.i("CarPlay audio: first RTP packet sent (${payload.size} B, ${samples} samples)", false)
+        counter++
+        time += samples
     }
 }

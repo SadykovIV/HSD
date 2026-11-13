@@ -85,6 +85,7 @@ class DriveDeckAapProbe : Instrumentation() {
             }
             if (carPlay) {
                 result.putAll(CarPlayNetworkProbe(context).run())
+                result.putAll(CarPlayNetworkProbe(context, aac = true).run())
                 finish(Activity.RESULT_OK,result);return
             }
             AppLog.init(context)

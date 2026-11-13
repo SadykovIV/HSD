@@ -6,6 +6,7 @@ import android.net.InetAddresses
 import net.prototux.aare.aap.AapLog
 import net.prototux.aare.aap.Transport
 import net.prototux.aare.transport.wireless.WirelessConnector
+import com.hsd.universal.carplay.CarPlayRecovery
 import com.hsd.universal.dex.DexSetupActivity
 import com.hsd.universal.ui.Actions
 import android.app.NotificationChannel
@@ -43,6 +44,7 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
     private var device: UsbAccessory? = null
     private var stopping = false
     private var reconnectUntil = 0L
+    private val carPlayRecovery = CarPlayRecovery()
     private var usbOpenRetries = 0
     private var retryDelayMs = 1000L
     private var retryPending = false
@@ -209,6 +211,7 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
     }
     private fun complete(message: String, connectError: Boolean = false) {
         generation++
+        val carPlay = projection as? CarPlayProjection
         val lost = (projection as? AutoProjection)?.networkInterrupted == true
         val now = android.os.SystemClock.elapsedRealtime()
         if (lost) {
@@ -242,6 +245,16 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
         getSharedPreferences("projection", MODE_PRIVATE).edit()
             .putString("last", message).putString("last." + route.name, message).apply()
         projection = null
+        if (!stopping && route == ProjectionRoute.CARPLAY && carPlay != null) {
+            val delay = carPlayRecovery.retry(now, carPlay.firstFrameAt?.let { now - it }, carPlay.linkInterrupted)
+            if (delay != null) {
+                retryPending = true
+                AppLog.i("CarPlay: связь с выбранной магнитолой потеряна · повтор через ${delay} мс", false)
+                update("Прервалась связь с магнитолой · восстанавливаю CarPlay")
+                main.postDelayed(reconnect, delay)
+                return
+            }
+        }
         if (listenAgain) { begin(); return }
         if (!stopping && (route == ProjectionRoute.LAN_CLIENT || route == ProjectionRoute.WIRELESS_AA) &&
             (lost || connectError) && now + retryDelayMs < reconnectUntil) {

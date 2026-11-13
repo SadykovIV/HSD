@@ -4,7 +4,9 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
+import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.ConnectivityManager
@@ -41,10 +43,8 @@ internal class ProjectionSettingsActivity : Activity() {
     private var peerName = ""
     private var lan = ""
     private var port = ""
-    private var mac = ""
     private var addressField: EditText? = null
     private var portField: EditText? = null
-    private var macField: EditText? = null
     private var request: String? = null
     private var askedForLocation = false
 
@@ -57,7 +57,6 @@ internal class ProjectionSettingsActivity : Activity() {
         peerName = state?.getString("peerName") ?: prefs.getString("bluetoothPeerName", "").orEmpty()
         lan = state?.getString("lan") ?: prefs.getString("lanPeer", "").orEmpty()
         port = state?.getString("port") ?: prefs.getInt("lanPort", 5288).toString()
-        mac = state?.getString("mac") ?: prefs.getString("localBluetoothAddress", "").orEmpty()
         request = state?.getString("request")
         askedForLocation = state?.getBoolean("location") == true
         window.setDecorFitsSystemWindows(false)
@@ -83,7 +82,6 @@ internal class ProjectionSettingsActivity : Activity() {
     private fun capture() {
         addressField?.let { lan = it.text.toString() }
         portField?.let { port = it.text.toString() }
-        macField?.let { mac = it.text.toString() }
     }
 
     override fun onSaveInstanceState(out: Bundle) {
@@ -96,7 +94,6 @@ internal class ProjectionSettingsActivity : Activity() {
         out.putString("peerName", peerName)
         out.putString("lan", lan)
         out.putString("port", port)
-        out.putString("mac", mac)
         out.putString("request", request)
         out.putBoolean("location", askedForLocation)
         out.putInt("scroll", scroll.scrollY)
@@ -121,7 +118,6 @@ internal class ProjectionSettingsActivity : Activity() {
     private fun render() {
         addressField = null
         portField = null
-        macField = null
         content.removeAllViews()
         val heading = when (page) {
             Page.ROUTES -> "Тип подключения"
@@ -199,12 +195,12 @@ internal class ProjectionSettingsActivity : Activity() {
                     startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
                 }
                 if (route == ProjectionRoute.CARPLAY) {
-                    val extra = ui.section(content, "Параметры CarPlay")
-                    ui.text(extra, "Если Android скрывает Bluetooth-адрес телефона, введите его из сведений об устройстве.")
-                    macField = field(extra, "Bluetooth-адрес телефона", mac)
+                    ui.navigation(card, "Сделать телефон видимым", "Для первого сопряжения, когда магнитола ищет устройства") {
+                        withPermissions("discoverable")
+                    }
                     val bonds = getSharedPreferences("carplay-identities", MODE_PRIVATE)
                     if (peer.isNotEmpty() && bonds.contains("peer.$peer"))
-                        ui.button(extra, "Забыть сопряжение CarPlay") {
+                        ui.button(card, "Забыть сопряжение CarPlay") {
                             AlertDialog.Builder(this).setTitle("Забыть сопряжение CarPlay?")
                                 .setMessage(peerName.ifBlank { peer }).setNegativeButton("Отмена", null)
                                 .setPositiveButton("Забыть") { _, _ -> bonds.edit().remove("peer.$peer").apply(); capture(); render() }.show()
@@ -312,6 +308,10 @@ internal class ProjectionSettingsActivity : Activity() {
 
     private fun withPermissions(action: String) {
         val required = buildList {
+            if (action == "discoverable") {
+                add(Manifest.permission.BLUETOOTH_ADVERTISE)
+                return@buildList
+            }
             if (!route.wired && Build.VERSION.SDK_INT >= 37) add(Manifest.permission.ACCESS_LOCAL_NETWORK)
             if (route == ProjectionRoute.CARLIFE_WIFI) addAll(com.hsd.universal.link.car.WirelessCarLife.missingPermissions(this@ProjectionSettingsActivity))
             if (route == ProjectionRoute.WIRELESS_AA || route == ProjectionRoute.CARPLAY) {
@@ -322,6 +322,7 @@ internal class ProjectionSettingsActivity : Activity() {
                     add(Manifest.permission.ACCESS_FINE_LOCATION)
                 }
             }
+            if (route == ProjectionRoute.CARPLAY && action == "save") add(Manifest.permission.BLUETOOTH_SCAN)
         }.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
         if (required.isEmpty()) perform(action)
         else {
@@ -338,14 +339,34 @@ internal class ProjectionSettingsActivity : Activity() {
         request = null
         if (results.isNotEmpty() && permissions.indices.all { i ->
                 results.getOrNull(i) == PackageManager.PERMISSION_GRANTED || permissions[i] == Manifest.permission.ACCESS_COARSE_LOCATION ||
-                    permissions[i] == Manifest.permission.ACCESS_FINE_LOCATION
+                    permissions[i] == Manifest.permission.ACCESS_FINE_LOCATION || permissions[i] == Manifest.permission.BLUETOOTH_SCAN
             }) perform(pending)
         else Toast.makeText(this, "Для подключения предоставьте запрошенный доступ в настройках Android.", Toast.LENGTH_LONG).show()
     }
 
     private fun perform(action: String) {
-        if (action == "pick") pickBondedDevice() else save()
+        when (action) {
+            "pick" -> pickBondedDevice()
+            "discoverable" -> {
+                try {
+                    startActivityForResult(Intent(BluetoothAdapter.ACTION_REQUEST_DISCOVERABLE), REQUEST_DISCOVERABLE)
+                } catch (_: ActivityNotFoundException) {
+                    Toast.makeText(this, "Откройте настройки Bluetooth и включите видимость телефона.", Toast.LENGTH_LONG).show()
+                } catch (_: SecurityException) {
+                    Toast.makeText(this, "Разрешите HSD доступ к устройствам поблизости.", Toast.LENGTH_LONG).show()
+                }
+            }
+            else -> save()
+        }
     }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_DISCOVERABLE && resultCode > 0)
+            Toast.makeText(this, "Телефон виден ${resultCode} с. Выберите его на магнитоле и подтвердите код сопряжения.", Toast.LENGTH_LONG).show()
+    }
+
+    private companion object { const val REQUEST_DISCOVERABLE = 2 }
 
     @SuppressLint("MissingPermission")
     private fun pickBondedDevice() {
@@ -383,13 +404,6 @@ internal class ProjectionSettingsActivity : Activity() {
         if (route == ProjectionRoute.WIRELESS_AA || route == ProjectionRoute.CARPLAY) {
             if (peer.isEmpty()) { pickBondedDevice(); return }
             edit.putString("bluetoothPeer", peer).putString("bluetoothPeerName", peerName)
-            if (route == ProjectionRoute.CARPLAY) {
-                val local = mac.trim().uppercase()
-                if (local.isNotEmpty() && !com.hsd.universal.carplay.BluetoothManagerAddress.valid(local)) {
-                    macField?.error = "Введите Bluetooth-адрес телефона"; return
-                }
-                edit.putString("localBluetoothAddress", local)
-            }
         }
         ProjectionRoute.save(this, edit)
         finish()

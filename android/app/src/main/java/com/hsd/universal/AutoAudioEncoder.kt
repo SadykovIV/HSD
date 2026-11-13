@@ -5,8 +5,8 @@ import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import java.io.Closeable
 
-/** The receiver chooses raw AAC access units or ADTS. AAP reserves 10 bytes before each packet. */
-internal class AutoAudioEncoder : Closeable {
+/** Raw AAC-LC or ADTS. AAP needs a ten-byte prefix; CarPlay encrypts raw access units directly. */
+internal class AutoAudioEncoder(private val prefix: Int = 10) : Closeable {
     private var encoder: MediaCodec? = null
     private var rate = 0
     private val info = MediaCodec.BufferInfo()
@@ -20,10 +20,31 @@ internal class AutoAudioEncoder : Closeable {
         adts: Boolean,
         write: (ByteArray, Long) -> Unit,
     ) {
+        prepare(hz)
+        val codec = checkNotNull(encoder)
+        var pos = offset
+        var deadline = System.nanoTime() + 100_000_000L
+        while (pos < pcm.size) {
+            val index = codec.dequeueInputBuffer(2000)
+            if (index >= 0) {
+                val input = checkNotNull(codec.getInputBuffer(index))
+                val length = minOf(input.remaining(), pcm.size - pos)
+                input.put(pcm, pos, length)
+                codec.queueInputBuffer(index, 0, length, pts + (pos - offset) * 1_000_000L / (4 * hz), 0)
+                pos += length
+                deadline = System.nanoTime() + 100_000_000L
+            }
+            drain(codec, hz, adts, write)
+            check(pos == pcm.size || System.nanoTime() < deadline) { "AAC encoder did not accept PCM" }
+        }
+    }
+
+    @Synchronized
+    fun prepare(hz: Int) {
         if (hz != rate) close()
-        val codec =
-            encoder
-                ?: MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC).also {
+        if (encoder != null) return
+        try {
+            MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC).also {
                     encoder = it
                     val format =
                         MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, hz, 2)
@@ -36,41 +57,29 @@ internal class AutoAudioEncoder : Closeable {
                     it.start()
                     rate = hz
                 }
-        var pos = offset
-        while (pos < pcm.size) {
-            val index = codec.dequeueInputBuffer(2000)
-            if (index < 0) break
-            val input = checkNotNull(codec.getInputBuffer(index))
-            val length = minOf(input.remaining(), pcm.size - pos)
-            input.put(pcm, pos, length)
-            codec.queueInputBuffer(
-                index,
-                0,
-                length,
-                pts + (pos - offset) * 1_000_000L / (4 * hz),
-                0,
-            )
-            pos += length
-        }
+        } catch (e: Exception) { close(); throw e }
+    }
+
+    private fun drain(codec: MediaCodec, hz: Int, adts: Boolean, write: (ByteArray, Long) -> Unit) {
         while (true) {
             val index = codec.dequeueOutputBuffer(info, 0)
             if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) continue
             if (index < 0) break
             try {
                 if (info.size > 0 && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
-                    val start = if (adts) 17 else 10
+                    val start = prefix + if (adts) 7 else 0
                     val packet = ByteArray(start + info.size)
                     if (adts) {
                         val n = info.size + 7
                         val frequency = frequencies.indexOf(hz)
                         require(frequency >= 0 && n <= 8191)
-                        packet[10] = 0xff.toByte()
-                        packet[11] = 0xf1.toByte()
-                        packet[12] = (0x40 or (frequency shl 2)).toByte()
-                        packet[13] = (0x80 or (n ushr 11)).toByte()
-                        packet[14] = (n ushr 3).toByte()
-                        packet[15] = ((n shl 5) or 31).toByte()
-                        packet[16] = 0xfc.toByte()
+                        packet[prefix] = 0xff.toByte()
+                        packet[prefix+1] = 0xf1.toByte()
+                        packet[prefix+2] = (0x40 or (frequency shl 2)).toByte()
+                        packet[prefix+3] = (0x80 or (n ushr 11)).toByte()
+                        packet[prefix+4] = (n ushr 3).toByte()
+                        packet[prefix+5] = ((n shl 5) or 31).toByte()
+                        packet[prefix+6] = 0xfc.toByte()
                     }
                     checkNotNull(codec.getOutputBuffer(index)).apply {
                         position(info.offset)

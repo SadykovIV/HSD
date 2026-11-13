@@ -1605,6 +1605,7 @@ open class DexSetupActivity : Activity() {
         val instruction = when (status) {
             DexPrivilegeAccess.Status.NOT_INSTALLED -> "Установите Shizuku с официальной страницы, запустите его и вернитесь сюда."
             DexPrivilegeAccess.Status.NOT_RUNNING -> "Служба Shizuku не запущена. Откройте её и запустите; после возврата ${DesktopTransport.shortName} продолжит подключение автоматически."
+            DexPrivilegeAccess.Status.UPDATE_REQUIRED -> "Для запуска рабочего стола нужен Shizuku 13 или новее. Обновите Shizuku и перезапустите его службу или выберите способ активации «Wi-Fi»."
             DexPrivilegeAccess.Status.PERMISSION_REQUIRED -> if (denied) "Доступ не разрешён. Нажмите «Подключить», чтобы повторить запрос." else "Нажмите «Подключить» и разрешите доступ для ${DesktopTransport.appName} в запросе Shizuku."
             DexPrivilegeAccess.Status.DENIED_PERMANENTLY -> "Откройте Shizuku → «Авторизованные приложения» и разрешите ${DesktopTransport.appName}. Затем вернитесь сюда."
             DexPrivilegeAccess.Status.READY -> "Подключите ${projectionName} выбранным способом — рабочий стол запустится автоматически. При USB-подключении работающей службе Shizuku Wi-Fi не нужен."
@@ -1615,6 +1616,7 @@ open class DexSetupActivity : Activity() {
         val heading = when (status) {
             DexPrivilegeAccess.Status.NOT_INSTALLED -> "Нужен Shizuku"
             DexPrivilegeAccess.Status.NOT_RUNNING -> "Запустите Shizuku"
+            DexPrivilegeAccess.Status.UPDATE_REQUIRED -> "Обновите Shizuku"
             DexPrivilegeAccess.Status.PERMISSION_REQUIRED, DexPrivilegeAccess.Status.DENIED_PERMANENTLY -> "Разрешите доступ Shizuku"
             DexPrivilegeAccess.Status.READY -> "Shizuku готов"
         }

@@ -25,10 +25,19 @@ internal class CarPlayProjection(
     private val main = Handler(Looper.getMainLooper())
     private val closing = AtomicBoolean(false)
     private val first = AtomicBoolean(true)
+    @Volatile var linkInterrupted = false
+        private set
+    @Volatile var firstFrameAt: Long? = null
+        private set
     private val delivery = DesktopVideoDelivery()
     private var desktop: DesktopProjectionSource? = null
     @Volatile private var air: CarPlayAirSession? = null
     private var display: CarPlayAirSession.Display? = null
+    private class Controls(val descriptor: ByteArray) {
+        val touch = CarPlayTouchLayout.parse(descriptor)
+        val keys = ConsumerKeys.parseDescriptor(descriptor)
+    }
+    private val controls = mutableMapOf<String, Controls>()
     private val fingers = linkedMapOf<Int, TouchPoint>()
     private val frameTimeout = Runnable {
         if (first.get()) stop("CarPlay не получил первый кадр рабочего стола")
@@ -40,7 +49,7 @@ internal class CarPlayProjection(
             try {
                 val endpoint = CarPlayBootstrap(context, lifetime, status).connect()
                 status("CarPlay · проверяю сопряжение AirPlay")
-                val session = CarPlayAirSession(context, endpoint, lifetime, ::input, ::stop)
+                val session = CarPlayAirSession(context, endpoint, lifetime, ::input, ::linkEnded)
                 val geometry = session.start()
                 main.post {
                     if (!closing.get()) {
@@ -60,7 +69,7 @@ internal class CarPlayProjection(
                     }
                 }
             } catch (e: Exception) {
-                stop("CarPlay · " + (e.message ?: e.javaClass.simpleName))
+                linkEnded(e)
             }
         }
     }
@@ -73,6 +82,7 @@ internal class CarPlayProjection(
             if (written) {
                 delivery.frameWritten(SystemClock.elapsedRealtime())
                 if (first.compareAndSet(true, false)) {
+                    firstFrameAt = SystemClock.elapsedRealtime()
                     main.removeCallbacks(frameTimeout)
                     val text =
                         "CarPlay · рабочий стол · ${display?.width} × ${display?.height} · H.264"
@@ -82,7 +92,7 @@ internal class CarPlayProjection(
             }
             written
         } catch (e: Exception) {
-            stop(e.message ?: "Потерян видеоканал CarPlay")
+            linkEnded(e)
             false
         }
     }
@@ -91,10 +101,10 @@ internal class CarPlayProjection(
         val sender = air?.audio ?: return false
         if (closing.get()) return false
         return try {
-            if (type == CarlifeAudio.MEDIA_DATA) sender.offer(pcm)
+            if (type == CarlifeAudio.MEDIA_DATA) sender.offer(pcm, ptsUs)
             true
         } catch (e: Exception) {
-            stop(e.message ?: "Потерян аудиоканал CarPlay")
+            linkEnded(e)
             false
         }
     }
@@ -112,18 +122,20 @@ internal class CarPlayProjection(
             if (closing.get()) return@post
             val g = display ?: return@post
             val descriptor = (params["descriptor"] as? ByteArray) ?: g.hid[id]
-            val keymap = descriptor?.let(ConsumerKeys::parseDescriptor)
-            if (keymap != null) {
-                keymap
-                    .usagesFor(report)
-                    .map(ConsumerKeys::keyCodeFor)
-                    .filter { it != 0 }
-                    .forEach { desktop?.key(it) }
+            val device = descriptor?.let { desc ->
+                controls[id]?.takeIf { it.descriptor === desc || it.descriptor.contentEquals(desc) }
+                    ?: Controls(desc).also { controls[id] = it }
+            }
+            val contacts = device?.touch?.contacts(report, g.width, g.height)
+                ?: if (device == null) TouchReports.parse(report) else null
+            if (contacts == null) {
+                device?.keys
+                    ?.usagesFor(report)
+                    ?.map(ConsumerKeys::keyCodeFor)
+                    ?.filter { it != 0 }
+                    ?.forEach { desktop?.key(it) }
                 return@post
             }
-            val format = descriptor?.let(TouchReports::formatFromDescriptor)
-            if (descriptor != null && format == null) return@post
-            val contacts = TouchReports.parse(report, format) ?: return@post
             for (c in contacts) {
                 val old = fingers[c.slot]
                 if (old == null && !c.down) continue
@@ -160,8 +172,12 @@ internal class CarPlayProjection(
         desktop?.setPhoneScreenOff(off)
     }
 
-    override fun stop(message: String) {
+    private fun linkEnded(error: Exception) = end("CarPlay · " + (error.message ?: error.javaClass.simpleName), error.carPlayLinkInterrupted())
+    override fun stop(message: String) = end(message, false)
+
+    private fun end(message: String, interrupted: Boolean) {
         if (!closing.compareAndSet(false, true)) return
+        linkInterrupted = interrupted
         lifetime.close()
         main.post {
             main.removeCallbacks(frameTimeout)

@@ -4,6 +4,7 @@ import android.os.Build;
 import android.os.Process;
 import android.os.SystemClock;
 import androidx.annotation.Keep;
+import com.hsd.universal.carplay.BluetoothIdentity;
 import org.json.JSONObject;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -74,6 +75,7 @@ public final class ManualAccessLauncher {
                 String runAsUid = run(5000, "run-as", ManualAccessPolicy.PACKAGE, "--user", Integer.toString(uid / 100000), "id", "-u").trim();
                 check(runAsUid.equals(Integer.toString(uid)), "Нельзя безопасно прочитать статус этого APK через run-as. Используйте подготовленную debug-сборку " + ManualAccessPolicy.APP_NAME + ".");
                 boolean newActivation = activate(uid, options, phoneRequestToken);
+                rememberControllerAddress(uid);
                 if (newActivation) {
                     try {
                         String opened = run(5000, "am", "start", "--user", "current", "--display", "0", "-n", ManualAccessPolicy.ACTIVITY);
@@ -94,6 +96,26 @@ public final class ManualAccessLauncher {
                 + "\n" + ManualAccessPolicy.APP_NAME + " не останавливался принудительно. Проверьте настройку и повторите команду.");
         }
         return result;
+    }
+
+    /** Android may withhold its address from ordinary apps. The already-authorized activation
+     * shell can hand it to this installation. Keep the value out of logs, argv and backups. */
+    private static void rememberControllerAddress(int uid) {
+        String user = Integer.toString(uid / 100000);
+        java.lang.Process writer = null;
+        try {
+            String raw = new String(readCommand(3000, 128, true, "/system/bin/settings", "--user",
+                user, "get", "secure", "bluetooth_address"), StandardCharsets.US_ASCII);
+            String address = BluetoothIdentity.normalize(raw);
+            if (address == null) return;
+            writer = new ProcessBuilder("run-as", ManualAccessPolicy.PACKAGE, "--user", user, "sh", "-c",
+                "umask 077; mkdir -p no_backup && f=$(mktemp no_backup/.carplay-address.XXXXXX) && " +
+                "cat > \"$f\" && mv -f \"$f\" no_backup/" + BluetoothIdentity.BASENAME).start();
+            try (java.io.OutputStream out = writer.getOutputStream()) { out.write(address.getBytes(StandardCharsets.US_ASCII)); }
+            writer.waitFor(3, TimeUnit.SECONDS);
+        } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        catch (Exception ignored) { /* Optional; a missing controller must not block activation. */ }
+        finally { if (writer != null && writer.isAlive()) writer.destroyForcibly(); }
     }
 
     private static int packageUid() throws Exception {

@@ -1,12 +1,14 @@
 package com.hsd.universal.carplay
 
 import android.annotation.SuppressLint
+import android.Manifest
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothSocket
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Network
-import android.provider.Settings
+import com.hsd.universal.AppLog
 import com.hsd.universal.ProjectionRoute
 import com.hsd.universal.ProjectionResources
 import io.github.shaonialife.cardeck.iap2.Iap2Csm
@@ -16,12 +18,12 @@ import io.github.shaonialife.cardeck.transport.Iap2LinkChannel
 import io.github.shaonialife.cardeck.transport.StreamDuplexStream
 import java.net.InetAddress
 import java.util.UUID
-import java.util.concurrent.CompletableFuture
-import java.util.concurrent.TimeUnit
-import kotlin.concurrent.thread
 import net.prototux.aare.aap.AapLog
 import net.prototux.aare.aap.wireless.*
 import net.prototux.aare.transport.wireless.HeadUnitNetwork
+
+private val PHONE_IAP2 = UUID.fromString("00000000-deca-fade-deca-deafdecacafe")
+private val ACCESSORY_IAP2 = UUID.fromString("00000000-deca-fade-deca-deafdecacaff")
 
 internal data class CarPlayEndpoint(
     val network: Network,
@@ -46,60 +48,39 @@ internal class CarPlayBootstrap(
         val adapter =
             context.getSystemService(BluetoothManager::class.java)?.adapter
                 ?: error("Bluetooth недоступен")
+        check(adapter.isEnabled) { "Включите Bluetooth и повторите подключение" }
         val device = adapter.getRemoteDevice(remote)
         require(device.bondState == BluetoothDevice.BOND_BONDED) {
             "Требуется сопряжение с магнитолой"
         }
-        val local =
-            sequenceOf(
-                    prefs.getString("localBluetoothAddress", null),
-                    runCatching {
-                            Settings.Secure.getString(context.contentResolver, "bluetooth_address")
-                        }
-                        .getOrNull(),
-                    runCatching { adapter.address }.getOrNull(),
-                )
-                .filterNotNull()
-                .firstOrNull { BluetoothManagerAddress.valid(it) }
-                ?: error("Укажите Bluetooth-адрес телефона в настройках CarPlay")
-        status("CarPlay · устанавливаю соединение Bluetooth")
-        val future = CompletableFuture<BluetoothSocket>()
-        val outbound =
-            device.createRfcommSocketToServiceRecord(
-                UUID.fromString("00000000-deca-fade-deca-deafdecacaff")
-            )
-        life.own(outbound::close)
-        val listener =
-            adapter.listenUsingRfcommWithServiceRecord(
-                "iAP2",
-                UUID.fromString("00000000-deca-fade-deca-deafdecacafe"),
-            )
-        life.own(listener::close)
-        life.own { future.cancel(false) }
-        thread(name = "CarPlay incoming iAP2", isDaemon = true) {
-            runCatching {
-                while (!future.isDone) {
-                    val candidate = listener.accept()
-                    if (candidate.remoteDevice.address == remote && future.complete(candidate))
-                        break
+        val local = LocalBluetoothIdentity.resolve(context, life)
+        status("CarPlay · выберите Apple CarPlay на магнитоле. Ожидаю соединение Bluetooth…")
+        fun trace(message: String) = AppLog.i("CarPlay Bluetooth · $message", false)
+        val cached = runCatching { device.uuids?.any { it.uuid == ACCESSORY_IAP2 } }.getOrNull()
+        trace("bonded · accessory iAP2 in SDP cache=${cached ?: "unknown"}")
+        if (context.checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED)
+            runCatching { if (adapter.isDiscovering) adapter.cancelDiscovery() }
+        val socket = connectCarPlayRfcomm(life, incoming = { resources ->
+            adapter.listenUsingRfcommWithServiceRecord("iAP2", PHONE_IAP2).use { listener ->
+                resources.own(listener::close)
+                trace("local iAP2 service registered · waiting for selected head unit")
+                var candidate: BluetoothSocket
+                while (true) {
+                    candidate = listener.accept()
+                    if (candidate.remoteDevice == device) break
                     candidate.close()
                 }
+                resources.own(candidate::close)
+                candidate
             }
-        }
-        thread(name = "CarPlay outgoing iAP2", isDaemon = true) {
-            runCatching {
-                outbound.connect()
-                if (!future.complete(outbound)) outbound.close()
-            }
-        }
-        val socket = try {
-            future.get(40, TimeUnit.SECONDS)
-        } catch (timeout: java.util.concurrent.TimeoutException) {
-            throw java.io.IOException("Магнитола не открыла канал Bluetooth iAP2 за 40 секунд. Запустите беспроводной CarPlay на магнитоле.", timeout)
-        }
-        life.own(socket::close)
-        listener.close()
-        if (outbound !== socket) outbound.close()
+        }, outgoing = { resources ->
+            dialCarPlayRfcomm(resources, open = {
+                check(adapter.isEnabled && device.bondState == BluetoothDevice.BOND_BONDED) {
+                    "Проверьте Bluetooth и сопряжение с магнитолой"
+                }
+                device.createRfcommSocketToServiceRecord(ACCESSORY_IAP2)
+            }, connect = BluetoothSocket::connect, log = ::trace)
+        }, log = ::trace)
         val link =
             Iap2LinkChannel(
                 StreamDuplexStream(socket.inputStream, socket.outputStream, socket::close)
@@ -140,6 +121,7 @@ internal class CarPlayBootstrap(
         fun send(id: Int, body: ByteArray = byteArrayOf()) =
             check(link.sendControl(Iap2Csm.encode(id, body)))
         check(link.awaitReady(15_000)) { "Магнитола не ответила на iAP2" }
+        trace("iAP2 link ready")
         send(0x1d00)
         val deadline = android.os.SystemClock.elapsedRealtime() + 110_000
         while (link.isAlive && android.os.SystemClock.elapsedRealtime() < deadline) {
@@ -212,11 +194,4 @@ internal class CarPlayBootstrap(
         }
         error("Магнитола не объявила службу беспроводного CarPlay")
     }
-}
-
-internal object BluetoothManagerAddress {
-    fun valid(address: String) =
-        android.bluetooth.BluetoothAdapter.checkBluetoothAddress(address.uppercase()) &&
-            address != "02:00:00:00:00:00" &&
-            address != "00:00:00:00:00:00"
 }

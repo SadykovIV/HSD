@@ -28,7 +28,7 @@ internal class CarPlayIapChannel(
     life: ProjectionResources,
     private val send: (ByteArray) -> Unit,
     private val handle: (Map<*, *>) -> Unit,
-    private val failed: (String) -> Unit,
+    private val failed: (Exception) -> Unit,
 ) {
     private val input = PipedInputStream(131072)
     private val feed = PipedOutputStream(input)
@@ -93,7 +93,7 @@ internal class CarPlayIapChannel(
                                     val id = param(0)?.contentHashCode()?.toString() ?: "0"
                                     fields
                                         .firstOrNull { it.value.size > 8 }
-                                        ?.let { descriptors[id] = it.value }
+                                        ?.let { descriptors[id] = it.value; logHidDescriptor(it.value) }
                                 }
                             0x6802 ->
                                 if (authenticated) {
@@ -116,7 +116,7 @@ internal class CarPlayIapChannel(
                     }
                 }
             } catch (e: Exception) {
-                if (channel.isAlive) failed(e.message ?: "Закрыт сеанс iAP2")
+                if (channel.isAlive) failed(e)
             }
         }
     }

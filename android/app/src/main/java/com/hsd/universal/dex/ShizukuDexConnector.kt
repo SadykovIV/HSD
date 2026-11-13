@@ -11,6 +11,7 @@ import android.os.DeadObjectException
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
 import android.view.MotionEvent
 import com.hsd.universal.AppLog
 import com.hsd.universal.BuildConfig
@@ -78,7 +79,8 @@ class ShizukuDexConnector(context: Context, private val core: AaBridgeCore,
     @Volatile private var firstFrame = false
     @Volatile private var established = false
     @Volatile private var failure: String? = null
-    @Volatile private var generationStartedAt = 0L
+    @Volatile private var awaitingFrameSince = 0L
+    @Volatile private var bindStartedAt = 0L
     private var phonePowerPending = false // Guarded by stateLock.
     private val death = IBinder.DeathRecipient {
         EmbeddedSessionRegistry.producerStopped(this)
@@ -93,6 +95,7 @@ class ShizukuDexConnector(context: Context, private val core: AaBridgeCore,
                 serviceBinder = binder
                 binder.linkToDeath(death, 0)
                 service = IDexUserService.Stub.asInterface(binder)
+                AppLog.i("Shizuku UserService connected after ${SystemClock.elapsedRealtime() - bindStartedAt} ms", false)
                 // A callback already queued by Shizuku may arrive after removal. Repeat
                 // removal for this unique tag rather than leaving its new process alive.
                 if (stopping.get()) unbind()
@@ -103,7 +106,7 @@ class ShizukuDexConnector(context: Context, private val core: AaBridgeCore,
             // A disconnect callback is not proof that the producer process died.
             fail(helperUnavailableMessage(), Failure.HELPER_UNAVAILABLE)
         }
-        override fun onNullBinding(name: ComponentName) { connected.countDown(); fail("Shizuku не запустил службу рабочего стола") }
+        override fun onNullBinding(name: ComponentName) { fail("Shizuku не запустил службу рабочего стола", Failure.HELPER_UNAVAILABLE) }
     }
 
     override fun start() {
@@ -121,19 +124,23 @@ class ShizukuDexConnector(context: Context, private val core: AaBridgeCore,
                 status("Запускаю рабочий стол через Shizuku…")
             } catch (e: Exception) { fail(e.message ?: "Не удалось подготовить рабочий стол"); return }
         }
-        main.post {
+        val bind = Runnable {
             if (!stopping.get()) try {
-                check(DexPrivilegeAccess.isReady(context)) { "Откройте Shizuku, запустите службу и разрешите ${DesktopTransport.shortName} доступ" }
+                val access = DexPrivilegeAccess.status(context)
+                check(access == DexPrivilegeAccess.Status.READY) { bindFailureMessage(access) }
+                bindStartedAt = SystemClock.elapsedRealtime()
+                AppLog.i("Shizuku UserService bind requested · server API ${Shizuku.getVersion()}.${Shizuku.getServerPatchVersion()}", false)
                 bindRequested = true
                 Shizuku.bindUserService(args, connection)
-            } catch (e: Exception) { connected.countDown(); fail(e.message ?: "Shizuku недоступен") }
+            } catch (e: Exception) { fail(e.message ?: "Shizuku недоступен", Failure.HELPER_UNAVAILABLE) }
         }
+        if (Looper.myLooper() == main.looper) bind.run() else main.post(bind)
         try { watchdog.scheduleWithFixedDelay({
             if (!stopping.get()) try {
                 core.tick()
                 core.desktopVideoError?.let { fail(it) }
-                if (generationStartedAt != 0L && !firstFrame &&
-                    System.nanoTime() - generationStartedAt > TimeUnit.SECONDS.toNanos(30)) {
+                val since = awaitingFrameSince
+                if (since != 0L && !firstFrame && System.nanoTime() - since > TimeUnit.SECONDS.toNanos(30)) {
                     fail("Рабочий стол не передал первый кадр за 30 секунд")
                 }
             } catch (e: Exception) { fail(e.message ?: "Ошибка рабочего стола") }
@@ -146,9 +153,15 @@ class ShizukuDexConnector(context: Context, private val core: AaBridgeCore,
         if (stopping.get()) return
         this.generation = generation
         firstFrame = false
-        generationStartedAt = System.nanoTime()
+        awaitingFrameSince = 0L
         try {
-            check(connected.await(12, TimeUnit.SECONDS)) { "Shizuku не ответил за 12 секунд" }
+            // Shizuku's UserServiceManager gives a cold service 30 seconds to attach.
+            if (!connected.await(30, TimeUnit.SECONDS)) {
+                val access = DexPrivilegeAccess.status(context)
+                AppLog.i("Shizuku UserService bind timeout · access=$access · requestSent=${bindStartedAt != 0L}", false)
+                fail(bindFailureMessage(access), Failure.HELPER_UNAVAILABLE)
+                return
+            }
             check(!stopping.get()) { "Подключение остановлено" }
             val remote = checkNotNull(service) { "Служба Shizuku недоступна" }
             val prefs = DexPrefs(context)
@@ -170,6 +183,7 @@ class ShizukuDexConnector(context: Context, private val core: AaBridgeCore,
                 onSurfaceClosing(generation)
                 return
             }
+            awaitingFrameSince = System.nanoTime()
             synchronized(stateLock) {
                 check(!stopping.get() && retiringGeneration != generation) { "Сеанс завершён" }
                 DexState.displayId = id
@@ -200,7 +214,7 @@ class ShizukuDexConnector(context: Context, private val core: AaBridgeCore,
             (queued as? Future<*>)?.cancel(false)
         }
         firstFrame = false
-        generationStartedAt = 0
+        awaitingFrameSince = 0
         DexState.running = false
         DexState.displayId = -1
         DexState.independentPhoneLock = null
@@ -432,6 +446,15 @@ class ShizukuDexConnector(context: Context, private val core: AaBridgeCore,
     private fun helperUnavailableMessage(): String =
         if (DexPrivilegeAccess.isReady(context)) "Служба рабочего стола завершилась; Shizuku доступен"
         else "Сервер Shizuku недоступен. Запустите Shizuku и подключитесь снова"
+
+    private fun bindFailureMessage(access: DexPrivilegeAccess.Status): String = when (access) {
+        DexPrivilegeAccess.Status.UPDATE_REQUIRED -> "Для рабочего стола нужен Shizuku 13 или новее. Обновите и перезапустите Shizuku."
+        DexPrivilegeAccess.Status.READY -> "Shizuku доступен, но служба рабочего стола не запустилась за 30 секунд. Перезапустите Shizuku или выберите в HSD «Настройки → Активация → Wi-Fi»."
+        DexPrivilegeAccess.Status.PERMISSION_REQUIRED, DexPrivilegeAccess.Status.DENIED_PERMANENTLY ->
+            "Разрешите доступ HSD в Shizuku → «Авторизованные приложения»."
+        DexPrivilegeAccess.Status.NOT_INSTALLED, DexPrivilegeAccess.Status.NOT_RUNNING ->
+            "Запустите Shizuku или выберите в HSD «Настройки → Активация → Wi-Fi»."
+    }
 
     private fun failureKind(error: Throwable): Failure =
         if (error is DeadObjectException || error.cause is DeadObjectException) Failure.HELPER_UNAVAILABLE else Failure.OTHER

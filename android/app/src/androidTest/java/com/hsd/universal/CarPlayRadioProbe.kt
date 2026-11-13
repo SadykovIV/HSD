@@ -87,12 +87,13 @@ internal class CarPlayRadioProbe(private val context: Context, private val args:
 
     private fun receiver(life: ProjectionResources): Bundle {
         val adapter = context.getSystemService(BluetoothManager::class.java)!!.adapter
-        val listen =
+        val initiates = args.getString("rfcomm") == "fromHeadUnit"
+        val listen = if (initiates) null else
             adapter.listenUsingRfcommWithServiceRecord(
                 "QA CarPlay",
                 UUID.fromString("00000000-deca-fade-deca-deafdecacaff"),
             )
-        life.own(listen::close)
+        if (listen != null) life.own(listen::close)
         val addr =
             NetworkInterface.getByName("wlan0")
                 .inetAddresses
@@ -105,7 +106,9 @@ internal class CarPlayRadioProbe(private val context: Context, private val args:
                 it.soTimeout = 35_000
             }
         listening()
-        val socket = listen.accept(50_000)
+        val socket = listen?.accept(50_000) ?: adapter.getRemoteDevice(arg("peer"))
+            .createRfcommSocketToServiceRecord(UUID.fromString("00000000-deca-fade-deca-deafdecacafe"))
+            .also { outgoing -> life.own(outgoing::close); outgoing.connect() }
         life.own(socket::close)
         check(socket.remoteDevice.address == arg("peer"))
         val channel =
