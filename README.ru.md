@@ -1,8 +1,8 @@
 # HSD
 
-[English](README.md) · [Скачать оба APK](https://github.com/SadykovIV/HSD/releases/latest) · [Обсуждение в Telegram](https://t.me/+H2QUrHMGm-g3ODhi)
+[English](README.md) · [Скачать оба APK](https://github.com/SadykovIV/HSD/releases/latest) · [Обсуждение на 4PDA](https://4pda.to/forum/index.php?showtopic=1129468) · [Группа в Telegram](https://t.me/+H2QUrHMGm-g3ODhi) · [Поддержать через CloudTips](https://pay.cloudtips.ru/p/41f6ecdd)
 
-HSD — развитие **HeadSwap Desktop**. Приложение выводит на экран головного устройства (ГУ) **DriveDeck — полноценный автомобильный лаунчер**. Прямо с экрана ГУ можно запускать установленные на телефоне приложения, в том числе те, которых нет в каталоге Android Auto. Откройте приложение на весь экран или разместите карту и плеер рядом. Касания на магнитоле управляют приложениями телефона.
+HSD — развитие **[HeadSwap Desktop](https://github.com/SadykovIV/headswap_desk)**. Приложение выводит на экран головного устройства (ГУ) **DriveDeck — полноценный автомобильный лаунчер**. Прямо с экрана ГУ можно запускать установленные на телефоне приложения, в том числе те, которых нет в каталоге Android Auto. Откройте приложение на весь экран или разместите карту и плеер рядом. Касания на магнитоле управляют приложениями телефона.
 
 | Что поддерживает магнитола | Как подключиться |
 | --- | --- |
@@ -12,7 +12,18 @@ HSD — развитие **HeadSwap Desktop**. Приложение выводи
 
 Для HSD нужен Android 13 или новее. В приложении также доступны Android Desktop и Samsung DeX на совместимых телефонах Samsung.
 
-![Два приложения телефона рядом на экране магнитолы в DriveDeck](docs/drivedeck.png)
+[![Яндекс Карты и Яндекс Музыка работают рядом в DriveDeck](docs/drivedeck.png)](docs/drivedeck.png)
+
+<details>
+<summary>Как выглядит DriveDeck в автомобиле</summary>
+
+![DriveDeck на магнитоле автора: слева плеер, справа карта](docs/hsd-head-unit.jpg)
+
+*Иллюстрация на основе фотографии автора, обработанная с помощью ИИ.*
+
+</details>
+
+[![HSD 0.7.3 на телефоне: главный экран, выбор подключения и настройки](docs/hsd-interface-ru.png)](docs/hsd-interface-ru.png)
 
 На схемах показано, как телефон передаёт изображение и звук, как касания возвращаются с магнитолы и где искать реализацию. [Схемы и карта проекта](docs/architecture.ru.md)
 
