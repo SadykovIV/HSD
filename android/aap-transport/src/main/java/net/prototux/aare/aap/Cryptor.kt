@@ -52,6 +52,7 @@ class Cryptor(
 
     /** Set when the handshake failed because the head unit's certificate is not trusted. */
     val pinRefusal: PinRefusal? get() = pinning?.refusal
+    internal val chainRejection get() = pinning?.chainRejection
 
     /** True when this side refused the head unit's certificate, for any reason. */
     val peerRefused get() = pinning?.refused == true
@@ -108,6 +109,10 @@ class Cryptor(
     /** The head unit's certificate chain, once the handshake is done. */
     val peerCertificates: List<X509Certificate>
         get() = runCatching { engine.session.peerCertificates.filterIsInstance<X509Certificate>() }.getOrDefault(emptyList())
+
+    /** May include a chain observed before rejection; never use it as proof of TLS completion. */
+    val presentedPeerCertificates: List<X509Certificate>
+        get() = peerCertificates.ifEmpty { pinning?.presentedChain.orEmpty() }
 
     val protocol: String get() = engine.session.protocol
     val cipherSuite: String get() = engine.session.cipherSuite

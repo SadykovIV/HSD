@@ -65,7 +65,8 @@ internal class DesktopPowerDiagnostics(private val context: Context) {
             val ids = (DelegatedInputGateway.ownedDisplayIds() + DexState.displayId).filter { it > 0 }.sorted()
             val states = ids.joinToString(",") { id -> "$id:${displays.getDisplay(id)?.state ?: -1}" }
             "phoneState=${displays.getDisplay(Display.DEFAULT_DISPLAY)?.state ?: -1} " +
-                "interactive=${power.isInteractive} locked=${keyguard.isDeviceLocked || keyguard.isKeyguardLocked} " +
+                "interactive=${power.isInteractive} locked=${keyguard.isKeyguardLocked} " +
+                "deviceLocked=${keyguard.isDeviceLocked} deviceSecure=${keyguard.isDeviceSecure} " +
                 "powerSave=${power.isPowerSaveMode} idle=${power.isDeviceIdleMode} " +
                 "batteryExempt=${power.isIgnoringBatteryOptimizations(context.packageName)} " +
                 "thermal=${power.currentThermalStatus} desktopStates=[$states]"

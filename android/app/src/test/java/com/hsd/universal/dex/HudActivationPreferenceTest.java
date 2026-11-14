@@ -7,7 +7,7 @@ import static org.junit.Assert.assertTrue;
 
 public final class HudActivationPreferenceTest {
     private static boolean enabled(String xml) {
-        return HudActivationPreference.enabled(xml.getBytes(StandardCharsets.UTF_8));
+        return ActivationPreferences.hudEnabled(xml.getBytes(StandardCharsets.UTF_8));
     }
 
     @Test public void minifiedMapReadsEitherValueRegardlessOfAttributeOrder() {
@@ -29,6 +29,16 @@ public final class HudActivationPreferenceTest {
 
     @Test public void rejectsDoctypesAndOversizedFiles() {
         assertFalse(enabled("<!DOCTYPE map [<!ENTITY x 'true'>]><map><boolean name='metaNavi' value='&x;'/></map>"));
-        assertFalse(enabled("<map>" + " ".repeat(HudActivationPreference.MAX_BYTES) + "</map>"));
+        assertFalse(enabled("<map>" + " ".repeat(ActivationPreferences.MAX_BYTES) + "</map>"));
+    }
+
+    @Test public void usbHelperUsesTheTargetsSelectedPermissions() {
+        byte[] empty = "<map/>".getBytes(StandardCharsets.UTF_8);
+        assertTrue(ActivationPreferences.read(empty, "desktop_usb_playback_audio", true));
+        assertFalse(ActivationPreferences.read(empty, "desktop_panel_control", false));
+        byte[] selected = ("<map><boolean name='desktop_usb_playback_audio' value='false'/>" +
+            "<boolean name='desktop_panel_control' value='true'/></map>").getBytes(StandardCharsets.UTF_8);
+        assertFalse(ActivationPreferences.read(selected, "desktop_usb_playback_audio", true));
+        assertTrue(ActivationPreferences.read(selected, "desktop_panel_control", false));
     }
 }

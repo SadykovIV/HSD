@@ -773,8 +773,7 @@ object AnnexB {
     }
 
     /** Normalise mixed three/four-byte prefixes, preserving any bytes before the first unit. */
-    fun normalize(d: ByteArray): ByteArray {
-        val units = units(d)
+    fun normalize(d: ByteArray, units: List<UnitRange> = units(d)): ByteArray {
         val extra = units.count { it.start - it.prefix == 3 }
         if (extra == 0) return d
         val out = ByteArray(d.size + extra)
@@ -794,6 +793,27 @@ object AnnexB {
         units(d).mapNotNull { unit -> unit.type(d, hevc).takeIf { it >= 0 } }
 
     fun startsWithSps(d: ByteArray) = nalTypes(d).firstOrNull() == 7
+
+    /** Supply missing AVC parameter sets before the first slice, retaining any AUD and in-band sets. */
+    fun withAvcParameterSets(data: ByteArray, ranges: List<UnitRange>, config: ByteArray?): ByteArray? {
+        val prefix = ranges.takeWhile { it.type(data) !in 1..5 }
+        val sps = prefix.lastOrNull { it.type(data) == 7 }
+        val pps = prefix.any { it.type(data) == 8 }
+        if (sps != null && pps) return data
+        if (config == null) return null
+        val missing = if (sps == null && !pps) config else {
+            val type = if (sps == null) 7 else 8
+            units(config).filter { it.type(config) == type }.map { it.withStartCode(config) }
+                .reduceOrNull(::glue) ?: return null
+        }
+        val offset = sps?.end ?: prefix.firstOrNull { it.type(data) == 9 }?.end ?: 0
+        if (offset == 0) return glue(missing, data)
+        return ByteArray(data.size + missing.size).also {
+            data.copyInto(it, 0, 0, offset)
+            missing.copyInto(it, offset)
+            data.copyInto(it, offset + missing.size, offset)
+        }
+    }
 
     /**
      * Минимальный level_idc H.264 для кадра w x h при 30 fps по MaxFS: 31 до 720p (3600 MB), 40 до 8192 MB (1080p),

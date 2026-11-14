@@ -6,6 +6,8 @@ import android.os.Build
 import android.provider.Settings
 import com.flyfishxu.kadb.Kadb
 import com.hsd.universal.AppLog
+import com.hsd.universal.DesktopTransport
+import com.hsd.universal.ProjectionRoute
 import com.hsd.universal.link.car.CarLifeConnectionMode
 import com.hsd.universal.link.car.WirelessPrefs
 
@@ -19,9 +21,10 @@ internal object DesktopUsbDebugging {
 
     fun required(context: Context): Boolean {
         val prefs = DexPrefs(context)
-        return DesktopUsbDebuggingPolicy.required(Build.VERSION.SDK_INT, prefs.useDelegated,
-            prefs.desktopMode == DesktopModePolicy.SAMSUNG_DEX,
-            WirelessPrefs(context).mode == CarLifeConnectionMode.WIFI)
+        val wired = if (DesktopTransport.universal) ProjectionRoute.selected(context).wired
+            else WirelessPrefs(context).mode != CarLifeConnectionMode.WIFI
+        return DesktopUsbDebuggingPolicy.required(Build.VERSION.SDK_INT, Build.MANUFACTURER.equals("samsung", true),
+            prefs.useDelegated, prefs.desktopMode == DesktopModePolicy.SAMSUNG_DEX, wired)
     }
 
     private fun appSetting(context: Context): String? = runCatching {

@@ -8,6 +8,7 @@ import android.app.Application
 import android.app.Instrumentation
 import android.app.UiAutomation
 import android.os.Bundle
+import android.os.FileObserver
 import android.os.Process
 import android.os.SystemClock
 import android.provider.Settings
@@ -18,6 +19,7 @@ import com.hsd.universal.AppLog
 import com.hsd.universal.cluster.CarLifeForegroundGuidance
 import org.json.JSONObject
 import java.io.File
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -53,6 +55,12 @@ class DelegatedDesktopInstrumentation : Instrumentation() {
     override fun onStart() {
         val context = targetContext
         val stop = CountDownLatch(1)
+        val refresh = ArrayBlockingQueue<Unit>(1)
+        val requests = object : FileObserver(context.filesDir, FileObserver.CLOSE_WRITE) {
+            override fun onEvent(event: Int, path: String?) {
+                if (path == ManualAccessPolicy.STATUS_REFRESH) refresh.offer(Unit)
+            }
+        }
         var lease: DelegatedBootstrapState.Lease? = null
         var automation: UiAutomation? = null
         var adoptedHere = false
@@ -161,7 +169,7 @@ class DelegatedDesktopInstrumentation : Instrumentation() {
                     DelegatedPanelAccess.unsupportedThisActivation = true
                 }
             }
-            lease = DelegatedDesktopAccess.begin { stop.countDown() }
+            lease = DelegatedDesktopAccess.begin { stop.countDown(); refresh.offer(Unit) }
             DexPrefs(context).useDelegated = true
             val token = activationToken ?: DisplayHelperRendezvous.newToken().also { activationToken = it }
             if (android.os.Build.VERSION.SDK_INT >= 37) VdmHostLink.beginActivation(token)
@@ -180,13 +188,16 @@ class DelegatedDesktopInstrumentation : Instrumentation() {
                 } catch (error: Throwable) { recoveryFile.failWrite(output); throw error }
             } catch (_: Exception) { AppLog.i("ACTIVATION: не удалось сохранить данные восстановления клавиатуры", false) }
             ready = true
+            requests.startWatching()
             writeHeartbeat(true)
             PhoneActivationStatus.clearPriorFailure(context)
             AppLog.i("ACTIVATION ready: audio=$playbackAudio panel=$panelReady", false)
             Log.i(DelegatedDesktopAccess.LOG_TAG, "READY protocol=1 uid=${Process.myUid()} pid=${Process.myPid()} permissions=${permissions.joinToString(",")} playbackAudio=$playbackAudio panelControl=$panelReady")
             runCatching { sendStatus(0, Bundle().apply { putString("hsd_access", "ready") }) }
             // USB detach and producer/service shutdown must never count this latch down.
-            while (!stop.await(5, TimeUnit.SECONDS)) {
+            while (stop.count > 0) {
+                refresh.poll(5, TimeUnit.SECONDS)
+                if (stop.count == 0L) break
                 check(DelegatedDesktopAccess.hasPermissions(context)) { "Desktop permissions were revoked" }
                 activationToken?.let(ShellPanelClient::reconnect)
                 DelegatedInputGateway.refreshImeRoutes()
@@ -198,6 +209,7 @@ class DelegatedDesktopInstrumentation : Instrumentation() {
             AppLog.i("ACTIVATION failed: ${PhoneActivationPolicy.logMessage(failureReason)}", false)
             Log.e(DelegatedDesktopAccess.LOG_TAG, "FAILED protocol=1 ${error.javaClass.simpleName}", error)
         } finally {
+            requests.stopWatching()
             VdmHostLink.endActivation()
             lease?.let(DelegatedDesktopAccess::end) // reject new panel leases before cleanup snapshot
             activationIdentity = null

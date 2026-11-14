@@ -1,4 +1,5 @@
-syntax="proto2";
+// Open enum: an omitted action defaults to DOWN, an unknown wire value stays unknown.
+syntax="proto3";
 
 import "aap_protobuf/service/inputsource/message/PointerAction.proto";
 

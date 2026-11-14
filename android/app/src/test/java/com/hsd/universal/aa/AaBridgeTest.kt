@@ -629,6 +629,51 @@ class AaBridgeCoreTest {
 
     private fun pts(vararg p: Int) = p.toList().chunked(3).map { TouchPoint(it[0], it[1], it[2]) }
 
+    @Test fun repeatedDownCannotSplitAnActiveDragOnEitherProjectionPath() {
+        val expected = listOf(Triple(0, 50, 50), Triple(2, 53, 54), Triple(2, 60, 70),
+            Triple(1, 60, 70), Triple(0, 50, 50), Triple(1, 50, 50))
+        for (viaCarLife in listOf(true, false)) {
+            val peer = FakePeer()
+            core.peer = peer
+            fun send(action: Int, x: Int, y: Int) {
+                if (viaCarLife) core.onCarlifeTouch(action, x, y)
+                else core.sendProjectionTouch(action, 0, pts(0, x, y))
+            }
+            send(0, 50, 50)
+            send(0, 50, 50)
+            now += 4000
+            send(0, 53, 54)
+            send(2, 60, 70)
+            send(0, 50, 50)
+            send(1, 60, 70)
+            send(0, 50, 50)
+            send(1, 50, 50)
+            assertEquals(expected, peer.touches.toList())
+        }
+    }
+
+    @Test fun projectionCancelAndPointerTransitionsPreserveContactIdentity() {
+        val peer = FakePeer()
+        core.peer = peer
+        core.desktopInputEnabled = true
+        val first = pts(7, 20, 60)
+        val both = first + TouchPoint(12, 90, 30)
+        core.sendProjectionTouch(0, 0, first)
+        core.sendProjectionTouch(5, 1, both)
+        core.sendProjectionTouch(5, 1, both)
+        core.sendProjectionTouch(2, 1, both)
+        core.sendProjectionTouch(6, 0, both)
+        core.sendProjectionTouch(6, 0, both)
+        core.sendProjectionTouch(2, 0, both.drop(1))
+        core.sendProjectionTouch(3, 0, emptyList())
+        core.sendProjectionTouch(1, 0, both.drop(1))
+        core.sendProjectionTouch(0, 0, first)
+        core.sendProjectionTouch(1, 0, first)
+        assertEquals(listOf(0,5,2,6,2,3,0,1), peer.events.map { it.first })
+        assertEquals(0, peer.events[2].second)
+        assertEquals(both.drop(1), peer.events[5].third)
+    }
+
     @Test
     fun pinchSecondFingerUpFirst() {
         val peer = FakePeer()

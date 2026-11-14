@@ -120,11 +120,13 @@ object Actions {
         }
     }
 
-    @Synchronized fun observeUsbConnection(ctx: Context) {
+    @Synchronized fun observeUsbConnection(ctx: Context): Long? {
         registerUsbObserver(ctx)
         // A failed query is not evidence that the physical accessory was detached.
-        runCatching { ctx.getSystemService(UsbManager::class.java).accessoryList.orEmpty() }
-            .onSuccess { observeAccessories(ctx, it) }
+        val list = runCatching { ctx.getSystemService(UsbManager::class.java).accessoryList.orEmpty() }
+            .getOrNull() ?: return null
+        observeAccessories(ctx, list)
+        return autoConnect.attachment
     }
 
     private fun observeAccessories(ctx: Context, list: Array<out UsbAccessory>) {
@@ -167,11 +169,12 @@ object Actions {
                 return publish(UsbScanState.FAILED, if (DexPrefs(ctx).useDelegated) ctx.getString(R.string.usb_open_activate, DesktopTransport.shortName) else ctx.getString(R.string.usb_shizuku_access, DesktopTransport.appName), reason)
             }
             val acc = list.firstOrNull { matchesRoute(ProjectionRoute.selected(ctx), it) }
-            val active = BridgeService.alive && CarLifeState.running && !CarLifeState.wirelessSession
+            val active = BridgeService.alive && CarLifeState.running && !CarLifeState.wirelessSession && !CarLifeState.awaitingCarLifeUsbHandshake
             if (BridgeService.alive && DesktopTransport.activeRoute != ProjectionRoute.selected(ctx))
                 return publish(UsbScanState.STARTING, ctx.getString(R.string.desktop_switching_connection_type), reason)
-            if (acc != null && DesktopTransport.activeRoute == ProjectionRoute.USB && !CarLifeState.wirelessSession && !active && usbGate.failureDetail == null)
-                return publish(UsbScanState.STARTING, ctx.getString(R.string.usb_negotiating), reason)
+            if (acc != null && !CarLifeState.wirelessSession && !active && usbGate.failureDetail == null &&
+                (DesktopTransport.activeRoute == ProjectionRoute.USB || CarLifeState.awaitingCarLifeUsbHandshake))
+                return publish(UsbScanState.STARTING, ctx.getString(R.string.usb_negotiating, DesktopTransport.name), reason)
             val step = usbGate.decide(acc?.let(::accessoryKey), acc?.let(usb::hasPermission) == true, active, retryPermission)
             if (acc != null) CarLifeState.accessory = MainActivity.describe(ctx, acc)
             return when (step) {
@@ -290,7 +293,8 @@ object Actions {
         val serviceRequested = BridgeService.alive || usbGate.isStarting
         usbGate.reset() // Any outstanding system USB permission callback is now stale.
         publish(UsbScanState.WAITING_FOR_ACCESSORY, ctx.getString(R.string.desktop_connection_stopped), "стоп")
-        if (serviceRequested) ctx.startForegroundService(DesktopTransport.service(ctx).setAction(BridgeService.ACTION_STOP))
+        if (serviceRequested) ctx.startForegroundService(DesktopTransport.service(ctx).setAction(BridgeService.ACTION_STOP)
+            .putExtra(BridgeService.EXTRA_USER_STOP, userInitiated))
     }
 
     /** Самопроверка сертификатов AA и TLS без сети: результат в лог и AaState.selftest. */

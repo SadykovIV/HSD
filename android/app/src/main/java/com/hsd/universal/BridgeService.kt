@@ -12,6 +12,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.hardware.usb.UsbManager
+import android.hardware.usb.UsbAccessory
 import android.net.Network
 import android.os.Handler
 import android.os.IBinder
@@ -280,7 +281,7 @@ open class BridgeService : Service() {
             if (endpoint != null) endpoint.stopForRouteChange()
             else {
                 startForegroundTyped(HSDNotification.build(this, CHANNEL, NOTIF_ID))
-                command(Intent().setAction(ACTION_STOP))
+                command(Intent().setAction(ACTION_STOP).putExtra(EXTRA_USER_STOP, false))
             }
             return START_NOT_STICKY
         }
@@ -350,15 +351,17 @@ open class BridgeService : Service() {
             AppLog.i("сервис: стоп по команде")
             stopRequested = true
             usbHandoffFrom = null
-            com.hsd.universal.dex.DesktopMusicPlayback.cancel("explicit Stop")
+            val userStop = intent.getBooleanExtra(EXTRA_USER_STOP, true)
+            val reason = if (userStop) "остановлено пользователем" else "остановка текущего сеанса"
+            com.hsd.universal.dex.DesktopMusicPlayback.cancel(reason)
             cancelDesktopRecovery()
             cancelWirelessWaiting("стоп")
             val s = session
             if (s != null) {
-                s.close("остановлено пользователем")        // onSessionClosed увидит stopRequested: AA закрывается сразу
+                s.close(reason)
             } else {
                 val h = host
-                if (h != null) h.shutdown("стоп пользователем") else finish()
+                if (h != null) h.shutdown(reason) else finish()
             }
             return
         }
@@ -494,7 +497,7 @@ open class BridgeService : Service() {
             btProbe.stop("кабель")
             cancelLinkWait()
         }
-        startSession(StreamTransport.fromPfd(pfd, TransportCaps.USB_AOA, MainActivity.describe(this, acc)))
+        startSession(StreamTransport.fromPfd(pfd, TransportCaps.USB_AOA, MainActivity.describe(this, acc)), acc)
     }
 
     /** debug tcp6: слушать 6 портов на loopback, ждать ГУ (pc-headunit --transport tcp6), затем обычная сессия. */
@@ -1025,7 +1028,7 @@ open class BridgeService : Service() {
         }, "link-$kind").start()
     }
 
-    private fun startSession(transport: CarTransport) {
+    private fun startSession(transport: CarTransport, accessory: UsbAccessory? = null) {
         lastSessionWasUsb = transport.caps.kind == TransportCaps.USB_AOA.kind
         physicalUsbDetached = false
         main.removeCallbacks(usbToAirTick)
@@ -1088,12 +1091,21 @@ open class BridgeService : Service() {
                 .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "hsd:session")
                 .apply { acquire(4 * 60 * 60 * 1000L) }
         }
+        CarLifeState.awaitingCarLifeUsbHandshake = accessory != null
         CarLifeState.running = true
         stopRequested = false
 
         val sref = arrayOfNulls<CarLifeSession>(1)
         val s = CarLifeSession(transport, cfg, h.core, PhoneThermal(this), CallStateSource.NONE,
             brandArtwork = BrandArtwork.bitmap(resources),
+            onProtocolEstablished = { owner ->
+                if (accessory != null) main.post {
+                    if (!stopRequested && session === owner && CarLifeState.awaitingCarLifeUsbHandshake) {
+                        CarLifeState.awaitingCarLifeUsbHandshake = false
+                        Actions.onUsbSessionStarted(this@BridgeService)
+                    }
+                }
+            },
             onHuSize = { w, hh -> aaPrefs.saveHuSize(w, hh) },
             onNavigationInterestChanged = { main.post { if (!stopRequested && session === sref[0]) clusterNavigation?.subscriptionChanged() } },
             onDesktopOutputLost = { owner, hadPicture ->
@@ -1103,7 +1115,7 @@ open class BridgeService : Service() {
                         com.hsd.universal.dex.DesktopMusicPlayback.usbOutputLost(this, owner, hadPicture && DexState.running, carriedAudio)
                 }
             }
-        ) { reason -> main.post { onSessionClosed(sref[0]!!, reason) } }
+        ) { reason -> main.post { onSessionClosed(sref[0]!!, reason, accessory) } }
         sref[0] = s
         session = s
         com.hsd.universal.dex.DesktopMusicPlayback.attach(applicationContext, this, s,
@@ -1132,7 +1144,6 @@ open class BridgeService : Service() {
             h.shutdown("завершившийся источник при подключении")
             return
         }
-        if (transport.caps.kind == TransportCaps.USB_AOA.kind) Actions.onUsbSessionStarted(this@BridgeService)
     }
 
     private fun startClusterSources(owner: CarLifeSession, config: SessionConfig, clusterTransport: Boolean, prefs: AaPrefs) {
@@ -1348,7 +1359,7 @@ open class BridgeService : Service() {
         if (h == null) finish()
     }
 
-    private fun onSessionClosed(s: CarLifeSession, reason: String) {
+    private fun onSessionClosed(s: CarLifeSession, reason: String, accessory: UsbAccessory?) {
         AppLog.i("сервис: сессия завершена ($reason)")
         if (session !== s) return
         stopClusterSources()
@@ -1365,7 +1376,12 @@ open class BridgeService : Service() {
         cancelDesktopRecovery()
         session = null
         CarLifeState.running = false
-        if (s.transportKind == TransportCaps.USB_AOA.kind) Actions.onUsbSessionClosed(this@BridgeService)
+        CarLifeState.awaitingCarLifeUsbHandshake = false
+        if (accessory != null) {
+            if (!s.protocolEstablished && !stopRequested && !physicalUsbDetached)
+                Actions.onUsbHandshakeFailed(accessory, getString(R.string.carlife_usb_handshake_failed, reason))
+            else Actions.onUsbSessionClosed(this@BridgeService)
+        }
         markCarSeen()
         CarLifeState.wirelessSession = false
         if (wifiBMode && autoStarted && !autoMode && !stopRequested) {
@@ -1422,6 +1438,7 @@ open class BridgeService : Service() {
         val stopped = serviceStarts.finish(::stopSelfResult) {
             cancelDesktopRecovery()
             stopCarNet(CarNetEvent.STOP, "finish")
+            CarLifeState.awaitingCarLifeUsbHandshake = false
             CarLifeState.running = false
             try {
                 wakeLock?.let { if (it.isHeld) it.release() }
@@ -1481,6 +1498,7 @@ open class BridgeService : Service() {
     companion object {
         const val ACTION_RECONFIGURE = "com.hsd.universal.RECONFIGURE"
         const val ACTION_STOP = "com.hsd.universal.STOP"
+        const val EXTRA_USER_STOP = "com.hsd.universal.USER_STOP"
         const val ACTION_PHONE_SCREEN_OFF = "com.hsd.universal.PHONE_SCREEN_OFF"
         const val ACTION_PHONE_SCREEN_ON = "com.hsd.universal.PHONE_SCREEN_ON"
         const val ACTION_DESKTOP_HOME = "com.hsd.universal.DESKTOP_HOME"

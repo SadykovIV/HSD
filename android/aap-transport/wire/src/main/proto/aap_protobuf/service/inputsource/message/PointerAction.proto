@@ -1,4 +1,4 @@
-syntax="proto2";
+syntax="proto3";
 
 package aap_protobuf.service.inputsource.message;
 
@@ -7,6 +7,7 @@ enum PointerAction
     ACTION_DOWN = 0;
     ACTION_UP = 1;
     ACTION_MOVED = 2;
+    ACTION_CANCEL = 3;
     ACTION_POINTER_DOWN = 5;
     ACTION_POINTER_UP = 6;
 }

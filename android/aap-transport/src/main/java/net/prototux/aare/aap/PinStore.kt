@@ -12,6 +12,10 @@ import javax.net.ssl.X509TrustManager
  * renewed and trusted again.
  */
 interface PinStore {
+    /** Additional issuer and TLS-role checks for a presented receiver chain. These also apply to known pins. */
+    @Throws(CertificateException::class)
+    fun checkReceiverChain(chain: List<X509Certificate>) {}
+
     /** The trusted SHA-256 fingerprints (lowercase hex) of leaf certificates for [peerKey]; empty if none. */
     fun get(peerKey: String): Set<String>
 
@@ -55,6 +59,11 @@ internal class PinningTrustManager(
     @Volatile var refused = false
     /** Set when the head unit presented no certificate at all: there is nothing to trust. */
     @Volatile var noCertificate = false
+    /** Only for reporting a failed handshake. This chain has not proved possession of the key. */
+    @Volatile var presentedChain: List<X509Certificate> = emptyList()
+        private set
+    @Volatile var chainRejection: CertificateException? = null
+        private set
     @Volatile private var pending: String? = null
 
     override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {
@@ -62,6 +71,13 @@ internal class PinningTrustManager(
             val leaf = chain?.firstOrNull() ?: run {
                 noCertificate = true
                 throw CertificateException("head unit sent no certificate")
+            }
+            presentedChain = chain.toList()
+            try {
+                pins.checkReceiverChain(presentedChain)
+            } catch (invalid: CertificateException) {
+                chainRejection = invalid
+                throw invalid
             }
             val actual = fingerprint(leaf)
             synchronized(pins) {
@@ -83,8 +99,15 @@ internal class PinningTrustManager(
 
     /** Trusts the certificate seen during the handshake, if the head unit had none trusted yet. */
     fun commit() {
+        val candidate = pending ?: return
         synchronized(pins) {
-            if (pins.get(peerKey).isEmpty()) pending?.let { pins.add(peerKey, it) }
+            val current = pins.get(peerKey)
+            if (current.isNotEmpty() && candidate !in current) {
+                refused = true
+                refusal = PinRefusal(peerKey, candidate, changed = true)
+                throw CertificateException("head unit certificate changed during TLS (SHA-256 $candidate)")
+            }
+            if (current.isEmpty()) pins.add(peerKey, candidate)
         }
     }
 

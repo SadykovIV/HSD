@@ -13,7 +13,8 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 /** Test the real desktop and its companion windows even on AVDs with a smaller AVC encoder. */
-internal fun checkDriveDeckDisplay(context: Context, width: Int, height: Int, tilesReady: (Int) -> Boolean): Bundle {
+internal fun checkDriveDeckDisplay(context: Context, width: Int, height: Int, density: Int,
+                                   tilesReady: (Int) -> Boolean, checkFullscreen: (Int, IDexUserService) -> Unit): Bundle {
     val input = DelegatedInputGateway(context)
     val token = Binder()
     input.beginGeneration(1, token, true)
@@ -53,17 +54,21 @@ internal fun checkDriveDeckDisplay(context: Context, width: Int, height: Int, ti
             }, Handler(thread.looper))
             try {
                 val mode = DesktopModePolicy.DRIVEDECK
-                val parent = remote.startDesktopSized(reader.surface, token, width, height, 160, mode)
-                EmbeddedSessionRegistry.activate(token, remote, parent, work, mode, 160, true,
-                    nativeLifetime = checkNotNull(input.nativeProducerLifetime))
+                val parent = remote.startDesktopSized(reader.surface, token, width, height, density, mode)
+                EmbeddedSessionRegistry.activate(token, remote, parent, work, mode, density, true,
+                    nativeLifetime = input.nativeProducerLifetime ?: remote.asBinder())
                 val dm = context.getSystemService(DisplayManager::class.java)
                 val deadline = SystemClock.elapsedRealtime() + 25000
                 do {
                     val display = dm.getDisplay(parent)?.mode
                     if (display?.physicalWidth == width && display.physicalHeight == height &&
                         frames.get() >= 3 && colors.get() > 12 && tilesReady(parent)) {
+                        val displayContext = context.createDisplayContext(dm.getDisplay(parent))
+                        check(displayContext.resources.displayMetrics.densityDpi == density)
+                        checkFullscreen(parent, remote)
                         return Bundle().apply {
                             putString("native_desktop", "${width}x${height}")
+                            putInt("desktop_dpi", density)
                             putInt("composed_frames", frames.get())
                             putInt("sampled_colors", colors.get())
                         }

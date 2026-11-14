@@ -8,7 +8,7 @@ import java.net.Socket
  * Persistent RTSP framing. Decrypt a single complete record at a time to preserve surplus pipelined
  * bytes.
  */
-internal class AirPlayWire(socket: Socket) {
+internal class AirPlayWire(socket: Socket, private val channel: String = "RTSP") {
     private val raw = BufferedInputStream(socket.getInputStream())
     private val out = socket.getOutputStream()
     var cipher: ControlCipher? = null
@@ -78,7 +78,7 @@ internal class AirPlayWire(socket: Socket) {
     }
 
     fun read(): Message {
-        val (line, headers) = head(input) ?: throw EOFException("Магнитола закрыла RTSP")
+        val (line, headers) = head(input) ?: throw EOFException("Магнитола закрыла $channel")
         val len = headers["content-length"]?.toInt() ?: 0
         require(len in 0..2097152)
         return Message(line, headers, ByteArray(len).also { DataInputStream(input).readFully(it) })

@@ -24,7 +24,6 @@ import com.hsd.universal.dex.DexPrefs
 import com.hsd.universal.dex.DexState
 import com.hsd.universal.link.StreamTransport
 import com.hsd.universal.link.TransportCaps
-import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.CountDownLatch
@@ -32,22 +31,27 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.locks.LockSupport
 
+// The head-unit fixture binds IPv4. Android 10 can resolve the default loopback to ::1.
+private const val RECEIVER_LOOPBACK = "127.0.0.1"
+
 /** Real CarLife input and timed PCM on one duplex bulk stream. Only the clocked media source is synthetic. */
 internal fun checkCarLifeGestureAudio(port: Int): String {
     require(port in 1..65535)
     val core = AaBridgeCore({ _, _ -> }).apply { desktopInputEnabled = true }
     val single = AtomicInteger()
     val pinch = AtomicInteger()
+    val transitions = java.util.concurrent.CopyOnWriteArrayList<Int>()
     val finished = CountDownLatch(1)
     core.peer = object : AaPeer {
         override fun requestKeyFrame() {}
         override fun sendTouch(action: Int, actionIndex: Int, points: List<TouchPoint>) {
             if (action == 2) (if (points.size == 2) pinch else single).incrementAndGet()
+            else transitions.add(action)
         }
     }
     val geometry = DesktopVideoSelection(DesktopResolution.R1280_720, 0)
     return Socket().use { socket ->
-        socket.connect(InetSocketAddress(InetAddress.getLoopbackAddress(), port), 5000)
+        socket.connect(InetSocketAddress(RECEIVER_LOOPBACK, port), 5000)
         val transport = StreamTransport.fromPfd(ParcelFileDescriptor.fromSocket(socket), TransportCaps.USB_AOA, "CarLife gesture fixture")
         val session = CarLifeSession(transport, SessionConfig(desktopVideo = geometry), core, onClosed = { finished.countDown() })
         try {
@@ -76,6 +80,9 @@ internal fun checkCarLifeGestureAudio(port: Int): String {
             }
             check(finished.await(10, TimeUnit.SECONDS)) { "Receiver did not acknowledge the final PCM sample" }
             check(single.get() >= 50 && pinch.get() >= 100) { "single=$single pinch=$pinch" }
+            check(transitions == buildList { addAll(listOf(0, 1, 0)); repeat(10) { add(5); add(6) }; add(1) }) {
+                "Unexpected contact transitions: $transitions"
+            }
             "single=$single pinch=$pinch"
         } finally { session.close("gesture fixture complete") }
     }
@@ -90,7 +97,7 @@ internal fun checkCarLifeHud(context: Context, port: Int) {
     val started = CountDownLatch(1)
     val stopped = CountDownLatch(1)
     Socket().use { socket ->
-        socket.connect(InetSocketAddress(InetAddress.getLoopbackAddress(), port), 5000)
+        socket.connect(InetSocketAddress(RECEIVER_LOOPBACK, port), 5000)
         val transport = StreamTransport.fromPfd(ParcelFileDescriptor.fromSocket(socket), TransportCaps.USB_AOA, "CarLife HUD fixture")
         lateinit var session: CarLifeSession
         session = CarLifeSession(transport, SessionConfig(metaNaviStreetNames = prefs.metaNaviStreetNames), core,
@@ -115,7 +122,7 @@ internal fun checkCarLifeHud(context: Context, port: Int) {
 }
 
 /** The outside receiver speaks the USB wire format. Only the bulk file descriptor is supplied by the fixture. */
-internal fun checkCarLifeBulk(test: Instrumentation, port: Int, tone: () -> AudioTrack, splitReady: (Int) -> Boolean): Bundle {
+internal fun checkCarLifeBulk(test: Instrumentation, port: Int, tone: () -> AudioTrack, desktopReady: (Int) -> Boolean): Bundle {
     val context = test.targetContext
     val prefs = DexPrefs(context)
     val selection = prefs.desktopVideoSelection()
@@ -132,11 +139,11 @@ internal fun checkCarLifeBulk(test: Instrumentation, port: Int, tone: () -> Audi
     val closed = CountDownLatch(1)
     val sourceStopped = CountDownLatch(1)
     return Socket().use { socket ->
-        socket.connect(InetSocketAddress(InetAddress.getLoopbackAddress(), port), 5000)
+        socket.connect(InetSocketAddress(RECEIVER_LOOPBACK, port), 5000)
         val transport = StreamTransport.fromPfd(ParcelFileDescriptor.fromSocket(socket), TransportCaps.USB_AOA, "USB bulk fixture")
         val session = CarLifeSession(transport, SessionConfig(desktopVideo = selection, desktopBitrateBps = prefs.desktopBitrateMbps * 1_000_000,
             desktopAvc = DesktopEncoderSupport.surfaceEncoders("video/avc", prefs.desktopBitrateMbps * 1_000_000)), core) { closed.countDown() }
-        var split = false
+        var desktop = false
         var picture = false
         var touch = false
         var size = ""
@@ -149,7 +156,7 @@ internal fun checkCarLifeBulk(test: Instrumentation, port: Int, tone: () -> Audi
             player.play()
             val until = SystemClock.elapsedRealtime() + 40_000
             while (closed.count > 0 && SystemClock.elapsedRealtime() < until) {
-                if (DexState.displayId > 0 && !split) split = splitReady(DexState.displayId)
+                if (DexState.displayId > 0 && !desktop) desktop = desktopReady(DexState.displayId)
                 if (session.hasFreshDesktopVideo()) {
                     picture = true
                     size = "${core.videoMode.outW}x${core.videoMode.outH}"
@@ -157,11 +164,11 @@ internal fun checkCarLifeBulk(test: Instrumentation, port: Int, tone: () -> Audi
                 if (CarLifeState.touch != "-") touch = true
                 closed.await(150, TimeUnit.MILLISECONDS)
             }
-            check(closed.count == 0L && split && picture && touch) {
-                "CarLife USB split=$split picture=$picture touch=$touch size=$size · ${DexState.error}"
+            check(closed.count == 0L && desktop && picture && touch) {
+                "CarLife USB desktop=$desktop picture=$picture touch=$touch size=$size · ${DexState.error}"
             }
             Bundle().apply {
-                putString("CarLife_bulk", "$size AVC, DriveDeck split, receiver touch")
+                putString("CarLife_bulk", "$size AVC, ${com.hsd.universal.dex.DesktopModePolicy.label(prefs.desktopMode)}, receiver touch")
                 putString("result", "PASS")
             }
         } finally {

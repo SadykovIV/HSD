@@ -2,13 +2,31 @@ package com.hsd.universal.dex
 
 /** Entering Android's existing pairing code never depends on discovering its transient port. */
 internal object PhonePairingPromptPolicy {
-    fun offer(ready: Boolean, forcePair: Boolean, reconfigurationRequired: Boolean): Boolean =
-        forcePair || !ready && !reconfigurationRequired
+    fun offer(ready: Boolean, forcePair: Boolean, reconfigurationRequired: Boolean, paired: Boolean): Boolean =
+        forcePair || !ready && !reconfigurationRequired && !paired
 
     fun canRetryWithCode(reason: DexAccessReason): Boolean = reason in setOf(
         DexAccessReason.AUTHORIZATION_REJECTED, DexAccessReason.PAIR_REJECTED,
         DexAccessReason.REFUSED, DexAccessReason.TIMEOUT, DexAccessReason.NETWORK_UNREACHABLE,
         DexAccessReason.CONNECTION_CLOSED, DexAccessReason.TLS_HANDSHAKE, DexAccessReason.TLS_PROTOCOL)
+}
+
+/** Connect announcements can change while the same one-use pairing sheet is visible. */
+internal class ActivePairingWindow {
+    private var endpoint: DexEndpoint? = null
+    private var used = false
+
+    @Synchronized fun advertised(current: DexEndpoint?) {
+        if (endpoint != current) {
+            endpoint = current
+            used = false
+        }
+    }
+
+    @Synchronized fun take(): DexEndpoint? {
+        if (used) return null
+        return endpoint?.also { used = true }
+    }
 }
 
 /** Retry a saved key only for a new endpoint or an observed radio/debugging state change. */

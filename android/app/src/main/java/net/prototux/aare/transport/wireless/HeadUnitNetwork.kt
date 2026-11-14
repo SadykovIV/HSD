@@ -16,6 +16,7 @@ import android.net.wifi.WifiNetworkSpecifier
 import android.os.Build
 import android.annotation.TargetApi
 import com.hsd.universal.R
+import com.hsd.universal.ProjectionWifi
 import net.prototux.aare.aap.AapLog
 import net.prototux.aare.aap.wireless.JoinResult
 import net.prototux.aare.aap.wireless.WifiCredentials
@@ -67,9 +68,9 @@ internal class HeadUnitNetwork(
     /** Blocks until the phone has an IPv4 address on the head unit's network, or fails. */
     fun join(credentials: WifiCredentials): JoinResult {
         if (released) return JoinResult.Failed(WppStatus.WIFI_NETWORK_UNAVAILABLE, "cancelled")
-        if (wifi?.isWifiEnabled != true) {
-            // Apps cannot turn Wi-Fi on since Android 10; the head unit shows its own hint for this status.
-            return JoinResult.Failed(WppStatus.PHONE_WIFI_DISABLED, "Wi-Fi is turned off on the phone")
+        val radio = ProjectionWifi.read(context)
+        if (radio.needsEnable) {
+            return JoinResult.Failed(WppStatus.PHONE_WIFI_DISABLED, context.getString(radio.message))
         }
         ssid = credentials.ssid
         findExisting(credentials)?.let { return it }

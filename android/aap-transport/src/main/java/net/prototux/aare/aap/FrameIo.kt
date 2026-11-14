@@ -13,7 +13,7 @@ import java.io.OutputStream
  */
 class FrameReader(input: InputStream, private val cryptor: () -> Cryptor?) {
     private val input = DataInputStream(input.buffered(64 * 1024))
-    private class Partial(val declaredTotal: Int, val buf: ByteArrayOutputStream, var encrypted: Boolean)
+    private class Partial(val declaredTotal: Int, val buf: ByteArrayOutputStream, val encrypted: Boolean)
 
     private val partial = HashMap<Int, Partial>()
 
@@ -35,10 +35,10 @@ class FrameReader(input: InputStream, private val cryptor: () -> Cryptor?) {
             if (payload.size < size) payload = ByteArray(size)
             input.readFully(payload, 0, size)
 
-            // AOA delivers transfers even when the previous phone process no longer owns its TLS
-            // session. Only a fresh plaintext VERSION_REQUEST may start a new session. Never
-            // decrypt or dispatch these records. The normal VERSION timeout bounds an idle pipe.
-            if (awaitUsbVersion && Frame.isEncrypted(flags)) {
+            val first = Frame.isFirst(flags)
+            // On a reopened USB pipe either ciphertext or the tail of an old fragmented message
+            // can precede VERSION. Count whole frames only, preserving any partial VERSION on its channel.
+            if (awaitUsbVersion && (Frame.isEncrypted(flags) || (!first && channel !in partial))) {
                 oldUsbFrames++
                 oldUsbBytes += size
                 if (oldUsbFrames >= 32 || oldUsbBytes >= 128 * 1024)
@@ -57,7 +57,6 @@ class FrameReader(input: InputStream, private val cryptor: () -> Cryptor?) {
                 plainLen = size
             }
 
-            val first = Frame.isFirst(flags)
             val last = Frame.isLast(flags)
             if (first && last) {
                 // Decryption already returns an owned array; plaintext uses the reusable receive buffer.
@@ -77,8 +76,9 @@ class FrameReader(input: InputStream, private val cryptor: () -> Cryptor?) {
                 continue
             }
             val state = partial[channel] ?: throw AapException("continuation frame without a first frame (ch=$channel)")
+            if (Frame.isEncrypted(flags) != state.encrypted)
+                throw AapException("encryption changed inside a fragmented message (ch=$channel)")
             appendFragment(channel, state, plain, plainLen)
-            if (!Frame.isEncrypted(flags)) state.encrypted = false
             if (last) {
                 partial.remove(channel)
                 buffered -= state.buf.size()

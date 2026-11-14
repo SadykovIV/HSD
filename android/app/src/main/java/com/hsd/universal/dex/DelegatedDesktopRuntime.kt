@@ -46,13 +46,8 @@ internal class DelegatedDesktopRuntime(private val context: Context, private val
     // lock isolation must still permit normal projection with the previously supported flags.
     @SuppressLint("WrongConstant")
     private fun create(name: String, surface: Surface, width: Int, height: Int, density: Int, flags: Int): VirtualDisplay {
-        val isolation = DesktopModePolicy.VIRTUAL_DISPLAY_OWN_DISPLAY_GROUP or DesktopModePolicy.VIRTUAL_DISPLAY_ALWAYS_UNLOCKED
-        return checkNotNull(try {
-            displays.createVirtualDisplay(name, width, height, density, surface, flags)
-        } catch (denied: SecurityException) {
-            if (flags and isolation == 0) throw denied
-            com.hsd.universal.AppLog.i("DESKTOP LOCK: isolation rejected by framework, creating normal display", false)
-            displays.createVirtualDisplay(name, width, height, density, surface, flags and isolation.inv())
+        return checkNotNull(DesktopDisplayIsolation.create(flags) { requested ->
+            displays.createVirtualDisplay(name, width, height, density, surface, requested)
         }) { "Android отклонил доверенный виртуальный экран" }
     }
 

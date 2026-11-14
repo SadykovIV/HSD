@@ -168,8 +168,7 @@ class DelegatedDexConnector(context: Context, private val core: AaBridgeCore,
                 check(DelegatedDesktopAccess.isReady(context)) { context.getString(R.string.desktop_access_complete_connect_your_phone_to_your_computer_to) }
                 core.tick()
                 core.desktopVideoError?.let { fail(it) }
-                if (generationStartedAt != 0L && !firstFrame &&
-                    System.nanoTime() - generationStartedAt > TimeUnit.SECONDS.toNanos(30)) {
+                if (!firstFrame && core.firstFrameTimedOut(generationStartedAt)) {
                     fail(context.getString(R.string.desktop_the_desktop_did_not_transmit_the_first_frame_in))
                 }
             } catch (e: Exception) { fail(e.message ?: context.getString(R.string.desktop_desktop_error)) }

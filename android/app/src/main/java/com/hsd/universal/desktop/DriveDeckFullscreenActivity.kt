@@ -7,25 +7,32 @@ import com.hsd.universal.compat.hideDesktopBars
 
 import android.app.Activity
 import android.app.ActivityOptions
+import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Intent
 import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.Rect
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.ImageButton
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import com.hsd.universal.R
+import com.hsd.universal.dex.DesktopBackSequence
+import com.hsd.universal.dex.DesktopModePolicy
 import com.hsd.universal.embed.EmbeddedGatewayPolicy
 import com.hsd.universal.embed.EmbeddedSessionRegistry
+import com.hsd.universal.shared.ProjectionHost
 import kotlin.math.roundToInt
 
 /** Signature-protected launcher for one full-screen DriveDeck app on its active HU display. */
@@ -34,7 +41,10 @@ class DriveDeckFullscreenActivity : Activity() {
     private var hardwareBack: FullscreenHardwareBack? = null
     private lateinit var message: TextView
     private lateinit var back: ImageButton
+    private lateinit var menu: ImageButton
     private lateinit var home: ImageButton
+    private val screenBack = DesktopBackSequence()
+    private val backBounds = Rect()
     private var leaving = false
     private var target: ComponentName? = null
     private var parentProof: Any? = null
@@ -80,10 +90,22 @@ class DriveDeckFullscreenActivity : Activity() {
             text = getString(R.string.desktop_opening_app)
         }
         root.addView(message, FrameLayout.LayoutParams(-1, -1))
-        back = button(getString(R.string.set_back), R.drawable.desktop_back) { pane.back() }
-        home = button(getString(R.string.desktop_drivedeck_home), R.drawable.desktop_home) { goHome() }
-        root.addView(back, buttonPosition(aboveHome = false))
-        root.addView(home, buttonPosition(aboveHome = false))
+        back = button(getString(R.string.set_back), R.drawable.desktop_back, ::pressBack)
+        menu = button(getString(R.string.desktop_drivedeck_menu), R.drawable.desktop_apps_menu, ::openAppMenu)
+        home = button(getString(R.string.desktop_drivedeck_home), R.drawable.desktop_home, ::goHome)
+        val controls = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            dividerDrawable = android.graphics.drawable.ShapeDrawable().apply {
+                paint.color = Color.TRANSPARENT
+                intrinsicHeight = dp(8)
+            }
+            showDividers = LinearLayout.SHOW_DIVIDER_MIDDLE
+            for (button in listOf(back, menu, home)) addView(button, dp(48), dp(48))
+        }
+        root.addView(controls, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.START).apply {
+            marginStart = dp(12)
+            bottomMargin = dp(12)
+        })
         setContentView(root)
         hardwareBack = FullscreenHardwareBack.attach(this, pane) { !leaving }
             ?: run { finish(); return }
@@ -97,6 +119,7 @@ class DriveDeckFullscreenActivity : Activity() {
     }
 
     private fun openTarget(intent: Intent) {
+        screenBack.reset()
         val component = ComponentName.unflattenFromString(intent.getStringExtra("component").orEmpty())
         if (component == null || !EmbeddedGatewayPolicy.allowsLauncherPackage(component.packageName, packageName)) {
             finish(); return
@@ -112,15 +135,16 @@ class DriveDeckFullscreenActivity : Activity() {
         target = component
         val backEnabled = intent.getBooleanExtra("back", false)
         val homeEnabled = intent.getBooleanExtra("home", false)
+        val menuEnabled = intent.getBooleanExtra(ProjectionHost.APP_MENU, false)
         val policy = config(component.packageName) ?: run { finish(); return }
-        if (!backEnabled && !homeEnabled && policy[1] == 0) {
+        if (!backEnabled && !homeEnabled && !menuEnabled && policy[1] == 0) {
             // No overlay or app-specific rendering is needed on the parent display.
             if (!tryNativeLaunch()) goHome()
             return
         }
         back.visibility = if (backEnabled) View.VISIBLE else View.GONE
         home.visibility = if (homeEnabled) View.VISIBLE else View.GONE
-        back.layoutParams = buttonPosition(aboveHome = homeEnabled)
+        menu.visibility = if (menuEnabled) View.VISIBLE else View.GONE
         message.visibility = View.VISIBLE
         val label = entry.loadLabel(packageManager).toString()
         pane.open(DesktopAppCatalog.Entry(component.packageName, component.className, label))
@@ -136,6 +160,7 @@ class DriveDeckFullscreenActivity : Activity() {
     }
 
     override fun onPause() {
+        screenBack.reset()
         hardwareBack?.pause()
         super.onPause()
     }
@@ -147,13 +172,26 @@ class DriveDeckFullscreenActivity : Activity() {
     }
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
-        if (event.actionMasked == MotionEvent.ACTION_DOWN) hardwareBack?.touchDown()
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                hardwareBack?.touchDown()
+                if (!::back.isInitialized || !back.getGlobalVisibleRect(backBounds) ||
+                    !backBounds.contains(event.rawX.toInt(), event.rawY.toInt())) screenBack.reset()
+            }
+            MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_CANCEL -> screenBack.reset()
+        }
         return super.dispatchTouchEvent(event)
     }
 
     @Deprecated("Route Back to the owned child display")
-    override fun onBackPressed() {
-        if (!::pane.isInitialized || config() == null) finish() else pane.back()
+    override fun onBackPressed() = pressBack()
+
+    private fun pressBack() {
+        if (!::pane.isInitialized || config() == null) { finish(); return }
+        if (leaving || isFinishing) return
+        val now = SystemClock.uptimeMillis()
+        screenBack.down(now)
+        if (screenBack.up(now)) goHome() else pane.back()
     }
 
     private fun tryNativeLaunch(): Boolean {
@@ -173,6 +211,30 @@ class DriveDeckFullscreenActivity : Activity() {
         finish()
     }
 
+    private fun openAppMenu() {
+        val proof = parentProof ?: return
+        if (leaving || !EmbeddedSessionRegistry.isCurrentParent(parentId, proof)) return
+        // Return to the same DriveDeck entry (including older hosts using MainActivity).
+        val launcher = when (intent.getStringExtra(ProjectionHost.LAUNCHER_CLASS)) {
+            DesktopModePolicy.DRIVEDECK_HOME_CLASS -> DesktopModePolicy.DRIVEDECK_HOME_CLASS
+            else -> DesktopModePolicy.driveDeckHome(this)
+        }
+        val request = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+            .setClassName(DesktopModePolicy.DRIVEDECK_PACKAGE, launcher)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            .putExtra(ProjectionHost.PACKAGE, packageName).putExtra(ProjectionHost.DISPLAY, parentId)
+            .putExtra("ru.drivedeck.launcher.ALL_APPS", true)
+        try {
+            startActivity(request, ActivityOptions.makeBasic().setLaunchDisplayId(parentId).toBundle())
+            leaving = true
+            finish()
+        } catch (error: RuntimeException) {
+            if (error !is ActivityNotFoundException && error !is SecurityException) throw error
+            com.hsd.universal.AppLog.e("DriveDeck app menu", error)
+            Toast.makeText(this, R.string.desktop_drivedeck_menu_unavailable, Toast.LENGTH_SHORT).show()
+        }
+    }
+
     private fun button(label: String, icon: Int, click: () -> Unit) = ImageButton(this).apply {
         contentDescription = label
         setImageResource(icon)
@@ -186,15 +248,6 @@ class DriveDeckFullscreenActivity : Activity() {
         val inset = dp(12)
         setPadding(inset, inset, inset, inset)
         setOnClickListener { if (config() != null) click() else finish() }
-    }
-
-    private fun buttonPosition(aboveHome: Boolean): FrameLayout.LayoutParams {
-        val diameter = dp(48)
-        val edge = dp(12)
-        return FrameLayout.LayoutParams(diameter, diameter, Gravity.BOTTOM or Gravity.START).apply {
-            marginStart = edge
-            bottomMargin = edge + if (aboveHome) diameter + dp(8) else 0
-        }
     }
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density).roundToInt()

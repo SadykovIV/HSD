@@ -4,6 +4,16 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class VdmRecoveryEndpointsTest {
+    @Test fun currentOwnServiceRemainsUsableWhenDebuggingFlagIsZeroAndTlsPropertyIsHidden() {
+        val live = DexEndpoint("192.0.2.1", 43043)
+        assertFalse(VdmRecoveryPolicy.discoveryAllowed(true, 0, null))
+        assertEquals(listOf(live.copy(host = "127.0.0.1"), live),
+            VdmRecoveryEndpoints.advertised(live, true) { it == live.host })
+        assertTrue(VdmRecoveryEndpoints.advertised(live, true) { false }.isEmpty())
+        assertTrue(VdmRecoveryEndpoints.advertised(live, false) { true }.isEmpty())
+        assertTrue(VdmRecoveryEndpoints.advertised(null, true) { true }.isEmpty())
+    }
+
     @Test fun systemTlsPortOnlyAddsValidLoopbackWithNoGuessedFallback() {
         assertEquals(DexEndpoint("127.0.0.1", 45001), VdmRecoveryEndpoints.tlsLoopback("45001"))
         listOf(null, "", "0", "-1", "65536", "5555x", "127.0.0.1:45001").forEach {

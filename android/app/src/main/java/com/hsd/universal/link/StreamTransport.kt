@@ -49,7 +49,6 @@ class StreamTransport(
     private val closed = AtomicBoolean(false)
     private var reader: Thread? = null
     private var writer: Thread? = null
-    @Volatile private var desync = false
     @Volatile private var wholeWrites = false
     @Volatile override var usbEndpointLost = false
         private set
@@ -139,12 +138,13 @@ class StreamTransport(
                 rx += n
                 // A raw read can start in the middle of PCM; never dump an unclassified buffer.
                 AppLog.detail("RAW rx read=$n bytes")
-                if (desync) continue
                 try {
                     parser.feed(buf, 0, n) { chan, inner -> assembler.feed(chan, inner, sink) }
                 } catch (e: ProtocolDesync) {
-                    desync = true
-                    AppLog.e("РАССИНХРОН потока: ${e.message}; дальше только счётчик прочитанных байт")
+                    // Frames have no sync marker. Searching a media payload for the next header
+                    // would allow arbitrary bytes to be interpreted as a command.
+                    if (!closed.get()) onClosed("CarLife: ${e.message}")
+                    return
                 }
             }
         } catch (e: Exception) {

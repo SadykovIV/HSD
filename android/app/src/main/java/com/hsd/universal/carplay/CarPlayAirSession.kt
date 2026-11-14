@@ -104,7 +104,7 @@ internal class CarPlayAirSession(
 
     fun start(): Display {
         val controlSocket = tcp(ep.port)
-        val control = AirPlayWire(controlSocket)
+        val control = AirPlayWire(controlSocket, "RTSP (control)")
         val keys = pair(control)
         control.cipher = ControlCipher(keys.phoneReadKey, keys.phoneWriteKey)
         val time = TimingServer(socketFactory = ::udp)
@@ -132,7 +132,27 @@ internal class CarPlayAirSession(
                     "statsCollectionEnabled" to false,
                 ),
             )
+        val keepPort = (setup["keepAlivePort"] as? Number)?.toLong()?.takeIf { it in -32768L..65535L }
+            ?.toInt()?.and(0xffff) ?: 0
+        // The receiver starts its idle watchdog during setup. Keep its UDP channel independent
+        // of RTSP response times and blocked writes to the screen stream.
+        val udpSent = java.util.concurrent.atomic.AtomicInteger()
+        if (keepPort != 0) {
+            val socket = udp()
+            val payload = ByteArray(4) // AirPlay idle keepalive, version 0, active session.
+            val packet = DatagramPacket(payload, payload.size, ep.host, keepPort)
+            socket.send(packet)
+            udpSent.incrementAndGet()
+            val timer = Executors.newSingleThreadScheduledExecutor()
+            life.own { timer.shutdownNow() }
+            timer.scheduleWithFixedDelay({
+                try { socket.send(packet); udpSent.incrementAndGet() }
+                catch (e: Exception) { if (!life.isClosed) failed(e) }
+            }, 1, 1, TimeUnit.SECONDS)
+        }
         val info = dict("GET", "/info")
+        val screenStats = info["keepAliveSendStatsAsBody"] == true || (info["keepAliveSendStatsAsBody"] as? Number)?.toInt() == 1
+        AppLog.i("CarPlay keepalive: UDP=${keepPort != 0}, screenStats=$screenStats", false)
         val display =
             (info["displays"] as? List<*>)?.filterIsInstance<Map<*, *>>()?.firstOrNull()
                 ?: error("Магнитола не объявила дисплей CarPlay")
@@ -164,7 +184,7 @@ internal class CarPlayAirSession(
                     "Events-Salt".toByteArray(),
                     label.toByteArray(),
                 )
-            val listener = AirPlayWire(s)
+            val listener = AirPlayWire(s, "RTSP (events)")
             listener.cipher =
                 ControlCipher(
                     derive("Events-Write-Encryption-Key"),
@@ -189,6 +209,7 @@ internal class CarPlayAirSession(
                                             ?: CarPlayIapChannel(
                                                     context,
                                                     life,
+                                                    ep.device,
                                                     { payload ->
                                                         listener.command(
                                                             BinaryPlist.encode(
@@ -259,6 +280,7 @@ internal class CarPlayAirSession(
                 AirPlayStreamKeys.chachaStreamKey(keys.sharedSecret, screenId),
                 width,
                 height,
+                screenStats,
             )
         val enabled =
             (setup["enabledFeatures"] as? List<*>).orEmpty().map { it.toString().lowercase() }
@@ -287,7 +309,7 @@ internal class CarPlayAirSession(
                     key("DataStream-Output-Encryption-Key"),
                     key("DataStream-Input-Encryption-Key"),
                 )
-            val link = CarPlayIapChannel(context, life, tunnel::send, event, failed)
+            val link = CarPlayIapChannel(context, life, ep.device, tunnel::send, event, failed)
             thread(name = "CarPlay iAP DataStream", isDaemon = true) {
                 try {
                     tunnel.read(link::accept)
@@ -332,6 +354,12 @@ internal class CarPlayAirSession(
         }
         if (audio == null) AppLog.i("CarPlay audio: no negotiated media output", false)
         control.request("RECORD", "/", byteArrayOf())
+        val recordedAt = android.os.SystemClock.elapsedRealtime()
+        val feedbackReplies = java.util.concurrent.atomic.AtomicInteger()
+        life.own {
+            AppLog.i("CarPlay: RECORD ${android.os.SystemClock.elapsedRealtime() - recordedAt} ms, " +
+                "UDP keepalive sent=${udpSent.get()}, feedback replies=${feedbackReplies.get()}", false)
+        }
         // Streaming health is observed on media/event sockets. The only control request after
         // RECORD is optional feedback. A slow or absent reply must neither kill the session
         // nor hold up the receiver's transport heartbeat. Closing life still interrupts the read.
@@ -339,13 +367,10 @@ internal class CarPlayAirSession(
         val executor = Executors.newScheduledThreadPool(2)
         life.own { executor.shutdownNow() }
         val feedbackSince = java.util.concurrent.atomic.AtomicLong(0L)
-        val keepPort = (setup["keepAlivePort"] as? Number)?.toInt() ?: 0
-        val heartbeat = if (keepPort in 1..65535) udp() else null
         executor.scheduleAtFixedRate(
             {
                 try {
                     video.keepAlive()
-                    heartbeat?.send(DatagramPacket(byteArrayOf(0), 1, ep.host, keepPort))
                     val since = feedbackSince.get()
                     if (since > 0 && android.os.SystemClock.elapsedRealtime() - since >= 12_000 &&
                         feedbackSince.compareAndSet(since, -1L))
@@ -361,17 +386,18 @@ internal class CarPlayAirSession(
         // Feedback is optional receiver telemetry. The negotiated stream and its heartbeat
         // continue when the receiver declines telemetry. Transport and session errors are fatal.
         val feedback = object : Runnable {
-            var delay = 2L
+            var delay = 1L
             override fun run() {
                 try {
                     feedbackSince.set(android.os.SystemClock.elapsedRealtime())
                     control.request("POST", "/feedback")
-                    delay = 2L
+                    feedbackReplies.incrementAndGet()
+                    delay = 1L
                 } catch (e: RtspError) {
                     when (e.status) {
                         404, 405, 501 -> return
                         500, 502, 503, 504 -> {
-                            if (delay == 2L) com.hsd.universal.AppLog.i("CarPlay · магнитола временно не предоставляет статистику (RTSP ${e.status})", false)
+                            if (delay == 1L) com.hsd.universal.AppLog.i("CarPlay · магнитола временно не предоставляет статистику (RTSP ${e.status})", false)
                             delay = (delay * 2).coerceAtMost(30L)
                         }
                         else -> { failed(e); return }
@@ -385,7 +411,7 @@ internal class CarPlayAirSession(
                 if (!executor.isShutdown) executor.schedule(this, delay, TimeUnit.SECONDS)
             }
         }
-        executor.schedule(feedback, 2, TimeUnit.SECONDS)
+        executor.schedule(feedback, 1, TimeUnit.SECONDS)
         return Display(width, height, fps, hid)
     }
 }

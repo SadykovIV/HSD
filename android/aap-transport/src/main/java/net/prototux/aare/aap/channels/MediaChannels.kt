@@ -207,7 +207,11 @@ class VideoChannel(
         private set
     /** The configuration index of the running stream, to START a new session on the same one. */
     @Volatile private var startIndex = 0
-    @Volatile var focused = false
+    @Volatile var focusMode: VideoFocusMode? = null
+        private set
+    // CONFIG/START opens the decoder. Some receivers report UI focus only after decoding video.
+    val acceptsVideo get() = ready && started && focusMode?.let(::isProjected) != false
+    @Volatile var videoExpectedSinceNanos: Long? = 0L
         private set
 
     private class Pending(val buf: ByteArray, val offset: Int, val length: Int, val ptsUs: Long, val key: Boolean, val recycle: (ByteArray) -> Unit)
@@ -265,32 +269,32 @@ class VideoChannel(
             }
             attemptedCodecs.clear()
             attemptedCodecs.add(type)
-            if (next != chosen) clearPending()
+            if (next != chosen) clearPending() else discardQueuedFrames()
             chosen = next
             startIndex = index
             sentAt.clear()
-            startStream(index)
+            if (focusMode != VideoFocusMode.VIDEO_FOCUS_NATIVE) {
+                startStream(index)
+                if (acceptsVideo) codecConfig?.let { sendCodecConfigData(it, 0, it.size, dataPriority) }
+            }
+            if (focusMode == null) send(MediaMsg.VIDEO_FOCUS_REQUEST, VideoFocusRequestNotification.newBuilder()
+                .setMode(VideoFocusMode.VIDEO_FOCUS_PROJECTED).setReason(VideoFocusReason.UNKNOWN).build(), dataPriority)
         }
         listener.onVideoStart(index, next)
-        // Ask to be shown; head units answer with a focus notification. At the data priority so
-        // it follows START: the head unit must not be asked to show a stream it hasn't started.
-        send(MediaMsg.VIDEO_FOCUS_REQUEST, VideoFocusRequestNotification.newBuilder()
-            .setMode(VideoFocusMode.VIDEO_FOCUS_PROJECTED).setReason(VideoFocusReason.UNKNOWN).build(), dataPriority)
     }
 
     override fun onOtherMessage(msg: AapMessage) {
         when (msg.id) {
             MediaMsg.VIDEO_FOCUS_NOTIFICATION -> {
                 val n = VideoFocusNotification.parseFrom(msg.bodyBytes())
-                setFocus(n.focus)
+                if (n.hasFocus()) setFocus(n.focus)
             }
             MediaMsg.VIDEO_FOCUS_REQUEST -> {
                 // Some head units ask us to change focus; we comply and confirm.
                 val r = VideoFocusRequestNotification.parseFrom(msg.bodyBytes())
-                val projected = isProjected(r.mode)
-                // Confirm the projected mode it asked for (with or without input focus).
+                if (!r.hasMode()) return
                 send(MediaMsg.VIDEO_FOCUS_NOTIFICATION, VideoFocusNotification.newBuilder()
-                    .setFocus(if (projected) r.mode else VideoFocusMode.VIDEO_FOCUS_NATIVE)
+                    .setFocus(r.mode)
                     .setUnsolicited(false).build())
                 setFocus(r.mode)
             }
@@ -322,38 +326,42 @@ class VideoChannel(
 
     /** Serializes the producer against a new START, including the codec header and first frame. */
     fun writeFor(config: VideoConfiguration, write: () -> Unit): Boolean = synchronized(lock) {
-        if (chosen != config || !started || !focused) return false
+        if (chosen != config || !acceptsVideo) return false
         write()
         true
     }
 
-    private fun clearPending() {
+    private fun discardQueuedFrames() {
         while (pending.isNotEmpty()) pending.removeFirst().let { it.recycle(it.buf) }
         pendingFrames = 0
         needKeyFrame = true
+    }
+
+    private fun clearPending() {
+        discardQueuedFrames()
         codecConfig = null
         sentAt.clear()
     }
 
     private fun setFocus(mode: VideoFocusMode) {
         val projected = isProjected(mode)
-        val changed = projected != focused
-        focused = projected
-        if (projected) {
-            // Some head units throw their decoder away while they show their own screen (the
-            // reverse camera on LG GEN5, #109) and only build a new one on a START: if we stopped
-            // the stream for a full native focus, start a fresh session now so the picture returns.
-            if (!started && ready && chosen != null) startStream(startIndex)
-            synchronized(lock) { needKeyFrame = true; while (pending.isNotEmpty()) pending.removeFirst().let { it.recycle(it.buf) } }
-            // Resend the codec config after the (re)start, the same as at connection.
-            codecConfig?.let { sendCodecConfigData(it, 0, it.size, Priority.VIDEO) }
-        } else if (mode == VideoFocusMode.VIDEO_FOCUS_NATIVE) {
-            // Full native: the head unit shows its own screen (reverse, "exit to car"). Stop the
-            // stream so it can tear its decoder down cleanly; we re-START when projection returns.
-            // A transient native (a brief overlay) keeps the stream open; we just stop feeding it.
-            stopStream()
+        synchronized(lock) {
+            val previous = focusMode
+            if (previous == mode) return
+            focusMode = mode
+            if (projected) {
+                if (previous?.let(::isProjected) == true) return // Only input ownership changed.
+                if (videoExpectedSinceNanos == null) videoExpectedSinceNanos = System.nanoTime()
+                if (!started && ready && chosen != null) startStream(startIndex)
+                discardQueuedFrames()
+                if (acceptsVideo) codecConfig?.let { sendCodecConfigData(it, 0, it.size, dataPriority) }
+            } else {
+                videoExpectedSinceNanos = null
+                discardQueuedFrames()
+                if (mode == VideoFocusMode.VIDEO_FOCUS_NATIVE) stopStream()
+            }
         }
-        if (changed || projected) listener.onVideoFocus(projected)
+        listener.onVideoFocus(projected)
     }
 
     /** Asks the head unit to show its own UI (e.g. the driver chose "exit" on the phone). */
@@ -369,7 +377,7 @@ class VideoChannel(
 
     fun sendCodecConfig(data: ByteArray, offset: Int, length: Int) {
         codecConfig = data.copyOfRange(offset, offset + length)
-        if (started) sendCodecConfigData(data, offset, length, Priority.VIDEO)
+        if (acceptsVideo) sendCodecConfigData(data, offset, length, Priority.VIDEO)
     }
 
     /**
@@ -377,8 +385,8 @@ class VideoChannel(
      * buffer back once it has been written or dropped.
      */
     fun sendFrame(buf: ByteArray, offset: Int, length: Int, ptsUs: Long, keyFrame: Boolean, recycle: (ByteArray) -> Unit) {
-        if (!started || !focused) { recycle(buf); return }
         synchronized(lock) {
+            if (!acceptsVideo) { recycle(buf); return }
             if (!canSend()) noteAttempt()
             if (needKeyFrame && !keyFrame) {
                 droppedFrames++
@@ -415,7 +423,7 @@ class VideoChannel(
     }
 
     private fun pump() {
-        while (started && focused && pending.isNotEmpty() && canSend() && outstandingWrites < MAX_PENDING) {
+        while (acceptsVideo && pending.isNotEmpty() && canSend() && outstandingWrites < MAX_PENDING) {
             val p = pending.removeFirst()
             val t = System.nanoTime()
             outstandingWrites++
@@ -433,9 +441,13 @@ class VideoChannel(
     }
 
     override fun onClosed() {
-        super.onClosed()
-        focused = false
-        synchronized(lock) { while (pending.isNotEmpty()) pending.removeFirst().let { it.recycle(it.buf) }; sentAt.clear(); pendingFrames = 0 }
+        synchronized(lock) {
+            super.onClosed()
+            focusMode = null
+            videoExpectedSinceNanos = 0L
+            chosen = null
+            clearPending()
+        }
     }
 
     companion object {

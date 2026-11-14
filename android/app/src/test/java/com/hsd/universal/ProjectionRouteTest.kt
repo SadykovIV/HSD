@@ -21,4 +21,15 @@ class ProjectionRouteTest {
         assertNull(UsbAccessoryPolicy.route("Baidu", "Android Auto"))
         assertNull(UsbAccessoryPolicy.route(null, null))
     }
+
+    @Test fun onlyHeadUnitHotspotTransportsWaitForThePhoneWifiRadio() {
+        assertEquals(setOf(ProjectionRoute.CARPLAY, ProjectionRoute.WIRELESS_AA),
+            ProjectionRoute.entries.filter { it.usesHeadUnitHotspot }.toSet())
+        for (state in listOf(android.net.wifi.WifiManager.WIFI_STATE_DISABLED, android.net.wifi.WifiManager.WIFI_STATE_DISABLING))
+            assertEquals(ProjectionWifi.OFF, ProjectionWifi.of(state))
+        assertTrue(ProjectionWifi.of(android.net.wifi.WifiManager.WIFI_STATE_ENABLING).needsEnable)
+        assertFalse(ProjectionWifi.of(android.net.wifi.WifiManager.WIFI_STATE_ENABLED).needsEnable)
+        assertFalse(ProjectionWifi.of(null).needsEnable)
+        assertFalse(ProjectionWifi.of(android.net.wifi.WifiManager.WIFI_STATE_UNKNOWN).needsEnable)
+    }
 }

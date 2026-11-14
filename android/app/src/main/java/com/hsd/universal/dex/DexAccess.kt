@@ -44,7 +44,7 @@ object DexAccess {
     }
 
     @Synchronized
-    private fun configure(context: Context) {
+    internal fun configure(context: Context) {
         if (configured) return
         KadbCert.configure(IdentityStore(context.applicationContext))
         KadbCert.ensureReady()

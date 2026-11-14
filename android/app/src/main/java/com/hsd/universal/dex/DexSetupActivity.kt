@@ -5,6 +5,7 @@ import com.hsd.universal.compat.safeInsets
 
 import com.hsd.universal.R
 import com.hsd.universal.ProjectionRoute
+import com.hsd.universal.ProjectionWifi
 import com.hsd.universal.DesktopTransport
 
 import com.hsd.universal.link.ReceiverAudioCalibration
@@ -87,9 +88,9 @@ open class DexSetupActivity : Activity() {
     private var phoneReplyAttempt: String? = null
     private lateinit var connectButton: Button
     private lateinit var connectButtonHint: TextView
+    private lateinit var projectionWifiButton: Button
     private lateinit var phoneActivationSection: LinearLayout
     private lateinit var computerActivationSection: LinearLayout
-    private lateinit var computerActivationInstructions: TextView
     private lateinit var phoneActivationButton: Button
     private lateinit var cancelPhoneActivationButton: Button
     private lateinit var phonePairSection: LinearLayout
@@ -145,7 +146,6 @@ open class DexSetupActivity : Activity() {
     private lateinit var setup: LinearLayout
     private lateinit var shizukuSetup: LinearLayout
     private lateinit var shizukuHelp: TextView
-    private lateinit var wizardComputerAction: Button
     private lateinit var shizukuGrantButton: Button
     private lateinit var shizukuManagerButton: Button
     private val ui by lazy { DesktopSetupViews(this) }
@@ -200,6 +200,7 @@ open class DexSetupActivity : Activity() {
     private var receiverRegistered = false
     private val stopped: Boolean get() = Actions.isUsbAutoStartStopped()
     private var observedStop = false
+    private var lastUsbAttachment: Long? = null
     private var armed = false
     private var monitorBridge = false
     private var screenBusy = false
@@ -293,7 +294,7 @@ open class DexSetupActivity : Activity() {
                 main.postDelayed(this, 500)
                 return
             }
-            Actions.observeUsbConnection(this@DexSetupActivity)
+            val attachment = Actions.observeUsbConnection(this@DexSetupActivity)
             if (stopped) {
                 observedStop = true
                 cancelContinuation()
@@ -307,7 +308,11 @@ open class DexSetupActivity : Activity() {
                 main.postDelayed(this, 500)
                 return
             }
-            if (observedStop) {
+            if (attachment != null && attachment != lastUsbAttachment && restartAt == 0L && !wizardStep) {
+                // The attach intent may precede enumeration, including during the service's detach grace period.
+                observedStop = false
+                usbAttached(attachment)
+            } else if (observedStop) {
                 observedStop = false
                 if (prefs.useDesktopService) beginConnect(explicit = false)
             }
@@ -316,7 +321,10 @@ open class DexSetupActivity : Activity() {
             if (!stopped && restartAt == 0L && (monitorBridge || BridgeService.alive)) {
                 monitorBridge = true
                 when {
-                    DexState.error != null -> {
+                    Actions.lastUsbResult.state == Actions.UsbScanState.FAILED && !CarLifeState.running -> {
+                        showUsbResult(Actions.lastUsbResult)
+                    }
+                    DexState.error != null && CarLifeState.running -> {
                         lastError = DexState.error.orEmpty()
                         armed = false
                         showState(getString(R.string.desktop_desktop_could_not_start), getString(R.string.desktop_tap_connect_to_retry_if_the_error_persists_send, lastError))
@@ -326,11 +334,12 @@ open class DexSetupActivity : Activity() {
                             DesktopAudioState.status(this@DexSetupActivity) else getString(R.string.desktop_audio_uses_the_phone_s_current_output)) + lockIsolationHint())
                     DexState.running && CarLifeState.running -> showState(getString(R.string.desktop_waiting_for, projectionName),
                         getString(R.string.desktop_the_head_unit_is_waiting_for_video_open_on, projectionName), busy = true)
-                    Actions.lastUsbResult.state == Actions.UsbScanState.FAILED && !BridgeService.alive -> {
-                        showUsbResult(Actions.lastUsbResult)
-                    }
                     Actions.lastUsbResult.state == Actions.UsbScanState.WAITING_FOR_ACCESSORY -> {
                         showUsbResult(Actions.lastUsbResult)
+                    }
+                    BridgeService.alive && CarLifeState.waitingForUsbVersion -> {
+                        bridgeStartedAt = now
+                        showState(getString(R.string.desktop_waiting_for, projectionName), getString(R.string.aa_usb_wait_version), busy = true)
                     }
                     bridgeStartedAt != 0L && now - bridgeStartedAt > 40_000 -> {
                         armed = false
@@ -602,6 +611,9 @@ open class DexSetupActivity : Activity() {
             if (connectionButtonState.stopsSession) stop() else beginConnect(explicit = true)
         }
         connectButtonHint = ui.text(connection, getString(R.string.desktop_press_again_to_cancel_the_connection), 13f).apply { visibility = View.GONE }
+        projectionWifiButton = ui.button(connection, getString(R.string.desktop_open_wi_fi_settings)) {
+            startActivity(ProjectionWifi.settings(this))
+        }.apply { visibility = View.GONE }
         phoneScreenButton = ui.button(connection, getString(R.string.desktop_turn_off_the_phone_display_panel)) { togglePhoneScreen() }
         phoneCurtainButton = ui.button(connection, getString(R.string.desktop_turn_off_the_phone_screen)) {
             phoneIdle.showNow(manualCurtain = true)
@@ -657,22 +669,24 @@ open class DexSetupActivity : Activity() {
             renderAccessControls()
         }
         computerActivationSection = ui.group(activation)
-        computerActivationInstructions = ui.text(computerActivationSection, "", 14f).apply { setTextIsSelectable(true) }
-        ui.text(computerActivationSection,
+        ui.text(computerActivationSection, getString(R.string.desktop_activation_usb_choice), 14f)
+        ui.button(computerActivationSection, getString(R.string.desktop_activation_usb_host)) {
+            AlertDialog.Builder(this).setTitle(R.string.desktop_activation_usb_host)
+                .setMessage(R.string.usb_helper_target_steps).setPositiveButton(android.R.string.ok, null)
+                .setNeutralButton(R.string.desktop_share_command) { _, _ ->
+                    val cmd = DesktopActivationGuide.deviceShellCommand(prefs.usbPlaybackAudio, prefs.desktopPanelControl)
+                    startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
+                        .putExtra(Intent.EXTRA_TEXT, cmd), getString(R.string.desktop_share_command)))
+                }.show()
+        }
+        ui.button(computerActivationSection, getString(R.string.desktop_activation_pc)) {
+            showComputerCommands()
+        }
+        if (packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_USB_HOST)) {
+            ui.button(activation, getString(R.string.usb_helper_title)) { startActivity(Intent(this, UsbActivationActivity::class.java)) }
+        }
+        if (Build.VERSION.SDK_INT >= 37) ui.text(computerActivationSection,
             getString(R.string.desktop_commands_give_access_to_the_app_on_android_17, if (DesktopTransport.universal) getString(R.string.desktop_head_unit) else "USB", DesktopTransport.shortName), 13f)
-        if (wizardStep) {
-            ui.text(computerActivationSection, getString(R.string.desktop_the_button_below_copies_the_commands_for_the_computer), 13f)
-            wizardComputerAction = ui.button(computerActivationSection, getString(R.string.desktop_activate)) {
-                val guide = DesktopActivationGuide.instructions(this, prefs.usbPlaybackAudio, prefs.desktopPanelControl)
-                getSystemService(android.content.ClipboardManager::class.java)
-                    .setPrimaryClip(android.content.ClipData.newPlainText(getString(R.string.desktop_activate_6a11, DesktopTransport.appName), guide))
-                android.widget.Toast.makeText(this, getString(R.string.desktop_activation_instructions_copied), android.widget.Toast.LENGTH_SHORT).show()
-            }
-        }
-        ui.button(computerActivationSection, getString(R.string.desktop_download_android_platform_tools)) {
-            runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(DesktopActivationGuide.PLATFORM_TOOLS_URL))) }
-                .onFailure { android.widget.Toast.makeText(this, getString(R.string.desktop_open_developer_android_com_tools_releases_platform_tools), android.widget.Toast.LENGTH_LONG).show() }
-        }
         shizukuSetup = ui.group(activation).apply { visibility = View.GONE }
 
         shizukuHelp = ui.text(shizukuSetup, getString(R.string.desktop_start_shizuku_and_grant_access_to_while_shizuku_is, DesktopTransport.appName, projectionName))
@@ -1343,6 +1357,25 @@ open class DexSetupActivity : Activity() {
         openActivationSetup()
     }
 
+    private fun showComputerCommands() {
+        val text = DesktopActivationGuide.instructions(this, prefs.usbPlaybackAudio, prefs.desktopPanelControl)
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(R.string.desktop_activation_pc)
+            .setMessage(text)
+            .setPositiveButton(android.R.string.copy) { _, _ ->
+                getSystemService(android.content.ClipboardManager::class.java)
+                    .setPrimaryClip(android.content.ClipData.newPlainText("HSD", text))
+                if (Build.VERSION.SDK_INT < 33) android.widget.Toast.makeText(this,
+                    R.string.desktop_activation_instructions_copied, android.widget.Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+        dialog.setNeutralButton(R.string.desktop_download_android_platform_tools) { _, _ ->
+            runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(DesktopActivationGuide.PLATFORM_TOOLS_URL))) }
+                .onFailure { android.widget.Toast.makeText(this, R.string.desktop_open_developer_android_com_tools_releases_platform_tools, android.widget.Toast.LENGTH_LONG).show() }
+        }
+        dialog.show().findViewById<TextView>(android.R.id.message)?.setTextIsSelectable(true)
+    }
+
     private fun beginPhoneActivation() {
         if (canRetryFailedProjection()) {
             stopProjectionForActivation()
@@ -1360,7 +1393,7 @@ open class DexSetupActivity : Activity() {
             showState(getString(R.string.desktop_we_need_to_update_access), getString(R.string.desktop_selected_features_need_additional_permissions_complete_the_current_access, DesktopTransport.shortName))
             return
         }
-        if (independentRecoveryApplicable() && !prefs.independentRecoveryWithoutWifi) {
+        if (IndependentRecoveryAccess.offerSetup(this) && !prefs.independentRecoveryWithoutWifi) {
             AlertDialog.Builder(this).setTitle(getString(R.string.desktop_automatic_recovery))
                 .setMessage(getString(R.string.desktop_recovery_after_disabling_usb_it_will_enable_adb_network, DesktopTransport.shortName))
                 .setNegativeButton(getString(R.string.mock_cancel), null)
@@ -1633,9 +1666,6 @@ open class DexSetupActivity : Activity() {
     private fun accessChoiceLocked(): Boolean = endingComputerAccess || activationStopPending || PhonePairingService.active || phoneLaunchCommitted || screenBusy || armed || monitorBridge || workerBusy.get() ||
         BridgeService.alive || DexState.running || restartAt != 0L || permissionAction != null || shizukuPermissionToken != null
 
-    private fun independentRecoveryApplicable(): Boolean = Build.VERSION.SDK_INT >= 37 && prefs.useDelegated &&
-        prefs.desktopMode != DesktopModePolicy.SAMSUNG_DEX
-
     private fun activationUiStatus(setupReady: Boolean = DesktopAccess.activationSetupComplete(this)): DesktopActivationUiPolicy.Status {
         val facts = if (prefs.useDelegated) DesktopActivationCoordinator.facts(this) else null
         val needsNewGrants = facts != null && facts.grants &&
@@ -1818,15 +1848,10 @@ open class DexSetupActivity : Activity() {
         val method = prefs.activationMethod
         val desktopWifi = prefs.useDelegated && method == ActivationMethod.WIFI
         phoneActivationSection.visibility = if (desktopWifi) View.VISIBLE else View.GONE
-        phoneActivationSection.keepScreenOn = desktopWifi && (PhonePairingService.active || phoneLaunchCommitted)
         if (wizardStep) {
-            wizardComputerAction.updateText(if (DelegatedDesktopAccess.isReady(this)) getString(R.string.desktop_reactivate) else getString(R.string.desktop_activate))
             shizukuGrantButton.updateText(if (method == ActivationMethod.SHIZUKU && DesktopAccess.isReady(this)) getString(R.string.desktop_reactivate) else getString(R.string.desktop_activate))
         }
         computerActivationSection.visibility = if (method == ActivationMethod.COMPUTER) View.VISIBLE else View.GONE
-        if (method == ActivationMethod.COMPUTER) {
-            computerActivationInstructions.updateText(DesktopActivationGuide.instructions(this, prefs.usbPlaybackAudio, prefs.desktopPanelControl))
-        }
         shizukuSetup.visibility = if (method == ActivationMethod.SHIZUKU) View.VISIBLE else View.GONE
         val nextReplyAttempt = PhonePairingService.replyAttempt()
         if (phoneReplyAttempt != nextReplyAttempt) { phonePairCode.text.clear(); phonePairCode.error = null }
@@ -1862,12 +1887,13 @@ open class DexSetupActivity : Activity() {
         if (prefs.desktopMode == DesktopModePolicy.SAMSUNG_DEX) return ""
         return "\n" + when (DexState.independentPhoneLock) {
             true -> getString(R.string.desktop_locking_the_phone_does_not_turn_off_the_gu)
-            false -> getString(R.string.desktop_for_this_firmware_use_screen_damping, DesktopTransport.shortName)
+            false -> getString(R.string.desktop_shared_display_lock)
             null -> getString(R.string.desktop_the_screen_s_independence_from_locking_has_not_yet)
         }
     }
 
     private fun renderConnectionControl() {
+        projectionWifiButton.visibility = if (CarLifeState.waitingForProjectionWifi) View.VISIBLE else View.GONE
         val wireless = ProjectionRoute.wireless(this) || !WirelessCarLife.preferUsb(this)
         val state = DesktopConnectionButtonPolicy.state(
             stopped = stopped, detached = !wireless && Actions.isUsbDetachedIdle(),
@@ -2185,11 +2211,12 @@ open class DexSetupActivity : Activity() {
         showState(getString(R.string.desktop_stopped), getString(R.string.desktop_reconnect_the_usb_cable_or_tap_connect))
     }
 
-    private fun usbAttached() {
-        Actions.observeUsbConnection(this)
+    private fun usbAttached(attachment: Long? = Actions.observeUsbConnection(this)) {
+        if (wizardStep || intent.getBooleanExtra(EXTRA_RETURN_TO_SETUP, false) || restartAt != 0L) return
         if (ProjectionRoute.wireless(this)) return
         if (phoneLaunchCommitted || PhonePairingService.active || WirelessPrefs(this).mode == CarLifeConnectionMode.WIFI) return
         if (stopped) return
+        if (attachment != null) lastUsbAttachment = attachment
         when {
             !CarLifeState.running && BridgeService.alive && prefs.useDesktopService && DesktopAccess.isReady(this) -> {
                 armed = true

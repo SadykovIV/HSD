@@ -46,6 +46,14 @@ public final class HSDHost {
         return CLASSIC;
     }
 
+    public static void keepLauncherDisplayAwake(Activity activity) {
+        // HSD manages power for its own isolated projection displays. A window flag can
+        // otherwise keep the handset awake when Android shares the display power group.
+        if (!UNIVERSAL.equals(processHost) && HostedDisplay.displayId(activity) > 0) {
+            activity.getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        }
+    }
+
     // The author-supplied renderer keeps one Binder per process. HSD has a separate
     // entry activity/process so opening Desktop alongside it cannot redirect an active lease.
     private static final String UNIVERSAL_PROCESS = "ru.drivedeck.headswap:hsd";
@@ -57,6 +65,7 @@ public final class HSDHost {
             UNIVERSAL_PROCESS.equals(android.app.Application.getProcessName());
         String host = universal ? UNIVERSAL : (declared == null ? onDisplay(activity) : declared);
         if (universal && declared != null && !UNIVERSAL.equals(declared)) throw new SecurityException("Unexpected desktop host");
+        if (universal) activity.setShowWhenLocked(UNIVERSAL.equals(declared));
         if (host != null) processHost = host;
     }
 
@@ -68,6 +77,17 @@ public final class HSDHost {
     public static ComponentName rendererFullscreen(Context context) {
         String host = processHost;
         return host == null ? null : endpoint(context, host, false);
+    }
+
+    static boolean supportsAppMenu(Context context) {
+        ComponentName endpoint = rendererFullscreen(context);
+        if (endpoint == null) return false;
+        try {
+            ActivityInfo info = context.getPackageManager().getActivityInfo(endpoint, PackageManager.GET_META_DATA);
+            return info.metaData != null && info.metaData.getBoolean(ProjectionHost.APP_MENU_CAPABILITY);
+        } catch (PackageManager.NameNotFoundException unavailable) {
+            return false;
+        }
     }
 
     public static String updateNotice(Context context) {

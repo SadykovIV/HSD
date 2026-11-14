@@ -16,6 +16,21 @@ class AaVideoNegotiationTest {
     private fun layout(id: Int) = AaVideoLayout.of(config(id).build(), 0, false)!!
     private val auto = DesktopVideoSelection(DesktopResolution.AUTO, 0)
 
+    @Test fun qhdSafeAreaFollowsTheInstalledRenderersCapability() {
+        val mode = config(4).setWidthMargin(256).setDensity(218).build()
+        for ((code, declaresNative, expectedWidth) in listOf(
+            Triple(335L, false, 1728), Triple(338L, false, 2304), Triple(350L, false, 1728),
+            Triple(352L, false, 1728), Triple(353L, true, 2304), Triple(900L, false, 1728))) {
+            val native = com.hsd.universal.dex.DesktopModePolicy.supportsNativeTiles(code, declaresNative)
+            val layout = AaVideoLayout.of(mode, 0, !native)!!
+            val height = if (native) 1440 else 1080
+            assertEquals(expectedWidth to height, layout.desktopWidth to layout.desktopHeight)
+            assertEquals(if (native) 218 else 164, layout.density)
+            assertEquals(VideoViewport(128, 0, 2304, 1440), layout.content)
+            assertEquals(expectedWidth - 1 to height - 1, layout.touch(2303, 1439, 2304, 1440, expectedWidth, height, false))
+        }
+    }
+
     @Test fun everyWireEnumKeepsItsAxesThroughEncoderParentTilesAndInput() {
         val sizes = listOf(800 to 480,1280 to 720,1920 to 1080,2560 to 1440,3840 to 2160,
             720 to 1280,1080 to 1920,1440 to 2560,2160 to 3840)

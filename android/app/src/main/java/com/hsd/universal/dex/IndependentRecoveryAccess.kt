@@ -36,8 +36,18 @@ internal object IndependentRecoveryAccess {
         Thread(task, "${com.hsd.universal.BuildConfig.BRAND}-local-adb-deadline").apply { isDaemon = true }
     }.apply { removeOnCancelPolicy = true }
 
+    private val samsung get() = Build.MANUFACTURER.equals("samsung", true)
+
+    fun offerSetup(context: Context): Boolean = samsung && DexPrefs(context).let {
+        IndependentRecoveryPolicy.requested(Build.VERSION.SDK_INT, it.useDelegated, it.desktopMode, enabled = true)
+    }
+
     fun requested(context: Context): Boolean = DexPrefs(context).let {
-        IndependentRecoveryPolicy.requested(Build.VERSION.SDK_INT, it.useDelegated, it.desktopMode, it.independentRecoveryWithoutWifi)
+        if (!IndependentRecoveryPolicy.requested(Build.VERSION.SDK_INT, it.useDelegated, it.desktopMode,
+                it.independentRecoveryWithoutWifi)) return false
+        // An older version offered this to every phone. Preserve working opt-ins for this boot,
+        // without making a failed or never-applied USB recovery setup a condition of Wi-Fi pairing.
+        samsung || IndependentRecoveryPolicy.hasWorkingSetup(snapshot(context).kind)
     }
 
     fun snapshot(context: Context): Snapshot {
@@ -79,7 +89,7 @@ internal object IndependentRecoveryAccess {
 
     /** This is only a candidate, never proof that the listener or activation is alive. */
     fun recoveryEndpoint(context: Context): DexEndpoint? = snapshot(context).takeIf {
-        requested(context) && it.kind in setOf(Kind.OWNED, Kind.REUSED)
+        requested(context) && IndependentRecoveryPolicy.hasWorkingSetup(it.kind)
     }?.let { DexEndpoint("127.0.0.1", it.port) }
 
     /** Read-only, bounded validation for an explicit activation; UI polling never opens a socket. */

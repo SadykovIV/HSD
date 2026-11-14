@@ -1,8 +1,9 @@
 package com.hsd.universal.dex
 
+import android.hardware.display.DisplayManager
+import com.hsd.universal.BuildConfig
 import com.hsd.universal.compat.PublishedDesktop
 import com.hsd.universal.shared.ProjectionHost
-import com.hsd.universal.BuildConfig
 
 /** Desktop selection is independent from the transport and never changes the phone's HOME app. */
 object DesktopModePolicy {
@@ -13,6 +14,20 @@ object DesktopModePolicy {
     const val DRIVEDECK_PACKAGE = PublishedDesktop.DRIVEDECK
     const val DRIVEDECK_HOME_CLASS = "ru.drivedeck.launcher.MainActivity"
     const val UNIVERSAL_DRIVEDECK_HOME = "ru.drivedeck.launcher.HsdActivity"
+
+    fun supportsNativeTiles(context: android.content.Context): Boolean {
+        val info = try {
+            context.packageManager.getPackageInfo(DRIVEDECK_PACKAGE, android.content.pm.PackageManager.GET_META_DATA)
+        } catch (_: android.content.pm.PackageManager.NameNotFoundException) {
+            return false
+        }
+        val declared = info.applicationInfo?.metaData?.getBoolean("com.hsd.projection.NATIVE_TILE_GEOMETRY") == true
+        return supportsNativeTiles(info.longVersionCode, declared)
+    }
+
+    // These published 0.6.9 adapters predate the manifest capability. The 0.7.0 renderer
+    // was replaced upstream, so a higher version code alone doesn't guarantee large windows.
+    internal fun supportsNativeTiles(code: Long, declared: Boolean) = declared || code in 336L..338L
 
     fun driveDeckHome(context: android.content.Context): String {
         val component = android.content.ComponentName(DRIVEDECK_PACKAGE, UNIVERSAL_DRIVEDECK_HOME)
@@ -46,6 +61,7 @@ object DesktopModePolicy {
 
     /** PUBLIC | PRESENTATION | OWN_CONTENT_ONLY | SUPPORTS_TOUCH | TRUSTED | DESTROY_CONTENT. */
     const val ANDROID_DISPLAY_FLAGS = 1 or 2 or 8 or 64 or 1024 or 256
+    private const val VIRTUAL_DISPLAY_CAN_SHOW_WITH_INSECURE_KEYGUARD = 1 shl 5
     private const val VIRTUAL_DISPLAY_OWN_FOCUS = 1 shl 14
     const val VIRTUAL_DISPLAY_OWN_DISPLAY_GROUP = 1 shl 11
     const val VIRTUAL_DISPLAY_ALWAYS_UNLOCKED = 1 shl 12
@@ -54,10 +70,18 @@ object DesktopModePolicy {
         requireMode(mode)
         if (!trusted) {
             check(sdkInt in 29..32 && mode != SAMSUNG_DEX) { "Этот режим требует доверенного дисплея Android" }
-            // A public presentation containing only content launched on this display.
-            return ANDROID_DISPLAY_FLAGS and 1024.inv()
         }
         if (mode == SAMSUNG_DEX) return DexUserServicePolicy.VIRTUAL_DISPLAY_FLAGS
+        if (sdkInt in 29..32) {
+            // A private, non-mirroring presentation is powered by its own Surface. Android
+            // can keep its content visible with a swipe lock; secure keyguard still decides
+            // which activities may be shown. Only the owner launches our windows.
+            val privateFlags = (ANDROID_DISPLAY_FLAGS and DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC.inv()) or
+                VIRTUAL_DISPLAY_CAN_SHOW_WITH_INSECURE_KEYGUARD
+            if (!trusted) return privateFlags and 1024.inv()
+            // Android 12 has display power groups, but no ALWAYS_UNLOCKED display permission.
+            return if (sdkInt >= 31) privateFlags or VIRTUAL_DISPLAY_OWN_DISPLAY_GROUP else privateFlags
+        }
         // A tap is forwarded parent -> child. Independent focus prevents the parent's DOWN
         // from clearing the embedded app's pressed state before its UP arrives. Android 13
         // has no per-display flag; retain its existing behavior. Do not disable stealing top

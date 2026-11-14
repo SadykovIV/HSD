@@ -49,6 +49,7 @@ internal class ProjectionSettingsActivity : Activity() {
     private var addressField: EditText? = null
     private var portField: EditText? = null
     private var request: String? = null
+    private var pairingAfterWifi: String? = null
     private var askedForLocation = false
 
     override fun onCreate(state: Bundle?) {
@@ -61,6 +62,7 @@ internal class ProjectionSettingsActivity : Activity() {
         lan = state?.getString("lan") ?: prefs.getString("lanPeer", "").orEmpty()
         port = state?.getString("port") ?: prefs.getInt("lanPort", 5288).toString()
         request = state?.getString("request")
+        pairingAfterWifi = state?.getString("pairingAfterWifi")
         askedForLocation = state?.getBoolean("location") == true
         WindowCompat.setDecorFitsSystemWindows(window, false)
         content = ui.column().apply {
@@ -98,6 +100,7 @@ internal class ProjectionSettingsActivity : Activity() {
         out.putString("lan", lan)
         out.putString("port", port)
         out.putString("request", request)
+        out.putString("pairingAfterWifi", pairingAfterWifi)
         out.putBoolean("location", askedForLocation)
         out.putInt("scroll", scroll.scrollY)
     }
@@ -255,9 +258,16 @@ internal class ProjectionSettingsActivity : Activity() {
         }) { chooseIdentity(id) }
         val fingerprints = identities.get(id)
         val changed = identities.changed(id)
-        if (changed != null || fingerprints.isNotEmpty()) {
+        val reference = identities.receiverReference(id)
+        if (changed != null || fingerprints.isNotEmpty() || reference != null) {
             val detail = ui.section(content, getString(R.string.desktop_certificate_of_recorder))
             for (pin in fingerprints.sorted()) fingerprint(detail, getString(R.string.desktop_save_sha_256), pin)
+            if (reference != null) {
+                ui.text(detail, getString(reference.label))
+                identities.observedFingerprint(id)?.takeIf { it !in fingerprints && it != changed }?.let {
+                    fingerprint(detail, getString(R.string.aa_observed_sha256), it)
+                }
+            }
             if (changed != null) {
                 fingerprint(detail, getString(R.string.desktop_new_sha_256), changed)
                 ui.text(detail, getString(R.string.desktop_check_the_new_print_with_the_head_unit_data))
@@ -359,6 +369,18 @@ internal class ProjectionSettingsActivity : Activity() {
         when (action) {
             "pick" -> pickBondedDevice()
             "discoverable", "searchHeadUnit" -> {
+                val wifi = ProjectionWifi.read(this)
+                if (wifi == ProjectionWifi.OFF) {
+                    if (pairingAfterWifi == null) {
+                        AlertDialog.Builder(this).setTitle(R.string.wl_wifi_off_title).setMessage(R.string.carplay_pair_wifi)
+                            .setNegativeButton(android.R.string.cancel, null)
+                            .setPositiveButton(R.string.desktop_open_wi_fi_settings) { _, _ ->
+                                pairingAfterWifi = action
+                                startActivityForResult(ProjectionWifi.settings(this), REQUEST_PAIR_WIFI)
+                            }.show()
+                    }
+                    return
+                }
                 try {
                     val adapter = getSystemService(BluetoothManager::class.java)?.adapter
                     if (adapter?.isEnabled != true) {
@@ -393,10 +415,18 @@ internal class ProjectionSettingsActivity : Activity() {
             if (resultCode > 0)
                 Toast.makeText(this, getString(R.string.desktop_phone_visible_select_it_on_the_head_unit_and, resultCode), Toast.LENGTH_LONG).show()
             else CarPlayBluetoothService.cancelPreparation()
+        } else if (requestCode == REQUEST_PAIR_WIFI) {
+            val action = pairingAfterWifi ?: return
+            pairingAfterWifi = null
+            if (route == ProjectionRoute.CARPLAY && ProjectionWifi.read(this) != ProjectionWifi.OFF) withPermissions(action)
+            else Toast.makeText(this, R.string.carplay_pair_wifi, Toast.LENGTH_LONG).show()
         }
     }
 
-    private companion object { const val REQUEST_DISCOVERABLE = 2 }
+    private companion object {
+        const val REQUEST_DISCOVERABLE = 2
+        const val REQUEST_PAIR_WIFI = 3
+    }
 
     @SuppressLint("MissingPermission")
     private fun pickBondedDevice() {

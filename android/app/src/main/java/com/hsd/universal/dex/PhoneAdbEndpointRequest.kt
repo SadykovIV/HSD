@@ -5,6 +5,7 @@ import android.net.wifi.WifiManager
 import android.os.SystemClock
 import android.provider.Settings
 import com.flyfishxu.kadb.Kadb
+import com.hsd.universal.AppLog
 import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -17,7 +18,7 @@ internal class PhoneAdbEndpointRequest(private val context: Context, private val
     private val active = AtomicReference<Kadb?>()
     private val closed = AtomicBoolean()
 
-    fun resolve(discovered: () -> DexEndpoint?, startDiscovery: () -> Unit,
+    fun resolve(discovered: () -> DexEndpoint?, startDiscovery: () -> Unit, onAttempt: (DexEndpoint) -> Unit,
                 obsolete: () -> Boolean): DexEndpoint? {
         val deadline = SystemClock.elapsedRealtime() + 20_000
         val expired = AtomicBoolean()
@@ -26,6 +27,9 @@ internal class PhoneAdbEndpointRequest(private val context: Context, private val
         val retry = DexConnectRetryPolicy()
         var failure: DexAccessException? = null
         var discoveryStarted = false
+        val initialState = environment(context)
+        AppLog.i("PHONE connecting with saved pairing: wifi=${initialState.first} wirelessDebugging=${initialState.second} " +
+            "advertised=${discovered() != null} cachedPort=${DexPrefs(context).connectPort > 0}", false)
         try {
             while (true) {
                 ensureActive()
@@ -33,26 +37,31 @@ internal class PhoneAdbEndpointRequest(private val context: Context, private val
                 if (expired.get() || SystemClock.elapsedRealtime() >= deadline) {
                     throw failure ?: DesktopPreparationException("Отладка не найдена. Включите Wi-Fi и беспроводную отладку.", canPair = true)
                 }
-                val allowed = discoveryAllowed(context)
-                if (allowed && !discoveryStarted) { discoveryStarted = true; startDiscovery() }
+                val (wifi, debugging) = environment(context)
+                val tls = tlsEndpoint()
+                if (wifi != false && !discoveryStarted) { discoveryStarted = true; startDiscovery() }
                 val prefs = DexPrefs(context)
                 val local = IndependentRecoveryAccess.recoveryEndpoint(context)
                 val saved = DexEndpoint(prefs.host, prefs.connectPort)
                 val candidates = buildList {
+                    // A live service on this phone is stronger evidence than adb_wifi_enabled.
+                    addAll(VdmRecoveryEndpoints.advertised(discovered(), wifi, DexAccess::acceptsHost))
+                    tls?.let(::add)
                     local?.let(::add)
-                    tlsEndpoint()?.let(::add)
-                    if (allowed) discovered()?.let(::add)
-                    addAll(VdmRecoveryEndpoints.candidates(saved, savedPairedPort = true, DexAccess::acceptsHost))
+                    val localOnly = !VdmRecoveryPolicy.discoveryAllowed(wifi, debugging, tls?.port?.toString())
+                    VdmRecoveryEndpoints.candidates(saved, savedPairedPort = true, DexAccess::acceptsHost)
+                        .filterTo(this) { VdmRecoveryPolicy.endpointAllowed(it, localOnly) }
                 }.distinct().filter { it.port in 1..65535 && DexAccess.acceptsHost(it.host) &&
-                    VdmRecoveryPolicy.endpointAllowed(it, !allowed) && retry.accepts(it) }
+                    retry.accepts(it) }
                 val endpoint = candidates.firstOrNull()
                 if (endpoint == null) {
-                    if (!allowed) throw DesktopPreparationException(
+                    if (wifi == false) throw DesktopPreparationException(
                         "Локальная отладка сейчас недоступна. Включите Wi-Fi и беспроводную отладку.", canPair = true)
                     Thread.sleep(80)
                     continue
                 }
                 try {
+                    onAttempt(endpoint)
                     val remaining = (deadline - SystemClock.elapsedRealtime()).coerceIn(1, 15_000).toInt()
                     if (endpoint == local) try {
                         LegacyAdbChallenge.requireAuthenticated(endpoint.port, minOf(remaining, 1500))
@@ -113,9 +122,5 @@ internal class PhoneAdbEndpointRequest(private val context: Context, private val
         internal fun environment(context: Context): Pair<Boolean?, Int> = wifiEnabled(context) to runCatching {
             Settings.Global.getInt(context.contentResolver, "adb_wifi_enabled", -1)
         }.getOrDefault(-1)
-        internal fun discoveryAllowed(context: Context): Boolean {
-            val (enabled, debugging) = environment(context)
-            return VdmRecoveryPolicy.discoveryAllowed(enabled, debugging, tlsEndpoint()?.port?.toString())
-        }
     }
 }

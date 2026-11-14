@@ -29,8 +29,8 @@ android {
         applicationId = "com.hsd.universal"
         minSdk = 29
         targetSdk = 37
-        versionCode = 80
-        versionName = "0.8.0"
+        versionCode = 95
+        versionName = "0.8.1"
         testInstrumentationRunner = "com.hsd.universal.DriveDeckAapProbe"
         buildConfigField("boolean", "PHONE_PROJECTION", "true")
         buildConfigField("boolean", "WIRELESS_BETA", "true")

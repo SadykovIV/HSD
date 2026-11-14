@@ -22,6 +22,7 @@
     <!-- Optional HU notification shade, enabled only after standard Android overlay consent. -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-feature android:name="android.hardware.wifi.direct" android:required="false" />
+    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
     <uses-feature android:name="android.software.companion_device_setup" android:required="false" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
@@ -129,6 +130,14 @@
         </activity>
 
         <activity android:name=".ProjectionSettingsActivity" android:exported="false" />
+        <activity android:name=".dex.UsbActivationActivity" android:exported="true"
+            android:launchMode="singleTop" android:configChanges="orientation|screenSize|smallestScreenSize|keyboardHidden">
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+            </intent-filter>
+            <meta-data android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                android:resource="@xml/usb_debug_device" />
+        </activity>
         <activity-alias android:name=".UsbActivity" android:targetActivity=".dex.DexSetupActivity" android:exported="true" />
 
         <activity android:name=".MainActivity" android:exported="false" />
@@ -152,7 +161,9 @@
             android:launchMode="singleTop"
             android:taskAffinity="${applicationId}.drivedeck.fullscreen"
             android:configChanges="orientation|screenSize|smallestScreenSize|keyboardHidden"
-            android:theme="@style/Theme.HSD.Dex" />
+            android:theme="@style/Theme.HSD.Dex">
+            <meta-data android:name="com.hsd.projection.DRIVEDECK_APP_MENU" android:value="true" />
+        </activity>
         <activity android:name=".desktop.NotificationFullscreenActivity" android:exported="false"
             android:excludeFromRecents="true" android:resizeableActivity="true" android:launchMode="singleTop"
             android:taskAffinity="${applicationId}.notification.fullscreen"

@@ -4,6 +4,7 @@ import android.content.Context
 import com.hsd.universal.ProjectionResources
 import io.github.shaonialife.cardeck.airplay.ControlCipher
 import io.github.shaonialife.cardeck.iap2.Iap2Csm
+import io.github.shaonialife.cardeck.iap2.asU16List
 import io.github.shaonialife.cardeck.transport.DuplexStream
 import io.github.shaonialife.cardeck.transport.Iap2LinkChannel
 import java.io.*
@@ -26,6 +27,7 @@ internal fun accessoryVerifier(context: Context) =
 internal class CarPlayIapChannel(
     context: Context,
     life: ProjectionResources,
+    device: CarPlayDeviceInformation,
     private val send: (ByteArray) -> Unit,
     private val handle: (Map<*, *>) -> Unit,
     private val failed: (Exception) -> Unit,
@@ -56,8 +58,8 @@ internal class CarPlayIapChannel(
                 fun tx(id: Int, body: ByteArray = byteArrayOf()) =
                     check(channel.sendControl(Iap2Csm.encode(id, body)))
                 val parser = Iap2Csm.Parser()
-                var identified = false
-                var authenticated = false
+                val exchange = AccessoryAuthExchange(auth, ::tx, context.getString(com.hsd.universal.R.string.carplay_invalid_accessory_signature))
+                var receives = emptyList<Int>()
                 val descriptors = mutableMapOf<String, ByteArray>()
                 tx(0x1d00)
                 while (channel.isAlive) {
@@ -67,36 +69,22 @@ internal class CarPlayIapChannel(
                         fun param(id: Int) = fields.firstOrNull { it.id == id }?.value
                         when (frame.messageId) {
                             0x1d01 -> {
-                                check(!identified)
-                                identified = true
-                                tx(0x1d02)
-                                tx(0xaa00)
+                                receives = fields.filter { it.id == 7 }.flatMap { it.asU16List() }
+                                exchange.identified(fields.filter { it.id == 6 }.flatMap { it.asU16List() })
                             }
-                            0xaa01 -> {
-                                check(identified && !authenticated)
-                                tx(
-                                    0xaa02,
-                                    Iap2Csm.param(0, auth.challenge(requireNotNull(param(0)))),
-                                )
-                            }
-                            0xaa03 -> {
-                                check(!authenticated)
-                                if (!auth.verify(requireNotNull(param(0)))) {
-                                    tx(0xaa04)
-                                    error("Неверная подпись сетевого сеанса iAP2")
-                                }
-                                authenticated = true
-                                tx(0xaa05)
+                            0xaa06, 0xaa01, 0xaa03 -> {
+                                exchange.receive(frame.messageId, fields)
+                                if (frame.messageId == 0xaa03) device.publish(receives, send = ::tx)
                             }
                             0x6800 ->
-                                if (authenticated) {
+                                if (exchange.stage == AccessoryAuthExchange.Stage.VERIFIED) {
                                     val id = param(0)?.contentHashCode()?.toString() ?: "0"
                                     fields
                                         .firstOrNull { it.value.size > 8 }
                                         ?.let { descriptors[id] = it.value; logHidDescriptor(it.value) }
                                 }
                             0x6802 ->
-                                if (authenticated) {
+                                if (exchange.stage == AccessoryAuthExchange.Stage.VERIFIED) {
                                     val id = param(0)?.contentHashCode()?.toString() ?: "0"
                                     param(1)?.let { report ->
                                         handle(

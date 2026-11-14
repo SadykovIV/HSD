@@ -41,7 +41,9 @@ class DexPrefs @JvmOverloads constructor(private val context: Context, private v
             prefs.edit().putString("phone_screen_mode", value.name).apply()
         }
     internal var phoneTimerEnabled: Boolean
-        get() = prefs.getBoolean("phone_idle_timer_enabled", prefs.getString("phone_idle_mode", null) != PhoneIdleMode.DISABLED.name)
+        get() = prefs.getBoolean("phone_idle_timer_enabled",
+            prefs.getString("phone_idle_mode", null)?.let { it != PhoneIdleMode.DISABLED.name }
+                ?: prefs.contains("phone_idle_timeout"))
         set(value) { prefs.edit().putBoolean("phone_idle_timer_enabled", value).apply() }
     internal val phoneIdleMode: PhoneIdleMode get() = if (phoneTimerEnabled) phoneScreenMode else PhoneIdleMode.DISABLED
     internal var phoneIdleTimeout: PhoneIdleTimeout

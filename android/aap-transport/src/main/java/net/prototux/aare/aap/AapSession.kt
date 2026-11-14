@@ -9,14 +9,17 @@ import aap_protobuf.service.control.message.ByeByeRequestOuterClass.ByeByeReques
 import aap_protobuf.service.control.message.ByeByeResponseOuterClass.ByeByeResponse
 import aap_protobuf.service.control.message.ChannelOpenRequestOuterClass.ChannelOpenRequest
 import aap_protobuf.service.control.message.ChannelOpenResponseOuterClass.ChannelOpenResponse
+import aap_protobuf.service.control.message.ConnectionConfigurationOuterClass.ConnectionConfiguration
 import aap_protobuf.service.control.message.NavFocusNotificationOuterClass.NavFocusNotification
 import aap_protobuf.service.control.message.NavFocusRequestNotificationOuterClass.NavFocusRequestNotification
 import aap_protobuf.service.control.message.NavFocusTypeOuterClass.NavFocusType
 import aap_protobuf.service.control.message.PingRequestOuterClass.PingRequest
 import aap_protobuf.service.control.message.PingResponseOuterClass.PingResponse
+import aap_protobuf.service.control.message.PingConfigurationOuterClass.PingConfiguration
 import aap_protobuf.service.control.message.ServiceDiscoveryRequestOuterClass.ServiceDiscoveryRequest
 import aap_protobuf.service.control.message.ServiceDiscoveryResponseOuterClass.ServiceDiscoveryResponse
 import aap_protobuf.service.control.message.VoiceSessionNotificationOuterClass.VoiceSessionNotification
+import aap_protobuf.service.control.message.VersionResponseOptionsOuterClass.VersionResponseOptions
 import aap_protobuf.shared.MessageStatusOuterClass.MessageStatus
 import com.google.protobuf.MessageLite
 import java.security.PrivateKey
@@ -99,6 +102,8 @@ class AapSession(
     private val options: SessionOptions = SessionOptions(),
 ) {
     interface Callbacks {
+        fun onWaitingForUsbVersion(session: AapSession) {}
+        fun onNegotiationStarted(session: AapSession) {}
         /**
          * The head unit listed its services. Return the channels to open; each is opened in turn
          * and receives [ServiceChannel.onOpened] when the head unit accepts it.
@@ -138,11 +143,16 @@ class AapSession(
 
     /** Set when the session ended because the head unit's certificate is not trusted (yet). */
     val pinRefusal: PinRefusal? get() = cryptor.pinRefusal
+    val tlsEstablished: Boolean get() = cryptor.handshakeDone
+    /** Diagnostic evidence even if TLS or the subsequent AAP authorization was declined. */
+    val headUnitCertificates: List<X509Certificate> get() = cryptor.presentedPeerCertificates
 
-    @Volatile private var tlsUp = false
+    @Volatile private var authorized = false
     val oldUsbFramesBeforeVersion: Int get() = reader.oldUsbFrames
-    private val reader = FrameReader(transport.input) { if (tlsUp) cryptor else null }
-    private val writer = FrameWriter(transport.output) { if (tlsUp) cryptor else null }
+    // A receiver may protect AUTH_COMPLETE with the newly established TLS session.
+    // Projection and outgoing encrypted messages still require the receiver's approval.
+    private val reader = FrameReader(transport.input) { cryptor.takeIf { it.handshakeDone } }
+    private val writer = FrameWriter(transport.output) { cryptor.takeIf { authorized } }
 
     private val queue = PriorityBlockingQueue<Outgoing>()
     private val seq = AtomicLong()
@@ -184,9 +194,16 @@ class AapSession(
     fun start() {
         Thread(::readLoop, "aap-reader").apply { isDaemon = true; priority = Thread.MAX_PRIORITY - 1 }.start()
         Thread(::writeLoop, "aap-writer").apply { isDaemon = true; priority = Thread.MAX_PRIORITY - 1 }.start()
-        // The head unit opens with a version request; if nothing comes at all, give up.
+        // An attached USB receiver can start projection long after accessory enumeration.
+        // Keep the same reader through silence, so its first transfer cannot fall between opens.
         schedule({
-            if (state == State.VERSION) fail("no version request from head unit", null)
+            if (state == State.VERSION) {
+                if (transport.usbAccessory && oldUsbFramesBeforeVersion == 0) {
+                    callbacks.onWaitingForUsbVersion(this)
+                } else {
+                    fail("no version request from head unit", null)
+                }
+            }
         }, 15, TimeUnit.SECONDS)
         log.i("session started on ${transport.name}")
     }
@@ -270,7 +287,7 @@ class AapSession(
 
     private fun dispatch(msg: AapMessage) {
         // Once TLS is up the head unit has no legitimate reason to send anything in the clear; drop it, don't end the session.
-        if (tlsUp && !msg.encrypted) {
+        if (authorized && !msg.encrypted) {
             log.w("dropping plaintext frame after TLS is up: $msg")
             return
         }
@@ -383,8 +400,12 @@ class AapSession(
         }
         val b = msg.body
         val o = msg.bodyOffset
-        val major = if (msg.bodyLength >= 2) ((b[o].toInt() and 0xff) shl 8) or (b[o + 1].toInt() and 0xff) else 1
-        val minor = if (msg.bodyLength >= 4) ((b[o + 2].toInt() and 0xff) shl 8) or (b[o + 3].toInt() and 0xff) else 0
+        if (msg.bodyLength < 4) {
+            fail("incomplete version request", null)
+            return
+        }
+        val major = ((b[o].toInt() and 0xff) shl 8) or (b[o + 1].toInt() and 0xff)
+        val minor = ((b[o + 2].toInt() and 0xff) shl 8) or (b[o + 3].toInt() and 0xff)
         headUnitVersion = major to minor
         // Like the official phone: 1.7 to anything up to 1.7, 6.1 to the newer GAL numbering.
         // Status is always success; feature gating follows the head unit's own version.
@@ -395,24 +416,30 @@ class AapSession(
             (replyMinor shr 8).toByte(), replyMinor.toByte(),
             0, 0, // STATUS_SUCCESS
         )
-        sendRaw(0, AapMessage.plaintext(ControlMsg.VERSION_RESPONSE, body), encrypted = false)
+        val response = if (headUnitAtLeast(1, 6)) {
+            val ping = PingConfiguration.newBuilder().setIntervalMs(pingIntervalMs.toInt()).setTimeoutMs(deadAfterMs.toInt())
+            val config = ConnectionConfiguration.newBuilder().setPingConfiguration(ping)
+            body + VersionResponseOptions.newBuilder().setConnectionConfiguration(config).build().toByteArray()
+        } else body
+        sendRaw(0, AapMessage.plaintext(ControlMsg.VERSION_RESPONSE, response), encrypted = false)
         enterHandshake()
     }
 
-    /** Starts the TLS handshake, with its own timeout whichever way the head unit got here. */
+    /** Starts TLS after the version request has been answered. */
     private fun enterHandshake() {
         state = State.HANDSHAKE
+        callbacks.onNegotiationStarted(this)
         cryptor.beginHandshake()
         schedule({
-            if (state == State.HANDSHAKE) fail("TLS handshake did not complete (head unit rejected our certificate?)", null)
+            if (state == State.HANDSHAKE) fail("TLS handshake timed out", null)
         }, 15, TimeUnit.SECONDS)
     }
 
     private fun onHandshakeBytes(bytes: ByteArray) {
         if (state != State.HANDSHAKE) {
-            log.w("TLS bytes in state $state")
-            if (state.ordinal > State.HANDSHAKE.ordinal) return
-            enterHandshake()
+            if (state == State.VERSION) fail("TLS before version negotiation", null)
+            else log.w("unexpected TLS handshake bytes in state $state")
+            return
         }
         val out = cryptor.handshake(bytes)
         log.d("TLS: got ${bytes.size} bytes, sending ${out.size}, done=${cryptor.handshakeDone}")
@@ -443,8 +470,7 @@ class AapSession(
             fail("head unit rejected authentication (${response.description})", null)
             return
         }
-        // From here on everything is encrypted.
-        tlsUp = true
+        authorized = true
         state = State.DISCOVERY
         val req = ServiceDiscoveryRequest.newBuilder()
             .setDeviceName(phone.deviceName)
@@ -544,9 +570,9 @@ class AapSession(
         closedDuring = state
         state = State.CLOSED
         // The engine only reports a failed read: say what actually happened.
-        val why = cryptor.pinRefusal?.let { "head unit certificate not trusted (SHA-256 ${it.fingerprint})" }
+        val why = cryptor.chainRejection?.message ?: cryptor.pinRefusal?.let { "head unit certificate not trusted (SHA-256 ${it.fingerprint})" }
             ?: "head unit sent no certificate: AARE only connects to head units that present one".takeIf { cryptor.peerCertificateMissing }
-            ?: reason
+            ?: error?.message?.takeIf { it.isNotBlank() && it != reason }?.let { "$reason: $it" } ?: reason
         log.i("session closed: $why")
         try {
             // A throwing transport must not skip the channels' and the owner's teardown.

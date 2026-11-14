@@ -5,6 +5,7 @@ import com.hsd.universal.AppLog
 import com.hsd.universal.AutoAudioEncoder
 import java.util.Arrays
 import io.github.shaonialife.cardeck.airplay.AirPlayCrypto
+import io.github.shaonialife.cardeck.airplay.BinaryPlist
 import io.github.shaonialife.cardeck.airplay.TimingServer
 import io.github.shaonialife.cardeck.audio.AudioSyncPacket
 import java.io.*
@@ -17,12 +18,16 @@ internal class CarPlayVideo(
     private val key: ByteArray,
     private val width: Int,
     private val height: Int,
+    private val heartbeatStats: Boolean = false,
 ) {
     private var configChanged = false
     private var counter = 0L
     private var hasIdr = false
     private var sps: ByteArray? = null
     private var pps: ByteArray? = null
+    private var lastReport = System.nanoTime()
+    private var writtenBytes = 0L
+    private var writtenFrames = 0L
 
     private fun header(n: Int, type: Int, pts: Long): ByteBuffer =
         ByteBuffer.allocate(128).order(ByteOrder.LITTLE_ENDIAN).apply {
@@ -67,6 +72,7 @@ internal class CarPlayVideo(
                 }
             out.write(h.array())
             out.write(csd)
+            writtenBytes += 128 + csd.size
             configChanged = false
         }
         val nal = units.filter { it.size > 0 && it.type(annexB) !in 7..9 }
@@ -85,14 +91,29 @@ internal class CarPlayVideo(
         out.write(h)
         out.write(encrypted)
         out.flush()
+        writtenBytes += h.size + encrypted.size
+        writtenFrames++
         hasIdr = true
         return true
     }
 
     @Synchronized
     fun keepAlive() {
-        out.write(header(0, 2, System.nanoTime() / 1000).array())
+        val now = System.nanoTime()
+        if (heartbeatStats) {
+            val seconds = (now - lastReport).coerceAtLeast(1L) / 1_000_000_000.0
+            val report = BinaryPlist.encode(mapOf(
+                "txUsageAvg" to writtenBytes / seconds,
+                "encoderCurrentFPS" to kotlin.math.round(writtenFrames / seconds).toLong(),
+                "sentFramesAvg" to writtenFrames, "queuedFramesAvg" to 0L, "lossAvg" to 0.0,
+            ))
+            out.write(header(report.size, 5, 0).putFloat(124, report.size.toFloat()).array())
+            out.write(report)
+        } else out.write(header(0, 2, 0).array())
         out.flush()
+        lastReport = now
+        writtenBytes = 0
+        writtenFrames = 0
     }
 }
 

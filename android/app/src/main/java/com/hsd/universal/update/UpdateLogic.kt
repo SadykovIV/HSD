@@ -8,7 +8,7 @@ object UpdateLogic {
     const val RETRY_MS = 3600_000L
 
     private val stableVersion = Regex("""(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)""")
-    private val previousUniversal = Regex("""(.+)-universal\.([1-9]\d*)""")
+    private val prereleaseVersion = Regex("""(.+)-(?:universal\.|rc)[1-9]\d*""")
 
     class Release private constructor(val tag: String, val version: String, val apkName: String) {
         val apkUrl get() = "https://github.com/$REPO/releases/download/$tag/$apkName"
@@ -29,7 +29,7 @@ object UpdateLogic {
 
     fun isNewer(remote: String, local: String): Boolean {
         val candidate = numbers(remote) ?: return false
-        val prior = previousUniversal.matchEntire(local)
+        val prior = prereleaseVersion.matchEntire(local)
         val installed = numbers(prior?.groupValues?.get(1) ?: local) ?: return false
         for (i in candidate.indices) {
             if (candidate[i] != installed[i]) return candidate[i] > installed[i]
@@ -41,7 +41,7 @@ object UpdateLogic {
         var best = previous
         for (i in 0 until page.length()) {
             val item = page.optJSONObject(i) ?: continue
-            if (item.optBoolean("draft")) continue
+            if (item.optBoolean("draft") || item.optBoolean("prerelease")) continue
             val tag = item.optString("tag_name")
             val assets = item.optJSONArray("assets") ?: continue
             for (j in 0 until assets.length()) {

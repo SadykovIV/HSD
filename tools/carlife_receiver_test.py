@@ -9,8 +9,10 @@ import re
 import socket
 import subprocess
 import time
+from tempfile import TemporaryFile
 
 from hu_lab import protocol as wire
+from hu_lab.client import ReferenceStartGate
 
 
 PACKAGE = "com.hsd.universal"
@@ -92,6 +94,7 @@ def gesture_audio(receiver):
     with ThreadPoolExecutor(max_workers=1) as worker:
         drained = worker.submit(receiver.next, last_sample)
         receiver.touch(0, 300)
+        receiver.touch(0, 300)  # A physical Honda reports one contact twice before its first MOVE.
         for i in range(120):
             receiver.touch(2, 300 + i % 45)
             time.sleep(.005)
@@ -161,6 +164,102 @@ def camera_hud(receiver):
     print("Camera return restored video; Bluetooth music stayed external; HUD received the turn, street and distance")
 
 
+def check_screen_off(adb, restart_decoder=False):
+    def shell(*args):
+        return subprocess.check_output([*adb, "shell", *args], text=True).strip()
+
+    if shell("getprop", "ro.kernel.qemu") != "1":
+        raise RuntimeError("Screen-off checks require an Android emulator")
+
+    def panel_state():
+        info = shell("dumpsys", "display")
+        match = re.search(r"mBaseDisplayInfo=DisplayInfo\{[^\n]*?displayId 0\b[^\n]*?\bstate (\w+)", info)
+        if not match:
+            raise RuntimeError("Cannot read the default display state")
+        return match[1]
+
+    if panel_state() != "ON" or re.search(r"\bdeviceLocked=(true|1)\b", shell("dumpsys", "trust")):
+        raise RuntimeError("Start with the test emulator awake and unlocked")
+
+    def capture(receiver):
+        receiver.send(wire.HU_VERSION, f1=2 if restart_decoder else 1, f2=0 if restart_decoder else 6)
+        receiver.message(wire.VERSION_MATCH)
+        receiver.send(wire.VIDEO_INIT, f1=1024, f2=768, f3=30)
+        receiver.message(wire.VIDEO_INIT_DONE)
+        receiver.send(wire.VIDEO_START)
+        receiver.touch(0, 300)
+        receiver.touch(1, 300)
+        with TemporaryFile() as stream:
+            def collect(seconds):
+                end = time.monotonic() + seconds
+                count = 0
+                while time.monotonic() < end:
+                    stream.write(receiver.message(wire.VIDEO_DATA).payload)
+                    count += 1
+                return count
+
+            before = collect(5)
+            if panel_state() != "ON":
+                raise RuntimeError("The emulator fell asleep before the reference frame")
+            try:
+                shell("input", "keyevent", "KEYCODE_POWER")
+                until = time.monotonic() + 8
+                while panel_state() != "OFF":
+                    if time.monotonic() >= until:
+                        raise TimeoutError("The default display stayed on")
+                    collect(.25)
+                after = collect(5)
+                assert panel_state() == "OFF" and after >= 3
+                if restart_decoder:
+                    # Drop all decoder state. Keep the USB session alive, send no commands,
+                    # and start a new decoder with only the bytes arriving from this point.
+                    fresh = recover_picture(receiver, "silent decoder restart")
+                    receiver.send(wire.VIDEO_RESET)
+                    requested = recover_picture(receiver, "receiver RESET")
+                    assert panel_state() == "OFF", "The phone woke during decoder recovery"
+            finally:
+                shell("input", "keyevent", "KEYCODE_WAKEUP")
+                shell("wm", "dismiss-keyguard")
+            stream.seek(0)
+            raw = subprocess.check_output(["ffmpeg", "-v", "error", "-i", "pipe:0", "-vf", "scale=96:72",
+                                           "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], stdin=stream)
+        frame_bytes = 96 * 72 * 3
+        assert before > 2 and len(raw) % frame_bytes == 0 and len(raw) >= (before + after) * frame_bytes
+        reference = raw[(before - 1) * frame_bytes:before * frame_bytes]
+        asleep = raw[-frame_bytes:]
+        pictures = [reference, asleep]
+        if restart_decoder:
+            pictures.extend([fresh, requested])
+        for frame in pictures:
+            assert len(set(zip(frame[::3], frame[1::3], frame[2::3]))) > 64, "Missing launcher picture"
+        for frame in pictures[1:]:
+            delta = sum(abs(a - b) for a, b in zip(reference, frame)) / frame_bytes
+            assert delta < 12, f"The head unit lost the launcher picture (mean RGB difference {delta:.1f})"
+        print(f"{'DriveDeck' if restart_decoder else 'Android Desktop'} stayed visible with the default display OFF ({after} CarLife video packets)")
+
+    run(adb, "carlife-usb" if restart_decoder else "carlife-desktop", capture)
+
+
+def recover_picture(receiver, reason):
+    gate = ReferenceStartGate()
+    deadline = time.monotonic() + 8
+    keys = 0
+    while time.monotonic() < deadline:
+        data = receiver.message(wire.VIDEO_DATA).payload
+        keys += any(nal and nal[0] & 31 == 5 for nal in re.split(b"\x00\x00\x01", data))
+        picture = gate.feed(data)
+        if picture is None:
+            continue
+        # The decoder process has no previous pictures or out-of-band codec configuration.
+        pixels = subprocess.check_output(["ffmpeg", "-v", "error", "-f", "h264", "-i", "pipe:0",
+                                          "-frames:v", "1", "-vf", "scale=96:72", "-f", "rawvideo",
+                                          "-pix_fmt", "rgb24", "-"], input=picture)
+        assert len(pixels) == 96 * 72 * 3 and keys <= 2, (reason, keys, len(pixels))
+        print(f"{reason}: decoded a fresh picture after {keys} IDR(s)", flush=True)
+        return pixels
+    raise AssertionError(f"{reason}: could not initialize a new decoder after receiving {keys} IDR(s)")
+
+
 def run(adb, protocol, check):
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
@@ -170,7 +269,7 @@ def run(adb, protocol, check):
         address = "tcp:" + port
         subprocess.run([*adb, "reverse", address, address], check=True, capture_output=True)
         try:
-            command = [*adb, "shell", "am", "instrument", "-w", "-r", "-e", "protocol", protocol,
+            command = [*adb, "shell", "am", "instrument", "--no-hidden-api-checks", "-w", "-r", "-e", "protocol", protocol,
                        "-e", "fixturePort", port, PACKAGE + ".test/" + PACKAGE + ".DriveDeckAapProbe"]
             with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True) as proc:
                 try:
@@ -191,7 +290,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--adb", default="adb")
     parser.add_argument("--serial", required=True)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--screen-off", action="store_true", help="Check decoded desktop frames while an unlocked emulator sleeps (requires ffmpeg)")
+    mode.add_argument("--decoder-restart", action="store_true", help="Reset the DriveDeck receiver decoder while the phone display is off (requires ffmpeg)")
     args = parser.parse_args()
     target = [args.adb, "-s", args.serial]
-    run(target, "carlife-gesture-audio", gesture_audio)
-    run(target, "carlife-hud", camera_hud)
+    if args.screen_off or args.decoder_restart:
+        check_screen_off(target, args.decoder_restart)
+    else:
+        run(target, "carlife-gesture-audio", gesture_audio)
+        run(target, "carlife-hud", camera_hud)

@@ -14,6 +14,10 @@ internal object IndependentRecoveryPolicy {
     fun requested(sdk: Int, delegated: Boolean, desktopMode: Int, enabled: Boolean): Boolean =
         sdk >= 37 && delegated && desktopMode != DesktopModePolicy.SAMSUNG_DEX && enabled
 
+    /** A completed setup from a previous build remains usable until the phone reboots. */
+    fun hasWorkingSetup(existing: IndependentRecoveryAccess.Kind): Boolean =
+        existing == IndependentRecoveryAccess.Kind.OWNED || existing == IndependentRecoveryAccess.Kind.REUSED
+
     private fun port(value: String): Int {
         if (value.isEmpty() || value == "0" || value == "-1") return 0
         return value.toIntOrNull()?.takeIf { it in 1..65535 }

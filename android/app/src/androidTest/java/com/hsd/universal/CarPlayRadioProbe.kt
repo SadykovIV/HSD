@@ -125,18 +125,39 @@ internal class CarPlayRadioProbe(private val context: Context, private val args:
         life.own(channel::close)
         check(channel.awaitReady(10_000)) { "Receiver iAP2 link timed out" }
         val parser = Iap2Csm.Parser()
+        val wifiConfigOnly = args.getString("setup") == "wifiConfig"
+        val request = if (wifiConfigOnly) 0x5702 else 0x4300
+        val response = if (wifiConfigOnly) 0x5703 else 0x4301
+        val sparse = args.getString("capabilities") == "incomplete"
+        val serialFirst = args.getString("certificate") == "serial"
+        val expectedDeviceUpdates = setOf(0x4e09, 0x4e0a, 0x4e0b, 0x4e0c, 0x4e0d, 0x4e0e)
+        val deviceUpdates = mutableSetOf<Int>()
         val signer = KeyFactory.getInstance("EC").generatePrivate(PKCS8EncodedKeySpec(data("key")))
         fun send(id: Int, body: ByteArray = byteArrayOf()) =
             check(channel.sendControl(Iap2Csm.encode(id, body)))
         var accepted = false
         var receivedId = false
+        var serialSent = false
+        var firstConfigSeen = false
         val deadline = SystemClock.elapsedRealtime() + 45_000
         while (channel.isAlive && SystemClock.elapsedRealtime() < deadline) {
             val bytes = channel.recvControl(250) ?: continue
             for (frame in parser.offer(bytes)) when (frame.messageId) {
-                0x1d00 -> send(0x1d01, Iap2Csm.u16List(6, intArrayOf(0x4301)) +
-                    Iap2Csm.u16List(7, intArrayOf(0x4e0e)))
-                0xaa00 -> send(0xaa01, Iap2Csm.param(0, data("chain")))
+                0x1d00 -> {
+                    val sends = mutableListOf<Int>()
+                    if (!sparse) sends.add(response)
+                    if (serialFirst) sends.add(0xaa06)
+                    send(0x1d01, Iap2Csm.u16List(6, sends.toIntArray()) +
+                        Iap2Csm.u16List(7, expectedDeviceUpdates.toIntArray()))
+                }
+                0xaa00 -> if (serialFirst && !serialSent) {
+                    check(Iap2Csm.parseParams(frame.body).single() == Iap2Csm.Param(0, byteArrayOf()))
+                    serialSent = true
+                    repeat(2) { send(0xaa06, Iap2Csm.param(0, byteArrayOf(1, 2, 3))) }
+                } else {
+                    check(frame.body.isEmpty())
+                    send(0xaa01, Iap2Csm.param(0, data("chain")))
+                }
                 0xaa02 -> {
                     val digest = Iap2Csm.parseParams(frame.body).single { it.id == 0 }.value
                     val signature =
@@ -148,31 +169,37 @@ internal class CarPlayRadioProbe(private val context: Context, private val args:
                     send(0xaa03, Iap2Csm.param(0, signature))
                 }
                 0xaa05 -> accepted = true
-                0x4e0e -> {
+                in expectedDeviceUpdates -> {
                     check(accepted)
-                    receivedId = Iap2Csm.parseParams(frame.body).single { it.id == 0 }.asString()
-                        .equals(arg("peer"), ignoreCase = true)
+                    deviceUpdates.add(frame.messageId)
+                    if (frame.messageId == 0x4e0e) receivedId = Iap2Csm.parseParams(frame.body).single { it.id == 0 }
+                        .asString().equals(arg("peer"), ignoreCase = true)
                 }
                 0xaa04 -> error("Phone rejected accessory signature")
-                0x4300 -> {
-                    check(accepted && receivedId) { "CarPlay availability arrived before the authenticated phone transport identifier" }
-                    val network =
-                        Iap2Csm.group(
+                request -> {
+                    check(accepted && receivedId) { "Wi-Fi request arrived before the authenticated phone identifier" }
+                    check(deviceUpdates == expectedDeviceUpdates)
+                    if (sparse && !wifiConfigOnly) check(firstConfigSeen)
+                    val useDiscovery = wifiConfigOnly || initiates
+                    val network = if (wifiConfigOnly) {
+                        Iap2Csm.string(1, arg("ssid")) + Iap2Csm.string(2, arg("pass")) + Iap2Csm.u8(3, 2)
+                    } else {
+                        val fields = Iap2Csm.group(
                             1,
                             Iap2Csm.string(0, arg("ssid")),
                             Iap2Csm.string(1, arg("pass")),
-                            if (initiates) byteArrayOf() else Iap2Csm.string(3, addr.hostAddress!!),
+                            if (useDiscovery) byteArrayOf() else Iap2Csm.string(3, addr.hostAddress!!),
                             Iap2Csm.u8(4, 2),
                         )
-                    if (initiates) {
+                        if (useDiscovery) fields else fields + Iap2Csm.u32(2, ip.localPort.toLong())
+                    }
+                    send(response, network)
+                    if (useDiscovery) {
                         // This head unit drops Bluetooth after delivering Wi-Fi credentials. Its
                         // endpoint is only published over Bonjour once the radio handoff is over.
-                        send(0x4301, network)
                         SystemClock.sleep(300)
                         channel.close()
                         publishEndpoint(ip.localPort, life)
-                    } else {
-                        send(0x4301, network + Iap2Csm.u32(2, ip.localPort.toLong()))
                     }
                     ip.accept().use { client ->
                         client.soTimeout = 8000
@@ -187,10 +214,11 @@ internal class CarPlayRadioProbe(private val context: Context, private val args:
                     return Bundle().apply {
                         putString(
                             "CarPlay_receiver",
-                            "Signed challenge, accepted over Bluetooth, replied over WPA2",
+                            "Signed challenge, all requested device updates before Wi-Fi, replied over WPA2 (serialFirst=$serialFirst, incomplete=$sparse)",
                         )
                     }
                 }
+                0x5702 -> firstConfigSeen = true
             }
         }
         error("Receiver did not complete Bluetooth bootstrap")

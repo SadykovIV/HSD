@@ -1025,8 +1025,7 @@ class DexUserService private constructor(private val context: Context, private v
                 val remote = VdmHostCore.openLocalSession(context, sessionToken, Process.myPid(), context.applicationInfo.uid)
                 return VdmDisplayFamily(context, remote).create(name, surface, width, height, density, flags, parent = true)
             }
-            return LocalDesktopDisplay(checkNotNull(create.invoke(displayManager, name, width, height, density,
-                surface, flags) as? VirtualDisplay) { "Android отклонил виртуальный экран" }, producerLifetime)
+            return LocalDesktopDisplay(createPresentation(name, width, height, density, surface, flags), producerLifetime)
         }
 
         override fun createChildDisplay(parent: OwnedDesktopDisplay, name: String, surface: Surface,
@@ -1034,9 +1033,18 @@ class DexUserService private constructor(private val context: Context, private v
             val flags = EmbeddedDisplayPolicy.displayFlags(android.os.Build.VERSION.SDK_INT,
                 DelegatedDesktopAccess.canKeepDisplayUnlocked(context), DelegatedDesktopAccess.trustedDisplay(context))
             return parent.family?.create(name, surface, width, height, density, flags, parent = false)
-                ?: LocalDesktopDisplay(checkNotNull(create.invoke(displayManager, name, width, height, density,
-                    surface, flags) as? VirtualDisplay) { "Android отклонил экран виджета" }, parent.nativeLifetime)
+                ?: LocalDesktopDisplay(createPresentation(name, width, height, density, surface, flags), parent.nativeLifetime)
         }
+
+        private fun createPresentation(name: String, width: Int, height: Int, density: Int, surface: Surface, flags: Int) =
+            DesktopDisplayIsolation.create(flags) { requested ->
+                val display = try {
+                    create.invoke(displayManager, name, width, height, density, surface, requested) as? VirtualDisplay
+                } catch (wrapped: InvocationTargetException) {
+                    throw unwrap(wrapped)
+                }
+                checkNotNull(display) { "Android отклонил виртуальный экран" }
+            }
 
         private val displayLocks = HashMap<Int, DexWakeLease>()
 
@@ -1047,6 +1055,7 @@ class DexUserService private constructor(private val context: Context, private v
         override fun unregisterDisplay(id: Int, token: IBinder) { displayLocks.remove(id)?.let { runCatching { it.release() } } }
 
         private fun holdDisplay(id: Int) {
+            if (android.os.Build.VERSION.SDK_INT < 31) return
             try {
                 val global = Class.forName("android.hardware.display.DisplayManagerGlobal")
                 val manager = global.getMethod("getInstance").invoke(null)
@@ -1054,8 +1063,9 @@ class DexUserService private constructor(private val context: Context, private v
                 val flags = info.javaClass.getField("flags").getInt(info)
                 val group = info.javaClass.getField("displayGroupId").getInt(info)
                 val independent = DesktopDisplayIsolation.independent(flags, group)
-                Log.i(TAG, "DESKTOP LOCK: display=$id group=$group independent=$independent")
-                if (id > 0 && independent && group > 0) displayLocks[id] = newWakeLockForDisplay(id).also { it.acquire() }
+                val separatePower = DesktopDisplayIsolation.hasSeparatePowerGroup(id, group)
+                Log.i(TAG, "DESKTOP LOCK: display=$id group=$group separatePower=$separatePower independent=$independent")
+                if (separatePower) displayLocks[id] = newWakeLockForDisplay(id).also { it.acquire() }
             } catch (error: Exception) { Log.w(TAG, "Independent display wake lock unavailable", error) }
         }
 
@@ -1123,15 +1133,19 @@ class DexUserService private constructor(private val context: Context, private v
             val power = checkNotNull(Class.forName("android.os.IPowerManager\$Stub")
                 .getMethod("asInterface", IBinder::class.java).invoke(null, binder)) { "Служба питания недоступна" }
             val api = Class.forName("android.os.IPowerManager")
-            val acquire = api.getMethod("acquireWakeLock", IBinder::class.java, Int::class.javaPrimitiveType,
-                String::class.java, String::class.java, android.os.WorkSource::class.java, String::class.java,
-                Int::class.javaPrimitiveType, Class.forName("android.os.IWakeLockCallback"))
+            val parameters = arrayOf(IBinder::class.java, Integer.TYPE, String::class.java, String::class.java,
+                android.os.WorkSource::class.java, String::class.java, Integer.TYPE)
+            val acquire = if (android.os.Build.VERSION.SDK_INT >= 33)
+                api.getMethod("acquireWakeLock", *parameters, Class.forName("android.os.IWakeLockCallback"))
+            else api.getMethod("acquireWakeLock", *parameters)
             val release = api.getMethod("releaseWakeLock", IBinder::class.java, Int::class.javaPrimitiveType)
             val token = Binder() // PMS releases this token automatically if this UserService dies.
             return DexWakeLease(
                 acquireRemote = {
                     // SCREEN_BRIGHT_WAKE_LOCK=10; no ACQUIRE_CAUSES_WAKEUP or ON_AFTER_RELEASE.
-                    acquire.invoke(power, token, 10, "${com.hsd.universal.BuildConfig.BRAND}-desk:display:$displayId", "com.android.shell", null, null, displayId, null)
+                    val args = arrayOf(token, 10, "${com.hsd.universal.BuildConfig.BRAND}-desk:display:$displayId", "com.android.shell", null, null, displayId)
+                    if (acquire.parameterCount == args.size) acquire.invoke(power, *args)
+                    else acquire.invoke(power, *args, null)
                     Unit
                 },
                 releaseRemote = { release.invoke(power, token, 0); Unit },

@@ -552,19 +552,19 @@ class AaTranscoder(
 
     private fun encodeLoop(c: MediaCodec) {
         val info = MediaCodec.BufferInfo()
+        val units = EncoderAccessUnits(hevc, out::onEncoderConfig)
         try {
             while (running) {
                 val idx = c.dequeueOutputBuffer(info, 50_000)
-                if (idx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED && hevc) {
+                if (idx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                     val format = c.outputFormat
-                    check(format.getInteger(MediaFormat.KEY_WIDTH) == width && format.getInteger(MediaFormat.KEY_HEIGHT) == height) {
+                    check(!hevc || (format.getInteger(MediaFormat.KEY_WIDTH) == width && format.getInteger(MediaFormat.KEY_HEIGHT) == height)) {
                         "Размер выхода HEVC отличается от согласованного"
                     }
-                    format.getByteBuffer("csd-0")?.duplicate()?.let { buffer ->
-                        val csd = ByteArray(buffer.remaining())
-                        buffer.get(csd)
-                        if (csd.isNotEmpty()) out.onEncoderConfig(AnnexB.normalize(csd))
-                    }
+                    units.format(listOfNotNull(format.getByteBuffer("csd-0"), format.getByteBuffer("csd-1")).map {
+                        val buffer = it.duplicate()
+                        ByteArray(buffer.remaining()).also(buffer::get)
+                    })
                 }
                 if (idx >= 0) {
                     val buf = c.getOutputBuffer(idx)
@@ -573,10 +573,8 @@ class AaTranscoder(
                         buf.position(info.offset)
                         buf.limit(info.offset + info.size)
                         buf.get(arr)
-                        val data = AnnexB.normalize(arr)
-                        if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
-                            out.onEncoderConfig(data)
-                        } else {
+                        val data = units.frame(arr, info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0)
+                        if (data != null) {
                             val lat = System.nanoTime() - info.presentationTimeUs * 1000
                             if (lat in 0..2_000_000_000L) {
                                 winEncLatUs.addAndGet(lat / 1000)

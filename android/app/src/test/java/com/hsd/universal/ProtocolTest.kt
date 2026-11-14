@@ -12,7 +12,6 @@ import org.junit.Test
 
 /** Байтовые примеры взяты из docs/carlife-protocol.md §9.2. */
 class ProtocolTest {
-
     private fun hex(s: String): ByteArray {
         val t = s.replace(" ", "")
         return ByteArray(t.length / 2) { t.substring(it * 2, it * 2 + 2).toInt(16).toByte() }

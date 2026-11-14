@@ -6,8 +6,11 @@ import aap_protobuf.service.control.message.AudioFocusRequestTypeOuterClass.Audi
 import aap_protobuf.service.control.message.ServiceDiscoveryResponseOuterClass.ServiceDiscoveryResponse
 import aap_protobuf.shared.MessageStatusOuterClass.MessageStatus
 import aap_protobuf.service.inputsource.message.InputReportOuterClass.InputReport
+import aap_protobuf.service.inputsource.message.PointerActionOuterClass.PointerAction
+import aap_protobuf.service.inputsource.message.TouchEventOuterClass.TouchEvent
 import aap_protobuf.service.media.shared.message.MediaCodecTypeOuterClass.MediaCodecType
 import aap_protobuf.service.media.sink.message.VideoConfigurationOuterClass.VideoConfiguration
+import aap_protobuf.service.media.video.message.VideoFocusModeOuterClass.VideoFocusMode
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
@@ -18,6 +21,7 @@ import com.hsd.universal.aa.DesktopEncoderSupport
 import aap_protobuf.service.media.shared.message.UiConfigOuterClass.UiConfig
 import com.hsd.universal.aa.CarlifeAudio
 import com.hsd.universal.aa.TouchPoint
+import com.hsd.universal.dex.DesktopModePolicy
 import com.hsd.universal.dex.DexPrefs
 import net.prototux.aare.aap.*
 import net.prototux.aare.aap.channels.AudioChannel
@@ -81,9 +85,11 @@ internal class AutoProjection(private val context: Context, transport: Transport
         }
     }
     private val main = Handler(Looper.getMainLooper())
+    private var touchReports = 0
+    private var touchMoves = 0
     private val session = AapSession(transport, identity,
         identity.projectionDescription(),
-        this, options = SessionOptions(sendPings = com.hsd.universal.ProjectionRoute.wireless(context), pins = pins, peerKey = peer, trustOnFirstUse = true))
+        this, options = SessionOptions(sendPings = !wired, pins = pins, peerKey = peer, trustOnFirstUse = true))
     @Volatile var retryUsbOpen = false
         private set
     @Volatile var rejectedVideo = false
@@ -103,26 +109,44 @@ internal class AutoProjection(private val context: Context, transport: Transport
     @Volatile private var activeLayout: AaVideoLayout? = null
     private var activeCodec: MediaCodecType? = null
     @Volatile private var codecConfig: ByteArray? = null
-    private var touchLayout: AaVideoLayout? = null
     private val selection = prefs.desktopVideoSelection()
-    private val legacyTiles = prefs.desktopMode == com.hsd.universal.dex.DesktopModePolicy.DRIVEDECK && runCatching {
-        context.packageManager.getPackageInfo(com.hsd.universal.dex.DesktopModePolicy.DRIVEDECK_PACKAGE, 0).longVersionCode < 336
-    }.getOrDefault(false)
+    private val legacyTiles = prefs.desktopMode == DesktopModePolicy.DRIVEDECK && !DesktopModePolicy.supportsNativeTiles(context)
     @Volatile private var submitted = false
     private var endMessage: String? = null
     // A new surface can only start after the desktop service releases the previous one.
     private var retiringSource = false
     private var pendingConfiguration: VideoConfiguration? = null
     private var finishAfterRetirement: (() -> Unit)? = null
-    private val deadline = Runnable { if (!submitted) stop(context.getString(R.string.desktop_in_55_seconds_the_radio_did_not_receive_the)) }
+    private val deadline = Runnable {
+        if (!submitted && (!::videoChannel.isInitialized || videoExpectedSinceNanos != null))
+            stop(context.getString(R.string.desktop_in_55_seconds_the_radio_did_not_receive_the))
+    }
 
     override fun home() { source?.home() }
     override fun panel(off: Boolean) { source?.setPhoneScreenOff(off) }
 
     override fun start() {
         com.hsd.universal.dex.DesktopConnectionState.attach(delivery)
-        main.postDelayed(deadline, 55_000)
+        if (!wired) main.postDelayed(deadline, 55_000)
         session.start()
+    }
+    override fun onWaitingForUsbVersion(session: AapSession) {
+        main.post {
+            if (!stopping && session.state == AapSession.State.VERSION) {
+                CarLifeState.waitingForUsbVersion = true
+                status(context.getString(R.string.aa_usb_wait_version))
+                AppLog.i("Android Auto USB: waiting on the attached accessory for VERSION_REQUEST", false)
+            }
+        }
+    }
+
+    override fun onNegotiationStarted(session: AapSession) {
+        if (wired) main.post {
+            if (!stopping) {
+                CarLifeState.waitingForUsbVersion = false
+                if (!submitted) main.postDelayed(deadline, 55_000)
+            }
+        }
     }
     override fun stop(message: String) {
         if (stopping) return
@@ -135,9 +159,12 @@ internal class AutoProjection(private val context: Context, transport: Transport
     override fun onServiceDiscovery(session: AapSession, response: ServiceDiscoveryResponse): List<ServiceChannel> {
         val model = response.headunitInfo.headUnitModel.ifBlank { response.headUnitModel }
         val make = response.headunitInfo.headUnitMake.ifBlank { response.headUnitMake }
-        (pins as? ProjectionIdentity)?.authenticated(peer, response.displayName.ifBlank {
-            listOf(make, model).filter(String::isNotBlank).distinct().joinToString(" ")
-        })
+        (pins as? ProjectionIdentity)?.let { identities ->
+            identities.observeReceiver(peer, session.headUnitCertificates, session.tlsEstablished)
+            identities.authenticated(peer, response.displayName.ifBlank {
+                listOf(make, model).filter(String::isNotBlank).distinct().joinToString(" ")
+            })
+        }
         calibration.identify(response.headunitInfo.headUnitMake.ifBlank { response.headUnitMake },
             response.headunitInfo.headUnitModel.ifBlank { response.headUnitModel.ifBlank { response.displayName } })
         val displays = response.channelsList.filter { it.hasMediaSinkService() && it.mediaSinkService.displayType.number == 0 }
@@ -246,8 +273,7 @@ internal class AutoProjection(private val context: Context, transport: Transport
         pendingConfiguration = null
         codecConfig = null
         submitted = false
-        main.removeCallbacks(deadline)
-        main.postDelayed(deadline, 55_000)
+        updateFirstFrameDeadline()
         delivery.start(SystemClock.elapsedRealtime())
         width = w
         height = h
@@ -270,6 +296,11 @@ internal class AutoProjection(private val context: Context, transport: Transport
 
     override fun onVideoFocus(projected: Boolean) {
         if (stopping) return
+        if (!projected || videoChannel.focusMode == VideoFocusMode.VIDEO_FOCUS_PROJECTED_NO_INPUT_FOCUS) {
+            source?.cancelTouch()
+        }
+        AppLog.i("AAP VIDEO focus=${videoChannel.focusMode} started=${videoChannel.started}", false)
+        main.post { if (!stopping) updateFirstFrameDeadline() }
         if (projected) {
             delivery.start(SystemClock.elapsedRealtime())
             onKeyFrameNeeded()
@@ -280,12 +311,18 @@ internal class AutoProjection(private val context: Context, transport: Transport
             main.post { source?.outputLost(hadPicture, carriedAudio = false) }
         }
     }
+    private fun updateFirstFrameDeadline() {
+        main.removeCallbacks(deadline)
+        if (!submitted && videoChannel.videoExpectedSinceNanos != null) main.postDelayed(deadline, 55_000)
+    }
+
+    override val videoExpectedSinceNanos get() = videoChannel.videoExpectedSinceNanos
     override fun onKeyFrameNeeded() {
         // The AAP reader may hold the channel's lock; the encoder holds the desktop core's.
         main.post { if (!stopping) source?.requestKeyFrame() }
     }
     override fun video(payload: ByteArray, ptsUs: Long): Boolean {
-        if (stopping || source == null || !videoChannel.started || !videoChannel.focused) return false
+        if (stopping || source == null) return false
         val config = runningConfig ?: return false
         return videoChannel.writeFor(config) { sendVideoFrame(payload, ptsUs, videoChannel.codec == h265) }
     }
@@ -319,7 +356,7 @@ internal class AutoProjection(private val context: Context, transport: Transport
     }
 
     override fun onFrameWritten(keyFrame: Boolean, ptsUs: Long, bytes: Int) {
-        if (stopping || !videoChannel.focused) return
+        if (stopping || !videoChannel.acceptsVideo) return
         writtenBytes.addAndGet(bytes.toLong())
         pcmQueue.videoWritten(ptsUs)
         delivery.frameWritten(SystemClock.elapsedRealtime())
@@ -337,32 +374,44 @@ internal class AutoProjection(private val context: Context, transport: Transport
 
     override fun onInput(report: InputReport) {
         val desktop = source ?: return
-        if (stopping || !videoChannel.focused) return
-        if (report.hasTouchEvent()) {
-            val panel = input?.touchScreen
-            val e = report.touchEvent
-            if (panel != null && e.pointerDataCount in 1..2 && e.actionIndex in e.pointerDataList.indices) {
-                val layout = activeLayout ?: return
-                val w = if (prefs.useDesktopService) layout.desktopWidth else com.hsd.universal.dex.DexVideoGeometry.WIDTH
-                val h = if (prefs.useDesktopService) layout.desktopHeight else com.hsd.universal.dex.DexVideoGeometry.HEIGHT
-                val down = e.action.number == 0
-                if (down) touchLayout = null
-                if (down || touchLayout === layout) {
-                    val points = e.pointerDataList.map {
-                        val (x, y) = layout.touch(it.x, it.y, panel.width, panel.height, w, h, clamp = !down) ?: return
-                        TouchPoint(it.pointerId, x, y)
-                    }
-                    touchLayout = if (e.action.number == 1) null else layout
-                    desktop.touch(e.action.number, e.actionIndex, points)
-                }
-            }
-        }
+        if (stopping || !videoChannel.acceptsVideo || !submitted ||
+            videoChannel.focusMode == VideoFocusMode.VIDEO_FOCUS_PROJECTED_NO_INPUT_FOCUS) return
+        if (report.hasTouchEvent()) onTouch(desktop, report.touchEvent)
         // The desktop API injects a full down/up pair for a key.
         for (key in report.keyEvent.keysList) if (!key.down) {
             if (key.keycode == KeyEvent.KEYCODE_HOME) desktop.home() else desktop.key(key.keycode)
         }
         for (rel in report.relativeEvent.dataList) if (rel.keycode == 65536) desktop.rotate(rel.delta)
     }
+
+    private fun onTouch(desktop: DesktopProjectionSource, report: TouchEvent) {
+        val action = report.action
+        touchReports++
+        val move = action == PointerAction.ACTION_MOVED
+        if (move) touchMoves++
+        if ((!move && touchReports <= 40) || (move && touchMoves == 1) || touchReports % 256 == 0) {
+            AppLog.i("AAP touch: reports=$touchReports moves=$touchMoves action=${report.actionValue} " +
+                "ids=${report.pointerDataList.map { it.pointerId }} repeatedDown=${desktop.repeatedTouchDowns}", false)
+        }
+        if (action == PointerAction.UNRECOGNIZED) return
+        if (action == PointerAction.ACTION_CANCEL) {
+            desktop.cancelTouch()
+            return
+        }
+        if (report.pointerDataCount !in 1..2) return
+        val active = desktop.hasActiveTouch
+        if (!active && action != PointerAction.ACTION_DOWN) return
+        val panel = input?.touchScreen ?: return
+        val layout = activeLayout ?: return
+        val w = if (prefs.useDesktopService) layout.desktopWidth else com.hsd.universal.dex.DexVideoGeometry.WIDTH
+        val h = if (prefs.useDesktopService) layout.desktopHeight else com.hsd.universal.dex.DexVideoGeometry.HEIGHT
+        val points = report.pointerDataList.map {
+            val (x, y) = layout.touch(it.x, it.y, panel.width, panel.height, w, h, clamp = active) ?: return
+            TouchPoint(it.pointerId, x, y)
+        }
+        desktop.touch(report.actionValue, report.actionIndex, points)
+    }
+
     private fun supportsAudio(config: AudioConfiguration) =
         config.numberOfBits == 16 && config.numberOfChannels == 2 && config.samplingRate in rates
 
@@ -407,9 +456,12 @@ internal class AutoProjection(private val context: Context, transport: Transport
         networkInterrupted = !stopping && session.closedDuring == AapSession.State.RUNNING &&
             error is java.io.IOException && error !is javax.net.ssl.SSLException
         val lostUsbPicture = wired && !stopping && error is java.io.IOException && delivery.hasPicture()
+        val interruptedAuth = !stopping && error != null &&
+            (session.closedDuring == AapSession.State.HANDSHAKE || session.closedDuring == AapSession.State.AUTH)
         stopping = true
         main.post {
             if (lostUsbPicture) source?.outputLost(true, carriedAudio = true)
+            if (wired) CarLifeState.waitingForUsbVersion = false
             main.removeCallbacks(sample)
             pcmQueue.close()
             audioEncoder.close()
@@ -418,9 +470,11 @@ internal class AutoProjection(private val context: Context, transport: Transport
             com.hsd.universal.dex.DesktopConnectionState.detach(delivery)
             main.removeCallbacks(deadline)
             val authorization = session.authorization
-            AppLog.i("Android Auto closed · transport=$transportLabel · phase=${session.closedDuring} · version=${session.headUnitVersion?.let { "${it.first}.${it.second}" } ?: "none"} · auth=${authorization?.description ?: "none"} · cause=${error?.message ?: reason}", false)
-            if (session.pinRefusal != null || authorization?.certificateError == true)
-                (pins as? ProjectionIdentity)?.rejected(peer, session.pinRefusal?.fingerprint)
+            AppLog.i("Android Auto closed · transport=$transportLabel · phase=${session.closedDuring} · version=${session.headUnitVersion?.let { "${it.first}.${it.second}" } ?: "none"} · auth=${authorization?.description ?: "none"} · cause=$reason", false)
+            if (interruptedAuth) (pins as? ProjectionIdentity)?.let { identities ->
+                identities.rejected(peer, session.pinRefusal?.fingerprint)
+                identities.observeReceiver(peer, session.headUnitCertificates, session.tlsEstablished)
+            }
             val message = endMessage ?: if (oldUsb)
                 context.getString(R.string.desktop_the_head_unit_continued_the_previous_usb_session_without)
             else if (session.pinRefusal != null)
@@ -430,6 +484,7 @@ internal class AutoProjection(private val context: Context, transport: Transport
                     MessageStatus.STATUS_AUTHENTICATION_FAILURE_CERT_EXPIRED -> R.string.aa_auth_cert_expired
                     MessageStatus.STATUS_AUTHENTICATION_FAILURE_CERT_NOT_YET_VALID -> R.string.aa_auth_cert_not_yet_valid
                     MessageStatus.STATUS_CERTIFICATE_ERROR -> R.string.aa_auth_certificate
+                    MessageStatus.STATUS_AUTHENTICATION_FAILURE -> R.string.aa_auth_unspecified
                     MessageStatus.STATUS_BUSY -> R.string.aa_auth_busy
                     else -> R.string.aa_auth_rejected
                 }
@@ -441,8 +496,8 @@ internal class AutoProjection(private val context: Context, transport: Transport
                 }
             }
             else if (session.closedDuring == AapSession.State.HANDSHAKE || session.closedDuring == AapSession.State.AUTH)
-                context.getString(R.string.aa_handshake_interrupted, session.closedDuring.name, error?.message ?: reason)
-            else context.getString(R.string.desktop_android_auto_is_completed, session.closedDuring, error?.message ?: reason)
+                context.getString(R.string.aa_handshake_interrupted, session.closedDuring.name, reason)
+            else context.getString(R.string.desktop_android_auto_is_completed, session.closedDuring, reason)
             val cleanup = source
             source = null
             when {

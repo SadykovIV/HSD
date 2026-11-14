@@ -4,13 +4,13 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DesktopUsbDebuggingPolicyTest {
-    @Test fun scopeFollowsHostAndTransportRatherThanManufacturer() {
-        assertTrue(DesktopUsbDebuggingPolicy.required(37, true, false, false))
-        assertTrue(DesktopUsbDebuggingPolicy.required(38, true, false, false))
-        assertFalse(DesktopUsbDebuggingPolicy.required(36, true, false, false))
-        assertFalse(DesktopUsbDebuggingPolicy.required(37, false, false, false))
-        assertFalse(DesktopUsbDebuggingPolicy.required(37, true, true, false))
-        assertFalse(DesktopUsbDebuggingPolicy.required(37, true, false, true))
+    @Test fun onlyWiredSamsungWithIndependentDesktopRequiresUsbDebugging() {
+        for (sdk in listOf(36, 37, 38)) for (wired in listOf(false, true)) {
+            assertFalse(DesktopUsbDebuggingPolicy.required(sdk, false, true, false, wired))
+            assertEquals(sdk >= 37 && wired, DesktopUsbDebuggingPolicy.required(sdk, true, true, false, wired))
+            assertFalse(DesktopUsbDebuggingPolicy.required(sdk, true, false, false, wired))
+            assertFalse(DesktopUsbDebuggingPolicy.required(sdk, true, true, true, wired))
+        }
     }
     @Test fun filteredSettingIsNotEvidenceThatDebuggingWasDisabled() {
         for (unknown in listOf(null, "", "null", "-1", "unexpected"))

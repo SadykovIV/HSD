@@ -25,6 +25,14 @@ class ComponentApkProvider : FileProvider()
 
 data class PreparedComponent(val version: String, val code: Long, val file: File)
 
+@Suppress("DEPRECATION")
+internal fun PackageManager.readSignedArchive(file: File, flags: Int = 0): PackageInfo? {
+    // Android 10 checks GET_SIGNATURES before it actually verifies a standalone APK.
+    // Callers still compare the verified current signers from SigningInfo, including on 10.
+    val verify = if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) PackageManager.GET_SIGNATURES else 0
+    return getPackageArchiveInfo(file.absolutePath, flags or verify or PackageManager.GET_SIGNING_CERTIFICATES)
+}
+
 internal object ComponentPackages {
     private val sigFlags = PackageManager.GET_SIGNING_CERTIFICATES
     private fun PackageInfo.signers() = signingInfo?.apkContentsSigners?.toSet().orEmpty()
@@ -118,9 +126,8 @@ internal object ComponentPackages {
         check(installed.signerSha256 == entry.signerSha256 && installed.modeId == entry.modeId) {
             "Подпись или профиль установленного компонента изменились."
         }
-        val flags = PackageManager.GET_SIGNING_CERTIFICATES or
-            PackageManager.GET_ACTIVITIES or PackageManager.GET_META_DATA
-        val apk = ctx.packageManager.getPackageArchiveInfo(file.absolutePath, flags) ?: error("Не удалось прочитать APK.")
+        val flags = PackageManager.GET_ACTIVITIES or PackageManager.GET_META_DATA
+        val apk = ctx.packageManager.readSignedArchive(file, flags) ?: error("Не удалось прочитать APK.")
         val sha = MessageDigest.getInstance("SHA-256")
         val pins = apk.signers().map { sha.digest(it.toByteArray()).joinToString("") { b -> "%02x".format(b) } }.toSet()
         val activity = apk.activities?.firstOrNull { it.name == entry.componentName.className }
@@ -174,9 +181,8 @@ internal object ComponentPackages {
     }
 
     fun validate(ctx: Context, spec: DesktopComponent, file: File): PreparedComponent {
-        val pm = ctx.packageManager
-        val flags = PackageManager.GET_SIGNING_CERTIFICATES or PackageManager.GET_ACTIVITIES or PackageManager.GET_META_DATA
-        val apk = pm.getPackageArchiveInfo(file.absolutePath, flags) ?: error("Файл не является подписанным APK.")
+        val flags = PackageManager.GET_ACTIVITIES or PackageManager.GET_META_DATA
+        val apk = ctx.packageManager.readSignedArchive(file, flags) ?: error("Файл не является подписанным APK.")
         check(apk.packageName == spec.pkg) { "Выберите адаптированный APK ${spec.title}, пакет ${spec.pkg}." }
         checkPublisher(ctx, spec, apk)
         val current = installed(ctx, spec)

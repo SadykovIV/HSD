@@ -12,6 +12,7 @@ import net.prototux.aare.aap.cert.SelfSignedCertificate
 import java.io.File
 import java.security.KeyStore
 import java.security.PrivateKey
+import java.security.cert.CertificateException
 import java.security.cert.X509Certificate
 import java.time.Instant
 import java.time.Clock
@@ -36,6 +37,7 @@ internal class ProjectionIdentity(private val context: Context, private val cloc
     private val peers = context.getSharedPreferences("usb-receivers", Context.MODE_PRIVATE)
     private val settings = ProjectionRoute.prefs(context)
     private val devices = context.getSharedPreferences("aa-receiver-details", Context.MODE_PRIVATE)
+    private val references by lazy { AaCertificateReference.from(context) }
     private val legacyKeys = mutableMapOf<String, String>()
     private val usbNames = mutableMapOf<String, String>()
     private var usedAlias: String? = null
@@ -69,6 +71,25 @@ internal class ProjectionIdentity(private val context: Context, private val cloc
         edit.apply()
     }
 
+    /** Record what a peer actually presented, including on attempts rejected before service discovery. */
+    fun observeReceiver(id: String, chain: List<X509Certificate>, tlsEstablished: Boolean) {
+        val leaf = chain.firstOrNull() ?: return
+        val now = clock.instant()
+        val match = references.identify(chain, now)
+        val sha256 = fingerprint(leaf)
+        devices.edit().putString("peerReference.$id", match.name).putString("observedFingerprint.$id", sha256).apply()
+        AppLog.i("AA head unit TLS · established=$tlsEstablished · reference=$match · SHA-256=$sha256", false)
+        chain.forEachIndexed { index, certificate ->
+            val dates = PhoneCertificateDates(certificate)
+            AppLog.i("AA head unit TLS · chain[$index] · from=${dates.from} · until=${dates.until} · phoneUTC=$now · validityAtPhoneTime=${dates.at(now)}", false)
+        }
+    }
+
+    fun receiverReference(id: String) = devices.getString("peerReference.$id", null)?.let { stored ->
+        AaCertificateReference.Match.entries.find { it.name == stored }
+    }
+    fun observedFingerprint(id: String): String? = devices.getString("observedFingerprint.$id", null)
+
     val defaultAlias: String? get() = settings.getString("phoneCertificate", null)
     fun selectDefault(alias: String?) = settings.edit().putString("phoneCertificate", alias).apply()
     fun assignedAlias(id: String): String? = devices.getString("alias.$id", null)
@@ -76,20 +97,27 @@ internal class ProjectionIdentity(private val context: Context, private val cloc
         .remove("lastAlias.$id").apply()
 
     fun phone(id: String): PhoneIdentity = synchronized(lock) {
-        loadPhone(id).also { identity ->
+        loadPhone(id).let { identity ->
             val now = clock.instant()
-            (listOf(identity.certificate) + identity.chain).forEachIndexed { index, certificate ->
+            val source = if (usedAlias == null) "HSD" else "Android KeyChain"
+            val chain = listOf(identity.certificate) + identity.chain
+            AppLog.i("AA phone TLS · source=$source · reference=${references.identify(chain, now)} · SHA-256=${fingerprint(identity.certificate)}", false)
+            chain.forEachIndexed { index, certificate ->
                 val dates = PhoneCertificateDates(certificate)
                 val validity = dates.at(now)
-                AppLog.i("AA phone TLS · chain[$index] · from=${dates.from} · until=${dates.until} · phoneUTC=$now · validity=$validity", false)
-                // The leaf identifies this phone. A receiver can anchor an imported chain at
-                // different issuers, so only it can decide which CA certificates to validate.
+                AppLog.i("AA phone TLS · source=$source · chain[$index] · from=${dates.from} · until=${dates.until} · phoneUTC=$now · validity=$validity", false)
+                // Report the device clock and distinguish an invalid leaf from a chain error.
                 if (index == 0 && validity != PhoneCertificateDates.Status.VALID) {
                     val problem = if (validity == PhoneCertificateDates.Status.EXPIRED) R.string.aa_phone_cert_expired
                         else R.string.aa_phone_cert_not_yet_valid
                     throw IllegalStateException(context.getString(problem) + " " +
                         context.getString(R.string.aa_check_certificate_dates, dates.from, dates.until, now))
                 }
+            }
+            if (usedAlias == null) identity else {
+                val verified = references.phoneChain(chain, now)
+                    ?: throw CertificateException(context.getString(R.string.aa_phone_invalid_chain))
+                PhoneIdentity(identity.certificate, identity.privateKey, verified.drop(1))
             }
         }
     }
@@ -168,12 +196,16 @@ internal class ProjectionIdentity(private val context: Context, private val cloc
         devices.getString("legacy.$id", null)?.let(pinEdit::remove)
         check(pinEdit.commit())
         val edit = devices.edit()
-        for (prefix in listOf("name", "seen", "changed", "known", "alias", "lastAlias", "legacy")) edit.remove("$prefix.$id")
+        for (prefix in listOf("name", "seen", "changed", "known", "alias", "lastAlias", "legacy",
+            "peerReference", "observedFingerprint")) edit.remove("$prefix.$id")
         edit.apply()
     }
 
     override fun get(peerKey: String): Set<String> = synchronized(lock) {
         (peers.getStringSet(peerKey, null) ?: (legacyKeys[peerKey] ?: devices.getString("legacy.$peerKey", null))?.let { peers.getStringSet(it, null) }).orEmpty().toSet()
+    }
+    override fun checkReceiverChain(chain: List<X509Certificate>) {
+        references.receiverError(chain, clock.instant())?.let { throw CertificateException(context.getString(it)) }
     }
     override fun add(peerKey: String, sha256: String) = synchronized(lock) {
         val trusted = get(peerKey)

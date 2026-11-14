@@ -18,6 +18,7 @@ internal enum class ProjectionRoute(val family: ProjectionProtocol, val titleRes
     val protocol get() = family.title
     fun label(context: Context) = "$protocol · ${context.getString(linkRes)}"
     val carLife get() = family == ProjectionProtocol.CARLIFE
+    val usesHeadUnitHotspot get() = this == CARPLAY || this == WIRELESS_AA
 
     companion object {
         fun prefs(context: Context) = context.getSharedPreferences("projection-route", Context.MODE_PRIVATE)

@@ -59,4 +59,13 @@ class UpdateLogicTest {
         assertFalse(UpdateLogic.shouldCheck(true, retry, now + UpdateLogic.RETRY_MS - 1))
         assertTrue(UpdateLogic.shouldCheck(true, retry, now + UpdateLogic.RETRY_MS))
     }
+
+    @Test fun installedCandidateCanUpgradeToStableWithoutBeingDowngraded() {
+        assertTrue(UpdateLogic.isNewer("0.8.1", "0.8.1-rc1"))
+        assertTrue(UpdateLogic.isNewer("0.9.0", "0.8.1-rc12"))
+        assertFalse(UpdateLogic.isNewer("0.8.0", "0.8.1-rc1"))
+        assertFalse(UpdateLogic.isNewer("0.8.1", "0.8.1-rc0"))
+        assertNull(UpdateLogic.newestInPage(page(release("0.8.1-rc1", "HSD-0.8.1-rc1.apk"),
+            release("0.8.1", "HSD-0.8.1.apk").put("prerelease", true))))
+    }
 }

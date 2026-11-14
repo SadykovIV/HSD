@@ -210,13 +210,14 @@ class VideoModeTest {
         val core = AaBridgeCore({ _, _ -> })
         val peer = FakePeer()
         core.peer = peer
+        core.desktopInputEnabled = true
         core.onCarlifeTouch(0, 640, 0)                       // по умолчанию R720: 1:1
         core.videoMode = VideoMode.WIDE
         core.onCarlifeTouch(0, 640, 0)
         core.onCarlifeTouch(2, 640, 479)
         core.onCarlifeTouch(1, 640, 500)
         assertEquals(
-            listOf(Triple(0, 640, 0), Triple(0, 640, 0), Triple(2, 640, 479), Triple(1, 640, 479)),
+            listOf(Triple(0, 640, 0), Triple(3, 640, 0), Triple(0, 640, 0), Triple(2, 640, 479), Triple(1, 640, 479)),
             peer.touches.toList(),
         )
     }

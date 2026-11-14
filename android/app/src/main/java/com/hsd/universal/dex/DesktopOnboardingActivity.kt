@@ -83,6 +83,9 @@ class DesktopOnboardingActivity : Activity() {
         }
         if (step < 2) ui.button(body, getString(R.string.desktop_next)) { moveTo(step + 1) }
             .isEnabled = step != 0 || profileAvailable()
+        if (step == 0 && packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_USB_HOST)) {
+            ui.button(body, getString(R.string.usb_helper_title)) { startActivity(Intent(this, UsbActivationActivity::class.java)) }
+        }
         if (step > 0) ui.button(body, getString(R.string.set_back)) { moveTo(step - 1) }
         ui.button(body, getString(R.string.desktop_close_setup)) { closeSetup() }
     }

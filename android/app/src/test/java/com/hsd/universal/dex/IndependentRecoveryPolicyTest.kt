@@ -9,6 +9,13 @@ class IndependentRecoveryPolicyTest {
         IndependentRecoveryPolicy.Device(runtime, persistent, listen, process)
     private val owned = IndependentRecoveryPolicy.Record(9, 38555, true, daemon, IndependentRecoveryPolicy.Phase.READY)
 
+    @Test fun onlyACompletedPreviousSetupCanBeReusedOnUpgrade() {
+        for (kind in IndependentRecoveryAccess.Kind.entries) {
+            assertEquals(kind in setOf(IndependentRecoveryAccess.Kind.OWNED, IndependentRecoveryAccess.Kind.REUSED),
+                IndependentRecoveryPolicy.hasWorkingSetup(kind))
+        }
+    }
+
     @Test fun originalAndUnsupportedModesCannotEnableNetworkDebugging() {
         for (sdk in listOf(29, 33, 36, 37)) for (delegated in listOf(false, true)) for (mode in 0..2) for (enabled in listOf(false, true)) {
             assertEquals(sdk == 37 && delegated && mode != 0 && enabled,

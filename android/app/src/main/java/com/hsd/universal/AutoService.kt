@@ -3,6 +3,7 @@ package com.hsd.universal
 import android.app.Notification
 import android.bluetooth.BluetoothManager
 import android.net.InetAddresses
+import android.net.wifi.WifiManager
 import net.prototux.aare.aap.AapLog
 import net.prototux.aare.aap.Transport
 import net.prototux.aare.aap.PhoneIdentity
@@ -53,6 +54,13 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
     private var usbOpenRetries = 0
     private var retryDelayMs = 1000L
     private var retryPending = false
+    private val wifiChanged = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (!stopping && CarLifeState.waitingForProjectionWifi && ProjectionWifi.read(service) == ProjectionWifi.READY) {
+                begin()
+            }
+        }
+    }
     private val reconnect = Runnable {
         retryPending = false
         if (!stopping && resources == null) begin()
@@ -76,6 +84,11 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
         registerReceiver(detached, IntentFilter(UsbManager.ACTION_USB_ACCESSORY_DETACHED).apply {
             addAction(UsbDetachPolicy.USB_STATE)
         }, RECEIVER_NOT_EXPORTED)
+        if (route.usesHeadUnitHotspot) {
+            val filter = IntentFilter(WifiManager.WIFI_STATE_CHANGED_ACTION)
+            if (android.os.Build.VERSION.SDK_INT >= 33) registerReceiver(wifiChanged, filter, RECEIVER_NOT_EXPORTED)
+            else @Suppress("DEPRECATION") registerReceiver(wifiChanged, filter)
+        }
     }
 
     override fun start(intent: Intent?, startId: Int): Int {
@@ -85,24 +98,25 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
                 if (intent.action == BridgeService.ACTION_DESKTOP_HOME) projection?.home()
                 else projection?.panel(intent.action == BridgeService.ACTION_PHONE_SCREEN_OFF)
             }
-            if (resources == null && !retryPending) service.stopSelfResult(startId)
+            if (resources == null && !retryPending && !CarLifeState.waitingForProjectionWifi) service.stopSelfResult(startId)
             return Service.START_NOT_STICKY
         }
         if (intent?.action == BridgeService.ACTION_STOP) {
             service.startForeground(ID, notification(service.getString(R.string.desktop_stopping_projection)))
-            Actions.stopUsbAutoStartForSession()
-            finish(service.getString(R.string.desktop_stopped_on_phone))
+            val userStop = intent.getBooleanExtra(BridgeService.EXTRA_USER_STOP, true)
+            if (userStop) Actions.stopUsbAutoStartForSession()
+            finish(service.getString(if (userStop) R.string.desktop_stopped_on_phone else R.string.desktop_stopping_projection))
             return Service.START_NOT_STICKY
         }
         if (intent?.action == BridgeService.ACTION_WIFI_B_AUTO || intent?.action == BridgeService.ACTION_WIFI_B_AUTO_OFF ||
             intent?.action == BridgeService.ACTION_WIFI_B) {
-            if (resources == null && !retryPending) {
+            if (resources == null && !retryPending && !CarLifeState.waitingForProjectionWifi) {
                 service.startForeground(ID, notification(service.getString(R.string.desktop_ending_carlife_standby)))
                 service.stopSelfResult(startId)
             }
             return Service.START_NOT_STICKY
         }
-        if (resources != null || stopping || retryPending) return Service.START_NOT_STICKY
+        if (resources != null || stopping || retryPending || CarLifeState.waitingForProjectionWifi) return Service.START_NOT_STICKY
         begin()
         return Service.START_NOT_STICKY
     }
@@ -110,12 +124,18 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
     private fun begin() {
         val ticket = ++generation
         val mode = route
-        val lifetime = ProjectionResources()
-        resources = lifetime
+        CarLifeState.waitingForProjectionWifi = false
         CarLifeState.resetSession()
         CarLifeState.wirelessSession = mode != ProjectionRoute.USB
         try {
             service.startForeground(ID, notification(mode.label(service)))
+            if (mode.usesHeadUnitHotspot) {
+                val radio = ProjectionWifi.read(service)
+                if (radio.needsEnable) {
+                    waitForWifi(radio)
+                    return
+                }
+            }
             if (mode == ProjectionRoute.USB) {
                 device = usb.autoAccessory()?.takeIf(usb::hasPermission)
                     ?: error(service.getString(R.string.desktop_connect_the_cable_and_allow_hsd_to_open_the))
@@ -125,6 +145,8 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
             return
         }
         update(if (mode == ProjectionRoute.LAN_SERVER) service.getString(R.string.desktop_waiting_for_the_head_unit_on_tcp_port_5277) else service.getString(R.string.desktop_connecting, mode.label(service)))
+        val lifetime = ProjectionResources()
+        resources = lifetime
         val attached = device
         worker.execute {
             try {
@@ -221,7 +243,20 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
         val stop = PendingIntent.getService(this, 2, Intent(this, AutoService::class.java).setAction(BridgeService.ACTION_STOP), PendingIntent.FLAG_IMMUTABLE)
         return Notification.Builder(this, CHANNEL).setSmallIcon(com.hsd.universal.R.mipmap.ic_launcher).setContentTitle("HSD")
             .setContentText(message).setContentIntent(open).setOnlyAlertOnce(true).setOngoing(true)
+            .apply {
+                if (CarLifeState.waitingForProjectionWifi) {
+                    val panel = PendingIntent.getActivity(service, 3, ProjectionWifi.settings(service), PendingIntent.FLAG_IMMUTABLE)
+                    addAction(Notification.Action.Builder(null, getString(R.string.desktop_open_wi_fi_settings), panel).build())
+                }
+            }
             .addAction(Notification.Action.Builder(null, service.getString(R.string.desktop_stop), stop).build()).build()
+    }
+
+    private fun waitForWifi(radio: ProjectionWifi) {
+        CarLifeState.waitingForProjectionWifi = true
+        CarLifeState.running = false
+        AppLog.i("${route.protocol}: waiting for phone Wi-Fi · radio=$radio", false)
+        update(getString(radio.message))
     }
 
     private fun update(message: String) {
@@ -268,11 +303,19 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
             else Actions.onUsbStartFailed(message)
         }
         CarLifeState.running = false
+        projection = null
+        if (!stopping && route.usesHeadUnitHotspot) {
+            val radio = ProjectionWifi.read(service)
+            if (radio.needsEnable) {
+                waitForWifi(radio)
+                return
+            }
+        }
+        CarLifeState.waitingForProjectionWifi = false
         CarLifeState.setStatus(message)
         com.hsd.universal.AppLog.i("${route.protocol}: $message")
         getSharedPreferences("projection", MODE_PRIVATE).edit()
             .putString("last", message).putString("last." + route.name, message).apply()
-        projection = null
         if (!stopping && route == ProjectionRoute.CARPLAY && carPlay != null) {
             val delay = carPlayRecovery.retry(now, carPlay.firstFrameAt?.let { now - it }, carPlay.linkInterrupted)
             if (delay != null) {
@@ -307,6 +350,8 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
         main.removeCallbacks(reconnect)
         retryPending = false
         CarLifeState.running = false
+        CarLifeState.waitingForProjectionWifi = false
+        if (route.usesHeadUnitHotspot) unregisterReceiver(wifiChanged)
         unregisterReceiver(detached)
         com.hsd.universal.dex.DesktopMusicPlayback.serviceDestroyed(this, false)
         projection?.stop(getString(R.string.desktop_connection_stopped))

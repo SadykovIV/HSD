@@ -13,6 +13,9 @@ import java.util.concurrent.TimeUnit
 interface CarlifeLink {
     /** Одно видео-сообщение CarLife (0x20001, Annex-B). false = не принято (очередь переполнена, сессия закрыта). */
     fun sendVideo(payload: ByteArray): Boolean
+    val videoExpectedSinceNanos: Long? get() = 0L
+    /** A CarLife AVC receiver can lose its decoder state without sending a new START. */
+    val repeatAvcParameterSets: Boolean get() = false
 
     /**
      * Первый IDR из AA вместо заглушки: отправка и отключение кадров заглушки атомарно. Иначе P-кадр заглушки,
@@ -113,8 +116,10 @@ class AaBridgeCore(
     @Volatile var peer: AaPeer? = null
         set(v) {
             synchronized(touchLock) {
-                field = v
-                fingers.clear()
+                if (field !== v) {
+                    cancelProjectionTouch()
+                    field = v
+                }
             }
             v?.sendNightMode(huTheme == THEME_DARK)
         }
@@ -157,6 +162,12 @@ class AaBridgeCore(
      * его же берут CarLife-сессия (INIT_DONE, энкодер) и маппинг тача. Prefs отсюда не читаются.
      */
     @Volatile var videoMode: VideoGeometry = VideoMode.DEFAULT
+        set(value) = synchronized(touchLock) {
+            if (field != value) {
+                cancelProjectionTouch()
+                field = value
+            }
+        }
     /** Codec canvas when the receiver crops a safe area or uses non-square pixels. */
     @Volatile var desktopEncoderGeometry: VideoGeometry? = null
 
@@ -181,6 +192,7 @@ class AaBridgeCore(
     private var desktopSurfaceGeneration = 0L
     private var desktopSurfaceReady = false
     private var desktopSurfaceFirstFrame = false
+    private var firstFrameWaitReason: String? = null
     private var desktopSurfaceCsdVerified = false
     private var desktopSurfaceCreating = false
     private var desktopSurfaceStopped = false
@@ -189,6 +201,11 @@ class AaBridgeCore(
     private data class RetiredSurfaceEncoder(val encoder: VideoTranscoder, val listener: DesktopSurfaceListener?)
     private val retiredSurfaceEncoders = LinkedHashMap<Long, RetiredSurfaceEncoder>()
     private val closedSurfaceProducers = HashSet<Long>()
+
+    fun firstFrameTimedOut(startedAtNanos: Long): Boolean {
+        val resumed = link.videoExpectedSinceNanos ?: return false
+        return startedAtNanos != 0L && System.nanoTime() - maxOf(startedAtNanos, resumed) > 30_000_000_000L
+    }
 
     /** Register before CarLife START. The source receives a new lease after every USB reconnect. */
     @Synchronized
@@ -314,6 +331,7 @@ class AaBridgeCore(
     private var transcoder: VideoTranscoder? = null
     private var encCsd: ByteArray? = null
     private var outGotIdr = false
+    private var headersOnNextIdr = false
     private val idrThrottle = IdrThrottle()            // запросы IDR при переполнении очереди CarLife
     private var overflowIdrRequests = 0L
     private var lastStatsIdrRequests = 0L
@@ -946,10 +964,7 @@ class AaBridgeCore(
             touchDecimator.reset()
             touchPacer.reset()
         }
-        synchronized(touchLock) {
-            if (desktopInputEnabled && fingers.isNotEmpty()) peer?.let { sendFingers(it, 3, 0, "CANCEL") }
-            fingers.clear()
-        }
+        cancelProjectionTouch()
         log("BRIDGE CarLife закрыт (AA ${if (aaVideoSeen) "жива" else "без видео"}, держим)", true)
         return true
     }
@@ -963,6 +978,22 @@ class AaBridgeCore(
     }
 
     private val touchLock = Any()
+    private val projectionTouches = ProjectionTouchStream()
+    val hasActiveTouch get() = synchronized(touchLock) { projectionTouches.active }
+    val repeatedProjectionDowns get() = synchronized(touchLock) { projectionTouches.repeatedDowns }
+
+    fun sendProjectionTouch(action: Int, index: Int, points: List<TouchPoint>) {
+        synchronized(touchLock) {
+            peer?.let { projectionTouches.send(action, index, points, it::sendTouch) }
+        }
+    }
+
+    fun cancelProjectionTouch() = synchronized(touchLock) {
+        fingers.clear()
+        projectionTouches.cancel { action, index, points ->
+            if (desktopInputEnabled) peer?.sendTouch(action, index, points)
+        }
+    }
 
     /** Активные пальцы в порядке индекса MotionEvent ГУ: x,y TOUCH_ACTION - индекс 0, pointerx/pointery - индекс 1. */
     private val fingers = ArrayList<Finger>(2)
@@ -1142,32 +1173,36 @@ class AaBridgeCore(
         val second = px != 0 || py != 0
         when (act) {
             3 -> {
-                if (fingers.isNotEmpty()) sendFingers(p, act, 0, name)
+                if (fingers.isNotEmpty()) sendFingers(act, 0, name)
                 fingers.clear()
             }
             AapMessages.TOUCH_DOWN -> {
-                fingers.clear()
+                if (fingers.isNotEmpty()) {
+                    val (ax, ay) = videoMode.mapTouch(x, y)
+                    sendProjectionTouch(act, 0, listOf(TouchPoint(fingers[0].id, ax, ay)))
+                    return@synchronized
+                }
                 fingers.add(Finger(0, x, y))
-                sendFingers(p, act, 0, name)
+                sendFingers(act, 0, name)
             }
             AapMessages.TOUCH_MOVE -> {
-                if (fingers.isEmpty()) fingers.add(Finger(0, x, y))   // DOWN потерян: как раньше, один палец id 0
+                if (fingers.isEmpty()) return@synchronized
                 fingers[0].set(x, y)
                 if (fingers.size > 1 && second) fingers[1].set(px, py)
-                sendFingers(p, act, 0, name)
+                sendFingers(act, 0, name)
             }
             AapMessages.TOUCH_POINTER_DOWN -> {
                 if (fingers.size >= 2 || idx > 1) {
                     log("BRIDGE тач $name action=$action: больше двух пальцев не передаю", false)
                     return@synchronized
                 }
-                if (fingers.isEmpty()) fingers.add(Finger(0, x, y))
+                if (fingers.isEmpty()) return@synchronized
                 val pos = idx.coerceAtMost(fingers.size)
                 val fresh = Finger(if (fingers[0].id == 0) 1 else 0, x, y)
                 fingers.add(pos, fresh)
                 fingers[0].set(x, y)
                 if (second) fingers[1].set(px, py) else if (fingers[1] === fresh) fresh.set(x, y)
-                sendFingers(p, act, pos, name)
+                sendFingers(act, pos, name)
             }
             AapMessages.TOUCH_POINTER_UP -> {
                 if (fingers.size < 2 || idx > 1) {
@@ -1176,24 +1211,24 @@ class AaBridgeCore(
                 }
                 fingers[0].set(x, y)
                 if (second) fingers[1].set(px, py)
-                sendFingers(p, act, idx, name)
+                sendFingers(act, idx, name)
                 fingers.removeAt(idx)
             }
             else -> {                                              // UP последнего пальца
                 if (fingers.size > 1) {                            // POINTER_UP потерян: сначала снимаем второй палец
-                    sendFingers(p, AapMessages.TOUCH_POINTER_UP, 1, "POINTER_UP")
+                    sendFingers(AapMessages.TOUCH_POINTER_UP, 1, "POINTER_UP")
                     fingers.removeAt(1)
                 }
-                if (fingers.isEmpty()) fingers.add(Finger(0, x, y))
+                if (fingers.isEmpty()) return@synchronized
                 fingers[0].set(x, y)
-                sendFingers(p, act, 0, name)
+                sendFingers(act, 0, name)
                 fingers.clear()
             }
         }
     }
 
     /** Все активные пальцы -> AA одним событием; лог как до мультитача для одного пальца. */
-    private fun sendFingers(p: AaPeer, act: Int, index: Int, name: String) {
+    private fun sendFingers(act: Int, index: Int, name: String) {
         val mode = videoMode
         val points = fingers.map { f ->
             val (ax, ay) = mode.mapTouch(f.x, f.y)
@@ -1201,7 +1236,7 @@ class AaBridgeCore(
         }
         if (act == AapMessages.TOUCH_MOVE) {
             // MOVE can arrive at trackpad sampling rate. The input diagnostics already aggregate it.
-            p.sendTouch(act, index, points)
+            sendProjectionTouch(act, index, points)
             return
         }
         if (points.size == 1) {
@@ -1214,7 +1249,7 @@ class AaBridgeCore(
             val aa = points.joinToString(" ") { "#${it.id} ${it.x},${it.y}" }
             log("BRIDGE тач $name[$index] пальцев ${points.size}: ГУ $gu -> AA $aa (${mode.label})", true)
         }
-        p.sendTouch(act, index, points)
+        sendProjectionTouch(act, index, points)
     }
 
     /** TOUCH_CAR_HARD_KEY_CODE ГУ (кнопки руля) -> AA: нажатие Android KeyEvent по [HARD_KEY_TO_ANDROID]. */
@@ -2580,6 +2615,7 @@ class AaBridgeCore(
             val listener = desktopSurfaceListener
             desktopSurfaceGeneration = 0L // Invalidate late codec callbacks before publishing a new encoder.
             desktopSurfaceReady = false
+            firstFrameWaitReason = null
             desktopSurfaceFirstFrame = false
             desktopSurfaceCsdVerified = false
             desktopSurfaceCreating = false
@@ -2775,39 +2811,52 @@ class AaBridgeCore(
     private fun forwardEncoderFrame(data: ByteArray, key: Boolean, presentationUs: Long?) {
         if (desktopSurfaceEnabled && (!desktopSurfaceReady || !desktopSurfaceCsdVerified || desktopVideoError != null)) {
             encDropped++
+            noteFirstFrameWait(if (!desktopSurfaceReady) "display" else "codec headers", data, key)
             return
         }
         if (!outputEnabled || !carlifeStarted) {
             encDropped++
+            noteFirstFrameWait("stream not started", data, key)
             return
         }
         if (desktopSurfaceEnabled) {
             lastAaFrameAt = clockMs()
             aaFrames++
         }
-        val types = AnnexB.nalTypes(data, desktopHevc)
+        val ranges = AnnexB.units(data)
+        val types = ranges.map { it.type(data, desktopHevc) }
         val idr = if (desktopHevc) types.any { it in 16..21 } else 5 in types
+        val repeatHeaders = !desktopHevc && link.repeatAvcParameterSets
+        val includeHeaders = idr && (!outGotIdr || (repeatHeaders && headersOnNextIdr))
+        val payload = if (!includeHeaders) data else {
+            val frame = if (!desktopHevc) AnnexB.withAvcParameterSets(data, ranges, encCsd)
+                else if (types.containsAll(listOf(32, 33, 34))) data else encCsd?.let { AnnexB.glue(it, data) }
+            if (frame == null) {
+                encDropped++
+                noteFirstFrameWait("codec headers", data, key)
+                return
+            }
+            frame
+        }
         if (!outGotIdr) {
             if (!idr) {
                 encDropped++
-                return
-            }
-            val hasHeaders = if (desktopHevc) types.containsAll(listOf(32, 33, 34)) else types.firstOrNull() == 7 && 8 in types
-            val payload = if (hasHeaders) data else {
-                val cfg = encCsd
-                if (cfg == null) {
-                    encDropped++
-                    return
+                if (desktopSurfaceEnabled && link.videoExpectedSinceNanos != null) {
+                    // A sync frame can arrive before the virtual display or CSD is ready.
+                    noteFirstFrameWait("random access", data, key)
+                    if (idrThrottle.tryRequest(clockMs())) transcoder?.requestSyncFrame()
                 }
-                AnnexB.glue(cfg, data)
+                return
             }
             val takeover = active != Source.AA
             if (!(if (takeover) link.sendVideoTakeoverAt(payload, presentationUs) else link.sendVideoAt(payload, presentationUs))) {
                 encDropped++
+                noteFirstFrameWait("receiver", data, key)
                 requestIdrOnOverflow()
                 return
             }
             outGotIdr = true
+            headersOnNextIdr = false
             sent++
             idrSent++
             if (active != Source.AA) {
@@ -2832,7 +2881,7 @@ class AaBridgeCore(
             if (huVw20082138 || huMobisNx4c) link.onEncodedKeyFrame(payload.size)
             return
         }
-        if (!link.sendVideoAt(data, presentationUs)) {
+        if (!link.sendVideoAt(payload, presentationUs)) {
             // кадр не принят (очередь CarLife переполнена): дальше P нельзя, до следующего IDR всё выбрасывается выше
             outGotIdr = false
             encDropped++
@@ -2840,9 +2889,22 @@ class AaBridgeCore(
             return
         }
         sent++
-        if (idr) idrSent++
+        if (idr) {
+            idrSent++
+            // Alternate accepted IDRs. Some CarLife receivers resume on an unprefixed IDR,
+            // while a fresh decoder requires the current SPS/PPS in-band.
+            if (repeatHeaders) headersOnNextIdr = !includeHeaders
+        }
         AaState.bridgeSent = sent
-        if (idr && (huVw20082138 || huMobisNx4c)) link.onEncodedKeyFrame(data.size)
+        if (idr && (huVw20082138 || huMobisNx4c)) link.onEncodedKeyFrame(payload.size)
+    }
+
+    private fun noteFirstFrameWait(reason: String, frame: ByteArray, key: Boolean) {
+        if (!desktopSurfaceEnabled || desktopSurfaceFirstFrame || firstFrameWaitReason == reason) return
+        // Log each gate once per encoder generation, including intermittent IDR/backpressure.
+        if (reason == "random access" && firstFrameWaitReason == "receiver") return
+        firstFrameWaitReason = reason
+        log("VIDEO first frame waiting: $reason; NAL=${AnnexB.nalTypes(frame, desktopHevc)} codecKey=$key", false)
     }
 
     /**
@@ -2919,6 +2981,7 @@ class AaBridgeCore(
     fun onCarlifeKeyFrameRequest() {
         val t = transcoder
         if (t != null) {
+            if (link.repeatAvcParameterSets) headersOnNextIdr = true
             t.requestSyncFrame()
         } else if (carlifeStarted) {
             gotIdr = false

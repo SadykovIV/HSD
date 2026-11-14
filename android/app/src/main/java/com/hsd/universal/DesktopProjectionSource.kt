@@ -97,6 +97,7 @@ internal class DesktopProjectionSource(private val context: Context, private val
         }
     }
     override fun sendVideo(payload: ByteArray) = sendVideoAt(payload, null)
+    override val videoExpectedSinceNanos get() = output.videoExpectedSinceNanos
     override fun sendVideoAt(payload: ByteArray, presentationUs: Long?) =
         !closed && output.video(payload, presentationUs ?: System.nanoTime() / 1000)
     override fun sendVideoTakeoverAt(payload: ByteArray, presentationUs: Long?) = sendVideoAt(payload, presentationUs)
@@ -122,7 +123,10 @@ internal class DesktopProjectionSource(private val context: Context, private val
     }
 
     fun requestKeyFrame() { if (!closed) core.onCarlifeKeyFrameRequest() }
-    fun touch(action: Int, index: Int, points: List<TouchPoint>) { if (!closed) core.peer?.sendTouch(action, index, points) }
+    fun touch(action: Int, index: Int, points: List<TouchPoint>) { if (!closed) core.sendProjectionTouch(action, index, points) }
+    fun cancelTouch() = core.cancelProjectionTouch()
+    val hasActiveTouch get() = core.hasActiveTouch
+    val repeatedTouchDowns get() = core.repeatedProjectionDowns
     fun key(code: Int) { if (!closed) core.peer?.sendKey(code) }
     fun rotate(delta: Int) { if (!closed) core.peer?.sendRotary(delta.coerceIn(-12, 12)) }
     fun setPhoneScreenOff(off: Boolean): Boolean = !closed &&
@@ -146,6 +150,8 @@ internal class DesktopProjectionSource(private val context: Context, private val
 }
 
 internal interface DesktopProjectionOutput {
+    /** Null while the receiver explicitly owns the screen. Zero means no earlier suspension. */
+    val videoExpectedSinceNanos: Long? get() = 0L
     fun video(payload: ByteArray, ptsUs: Long): Boolean
     fun audio(type: Int, pcm: ByteArray, ptsUs: Long): Boolean
     fun audioRate(): Int?

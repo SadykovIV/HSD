@@ -21,6 +21,12 @@ Phone and computer activation use Android’s package-scoped `run-as`, so HSD’
 
 Install the HSD build and its matching `assembleDebugAndroidTest` APK on an Android emulator. Put the [CarLife HeadUnit Emulator](https://github.com/SadykovIV/CarLife-HeadUnit-Emulator) checkout on `PYTHONPATH` for its wire decoder. Run `python3 tools/carlife_receiver_test.py --serial <adb-serial>` to check the audio sequence during pinch gestures, camera return with Bluetooth audio and instrument cluster guidance.
 
+For the phone-screen regression, start the unlocked emulator with its screen on and add `--screen-off`. This check decodes the CarLife video with FFmpeg and compares the launcher before and after Android turns the phone display off. It wakes the emulator afterward. An existing PIN still requires manual unlock.
+
+With the Clock and Settings split profile in DriveDeck, use `--decoder-restart` to discard the head unit's decoder state while the phone display is off. The test decodes the current desktop in a fresh FFmpeg process both during uninterrupted streaming and after a CarLife keyframe request on the same connection.
+
 ## Publish a release
+
+For a fix after a published release, increment the patch number. Name successive unpublished candidates `X.Y.Z-rc1`, `X.Y.Z-rc2` and so on. Give each distributed candidate and the final `X.Y.Z` a higher Android version code so updates install in order.
 
 Set the version name and increment the version code in `android/app/build.gradle.kts`. Use a tag of the form `vX.Y.Z`. Attach exactly two signed APKs, `HSD-X.Y.Z.apk` and `DriveDeck-HSD-X.Y.Z-codeNNN.apk`, using each app’s own version. GitHub supplies the source archives (ZIP and tar.gz) from the tag. Write short release notes in English and Russian and link to the system diagrams. [Release notes](docs/releases/) · [System diagrams and project map](docs/architecture.md)

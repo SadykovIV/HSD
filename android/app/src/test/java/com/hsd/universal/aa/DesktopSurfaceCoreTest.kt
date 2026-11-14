@@ -42,6 +42,7 @@ class DesktopSurfaceCoreTest {
         val encoders = CopyOnWriteArrayList<Encoder>()
         val compressedFactories = AtomicInteger()
         val presentationTimes = CopyOnWriteArrayList<Long>()
+        override var repeatAvcParameterSets = false
         var createGate: CountDownLatch? = null
         val createEntered = CountDownLatch(1)
         var failCreation = false
@@ -138,7 +139,38 @@ class DesktopSurfaceCoreTest {
         assertArrayEquals(cfg + idr, f.link.transport.sent.single())
         assertEquals(generation, f.event("first").generation)
         encoder.output.onEncoderFrame(idr, true)
+        assertArrayEquals(idr, f.link.transport.sent.last()) // Sinks that carry configuration separately.
         assertNull(f.events.poll(50, TimeUnit.MILLISECONDS))
+    }
+
+    @Test fun carlifeDecoderCanRejoinAnActiveDesktopAndRequestAnImmediateRefresh() = Fixture().use { f ->
+        f.link.repeatAvcParameterSets = true
+        val generation = f.start()
+        val out = f.link.encoders.single().output
+        assertTrue(f.core.desktopSurfaceReady(generation))
+        out.onEncoderConfig(cfg)
+        fun sendIdr(expected: ByteArray) {
+            out.onEncoderFrame(idr, false) // Determine random access from the NAL even without a codec key flag.
+            assertArrayEquals(expected, f.link.transport.sent.last())
+        }
+        sendIdr(cfg + idr)
+        f.event("first")
+        repeat(2) {
+            sendIdr(idr)
+            out.onEncoderFrame(p, true)
+            assertArrayEquals(p, f.link.transport.sent.last())
+            sendIdr(cfg + idr)
+        }
+        f.core.onCarlifeKeyFrameRequest()
+        sendIdr(cfg + idr)
+        f.link.transport.accept = false
+        out.onEncoderFrame(idr, true)
+        f.link.transport.accept = true
+        val accepted = f.link.transport.sent.size
+        out.onEncoderFrame(p, false)
+        assertEquals(accepted, f.link.transport.sent.size)
+        sendIdr(cfg + idr)
+        assertEquals(1, f.link.transport.takeovers)
     }
 
     @Test fun hevcWaitsForIrapAndSendsAllThreeParameterSetsAndPts() = Fixture(hevc = true).use { f ->

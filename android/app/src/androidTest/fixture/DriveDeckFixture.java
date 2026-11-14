@@ -24,7 +24,7 @@ public final class DriveDeckFixture extends Instrumentation {
         for (String key : new String[]{"music_app_package", "slot_1", "startup_app_1"})
             prefs.putString(key, "com.google.android.deskclock");
         prefs.putString("startup_screen", "split").putBoolean("split_page_enabled", true)
-            .putBoolean("hsd_fullscreen_back", true).putBoolean("hsd_fullscreen_home", true);
+            .putBoolean("headswap_fullscreen_back", true).putBoolean("headswap_fullscreen_home", true);
         finish(prefs.commit() ? Activity.RESULT_OK : Activity.RESULT_CANCELED, new Bundle());
     }
 }

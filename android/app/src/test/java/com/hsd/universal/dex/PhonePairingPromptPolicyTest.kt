@@ -6,9 +6,27 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
 
 class PhonePairingPromptPolicyTest {
+    @Test fun oneCodeCanUseTheLiveSheetWithoutRestartingEitherService() {
+        val sheet = ActivePairingWindow()
+        val first = DexEndpoint("192.0.2.1", 33001)
+        assertNull(sheet.take())
+        sheet.advertised(first)
+        assertEquals(first, sheet.take())
+        sheet.advertised(first) // Only the CONNECT service changed.
+        assertNull(sheet.take())
+        sheet.advertised(null)
+        assertNull(sheet.take())
+        val second = first.copy(port = 33002)
+        sheet.advertised(second)
+        assertEquals(second, sheet.take())
+        sheet.advertised(null)
+        sheet.advertised(second) // Android can allocate the same port to a new sheet.
+        assertEquals(second, sheet.take())
+    }
+
     @Test fun codeEntryIsAvailableBeforeAnyPortDiscoveryOrWithAStaleSavedKey() {
         // Neither a discovered endpoint nor hasPaired is a prerequisite for showing this input.
-        assertTrue(PhonePairingPromptPolicy.offer(ready = false, forcePair = false, reconfigurationRequired = false))
+        assertTrue(PhonePairingPromptPolicy.offer(ready = false, forcePair = false, reconfigurationRequired = false, paired = false))
         assertTrue(PhonePairingPromptPolicy.canRetryWithCode(DexAccessReason.REFUSED))
         assertTrue(PhonePairingPromptPolicy.canRetryWithCode(DexAccessReason.TIMEOUT))
         val gate = PhonePairingAttemptGate("fixture")
@@ -20,9 +38,10 @@ class PhonePairingPromptPolicyTest {
     }
 
     @Test fun readyFastPathAndPermissionReconfigurationDoNotShowAnUnnecessaryCodeForm() {
-        assertFalse(PhonePairingPromptPolicy.offer(true, false, false))
-        assertFalse(PhonePairingPromptPolicy.offer(false, false, true))
-        assertTrue(PhonePairingPromptPolicy.offer(true, true, false))
+        assertFalse(PhonePairingPromptPolicy.offer(true, false, false, false))
+        assertFalse(PhonePairingPromptPolicy.offer(false, false, true, false))
+        assertFalse(PhonePairingPromptPolicy.offer(false, false, false, true))
+        assertTrue(PhonePairingPromptPolicy.offer(true, true, false, true))
     }
 
     @Test fun transportFailureCanKeepInputButIdentityAndOwnershipFailuresStayTerminal() {

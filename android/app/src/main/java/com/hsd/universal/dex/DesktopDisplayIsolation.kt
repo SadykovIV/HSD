@@ -11,6 +11,21 @@ internal object DesktopDisplayIsolation {
     const val OWN_GROUP = 1 shl 8
     const val ALWAYS_UNLOCKED = 1 shl 9
 
+    /** Only an optional power group and its lock policy may be retried after a platform refusal. */
+    inline fun <T> create(flags: Int, open: (Int) -> T): T {
+        val optional = DesktopModePolicy.VIRTUAL_DISPLAY_OWN_DISPLAY_GROUP or DesktopModePolicy.VIRTUAL_DISPLAY_ALWAYS_UNLOCKED
+        return try {
+            open(flags)
+        } catch (denied: SecurityException) {
+            if (flags and optional == 0) throw denied
+            AppLog.i("DESKTOP LOCK: isolation rejected by framework, creating normal display", false)
+            open(flags and optional.inv())
+        }
+    }
+
+    fun hasSeparatePowerGroup(displayId: Int, group: Int?): Boolean =
+        displayId > 0 && group != null && group > 0
+
     fun independent(flags: Int, group: Int?): Boolean = flags and ALWAYS_UNLOCKED != 0 &&
         (group?.let { it > 0 } ?: (flags and OWN_GROUP != 0))
 
@@ -47,9 +62,9 @@ internal class DesktopDisplayWakeLocks(private val context: Context) {
         val display = context.getSystemService(DisplayManager::class.java).getDisplay(displayId) ?: return
         val group = DesktopDisplayIsolation.groupId(display)
         val independent = DesktopDisplayIsolation.independent(display.flags, group)
-        AppLog.i("DESKTOP LOCK: display=$displayId group=$group independent=$independent flags=0x${display.flags.toString(16)}", false)
-        // Unknown group is not enough to risk a display0 lock, even when the flags claim independence.
-        if (displayId <= 0 || !independent || group == null || group <= 0) return
+        val separatePower = DesktopDisplayIsolation.hasSeparatePowerGroup(displayId, group)
+        AppLog.i("DESKTOP LOCK: display=$displayId group=$group separatePower=$separatePower independent=$independent flags=0x${display.flags.toString(16)}", false)
+        if (!separatePower) return
         try {
             val power = context.getSystemService(PowerManager::class.java)
             @Suppress("DEPRECATION")

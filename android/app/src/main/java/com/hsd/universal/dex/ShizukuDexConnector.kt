@@ -140,8 +140,7 @@ class ShizukuDexConnector(context: Context, private val core: AaBridgeCore,
             if (!stopping.get()) try {
                 core.tick()
                 core.desktopVideoError?.let { fail(it) }
-                val since = awaitingFrameSince
-                if (since != 0L && !firstFrame && System.nanoTime() - since > TimeUnit.SECONDS.toNanos(30)) {
+                if (!firstFrame && core.firstFrameTimedOut(awaitingFrameSince)) {
                     fail(context.getString(R.string.desktop_the_desktop_did_not_transmit_the_first_frame_in))
                 }
             } catch (e: Exception) { fail(e.message ?: context.getString(R.string.desktop_desktop_error)) }

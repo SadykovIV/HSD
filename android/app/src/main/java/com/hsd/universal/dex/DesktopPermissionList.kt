@@ -51,6 +51,8 @@ internal class DesktopPermissionList(private val activity: Activity, private val
             }) {
                 if (!mine) DriveDeckPermissions.openAppSettings(activity)
                 else if (granted) settings(details(pkg))
+                else if (permission == Manifest.permission.ACCESS_FINE_LOCATION)
+                    activity.requestPermissions(arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION, permission), REQUEST)
                 else activity.requestPermissions(arrayOf(permission), REQUEST)
             }
         }

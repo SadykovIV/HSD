@@ -31,6 +31,8 @@ internal class CarPlayNetworkProbe(private val context: Context, private val aac
     private val threadErrors = ConcurrentLinkedQueue<Throwable>()
     private val heartbeats = java.util.concurrent.atomic.AtomicInteger()
     private val delayedFeedback = CompletableFuture<Int>()
+    private val udpKeepalives = java.util.concurrent.atomic.AtomicInteger()
+    private val watchdogFailure = CompletableFuture<String>()
 
     /** A second Android codec decodes the receiver's decrypted raw access units. Check the
      * fundamental against its neighbours, not just the presence of non-zero compressed data. */
@@ -81,6 +83,7 @@ internal class CarPlayNetworkProbe(private val context: Context, private val aac
     private val events = listener()
     private val video = listener()
     private val audio = DatagramSocket(0, local).also { life.own(it::close) }
+    private val idle = DatagramSocket(0, local).also { life.own(it::close) }
     private val record = CountDownLatch(1)
     private val screenId = CompletableFuture<Long>()
     private val audioId = CompletableFuture<Long>()
@@ -140,6 +143,7 @@ internal class CarPlayNetworkProbe(private val context: Context, private val aac
                     method == "GET" && path == "/info" ->
                         BinaryPlist.encode(
                             mapOf(
+                                "keepAliveSendStatsAsBody" to aac,
                                 "displays" to
                                     listOf(
                                         mapOf(
@@ -161,7 +165,12 @@ internal class CarPlayNetworkProbe(private val context: Context, private val aac
                         )
                     method == "SETUP" && path == "/setup" -> {
                         check(((BinaryPlist.parse(body) as Map<*, *>)["timingPort"] as Long) > 0)
-                        BinaryPlist.encode(mapOf("eventPort" to events.localPort.toLong()))
+                        val setup = mutableMapOf("eventPort" to events.localPort.toLong())
+                        if (aac) {
+                            setup["keepAlivePort"] = idle.localPort.toShort().toLong()
+                            task("CarPlay QA idle watchdog") { watchKeepalives(socket) }
+                        }
+                        BinaryPlist.encode(setup)
                     }
                     method == "SETUP" -> {
                         val d =
@@ -208,6 +217,27 @@ internal class CarPlayNetworkProbe(private val context: Context, private val aac
         }
     }
 
+    /** A strict receiver ignores malformed packets and retires the RTSP session on inactivity. */
+    private fun watchKeepalives(control: Socket) {
+        var lastValid = System.nanoTime()
+        val buffer = ByteArray(256)
+        while (!control.isClosed && !idle.isClosed) {
+            val remaining = TimeUnit.NANOSECONDS.toMillis(lastValid + TimeUnit.SECONDS.toNanos(10) - System.nanoTime())
+            if (remaining <= 0) {
+                watchdogFailure.complete("Receiver closed RTSP after 10 s without a valid UDP keepalive")
+                control.close()
+                return
+            }
+            idle.soTimeout = remaining.coerceAtLeast(1L).toInt()
+            val packet = DatagramPacket(buffer, buffer.size)
+            try { idle.receive(packet) } catch (_: SocketTimeoutException) { continue }
+            if (packet.length == 4 && (buffer[0].toInt() and 0xe0) == 0) {
+                udpKeepalives.incrementAndGet()
+                lastValid = System.nanoTime()
+            }
+        }
+    }
+
     private fun videoReceiver() {
         val socket = receive(video)
         val data = DataInputStream(socket.getInputStream())
@@ -219,7 +249,17 @@ internal class CarPlayNetworkProbe(private val context: Context, private val aac
             val head = ByteArray(128).also(data::readFully)
             val buf = ByteBuffer.wrap(head).order(ByteOrder.LITTLE_ENDIAN)
             val body = ByteArray(buf.getInt(0)).also(data::readFully)
-            if (head[4].toInt() == 2) { heartbeats.incrementAndGet(); continue }
+            val opcode = head[4].toInt()
+            if (opcode == 2 || opcode == 5) {
+                if (aac) {
+                    if (opcode != 5) continue
+                    check(buf.getFloat(124) == body.size.toFloat())
+                    val stats = BinaryPlist.parse(body) as Map<*, *>
+                    check(listOf("txUsageAvg", "encoderCurrentFPS", "sentFramesAvg", "queuedFramesAvg", "lossAvg").all { stats[it] is Number })
+                } else check(opcode == 2 && body.isEmpty())
+                heartbeats.incrementAndGet()
+                continue
+            }
             if (captured.isDone) continue
             if (head[4].toInt() == 1) {
                 check(head[6].toInt() == 4 && buf.getFloat(16) == 320f && buf.getFloat(20) == 240f)
@@ -369,6 +409,7 @@ internal class CarPlayNetworkProbe(private val context: Context, private val aac
                     "02:AA:11:BB:22:CC",
                     "test-" + UUID.randomUUID(),
                     peer.staticKey.publicKey,
+                    com.hsd.universal.carplay.CarPlayDeviceInformation(UUID.randomUUID()),
                 )
             val s =
                 CarPlayAirSession(
@@ -411,7 +452,11 @@ internal class CarPlayNetworkProbe(private val context: Context, private val aac
             check(input.get(4, TimeUnit.SECONDS) && gesture.get(4, TimeUnit.SECONDS))
             return Bundle().apply {
                 if (aac) {
-                    val received = delayedFeedback.get(24,TimeUnit.SECONDS)
+                    CompletableFuture.anyOf(watchdogFailure, delayedFeedback).get(24, TimeUnit.SECONDS)
+                    check(!watchdogFailure.isDone) { watchdogFailure.join() }
+                    val received = delayedFeedback.get()
+                    check(udpKeepalives.get() >= 10)
+                    putInt("CarPlay_accepted_UDP_keepalives", udpKeepalives.get())
                     check(received >= 10 && threadErrors.none { it is SocketTimeoutException }) {
                         "Media heartbeat stalled during optional feedback: $received"
                     }

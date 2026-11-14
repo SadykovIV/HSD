@@ -24,9 +24,12 @@ object CarLifeState {
     /** Ручной DPI AA той же сессии (AaDensity.AUTO = density режима). */
     @Volatile var densityOverride: Int = AaDensity.AUTO
     @Volatile var running: Boolean = false
+    @Volatile var awaitingCarLifeUsbHandshake: Boolean = false
+    @Volatile var waitingForUsbVersion: Boolean = false
 
     /** Текущая сессия идёт по Wi-Fi (TCP), а не по кабелю; false - сессии нет или она по USB. */
     @Volatile var wirelessSession: Boolean = false
+    @Volatile internal var waitingForProjectionWifi = false
 
     /** Беспровод (бета, ветка B): что сейчас происходит, для экрана; null - режим не включён. */
     @Volatile var wireless: String? = null
@@ -41,6 +44,7 @@ object CarLifeState {
     @Volatile var carNet: String = "idle"
 
     fun resetSession() {
+        waitingForUsbVersion = false
         protocol = "-"
         auth = "-"
         video = "-"

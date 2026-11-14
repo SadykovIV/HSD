@@ -63,6 +63,7 @@ internal object VdmHostRecovery {
         private val main = Handler(Looper.getMainLooper())
         private val endpoints = ConcurrentLinkedQueue<DexEndpoint>()
         @Volatile private var localOnly = false
+        @Volatile private var advertised: DexEndpoint? = null
         @Volatile private var connection: Kadb? = null
         @Volatile private var discovery: DexDiscovery? = null
         @Volatile private var launch: VdmHostRendezvous? = null
@@ -123,11 +124,9 @@ internal object VdmHostRecovery {
                 independent?.let { enqueue(it, savedPairedPort = true) }
                 VdmRecoveryEndpoints.tlsLoopback(tlsPort)?.let { enqueue(it, savedPairedPort = true) }
                 enqueue(DexEndpoint(prefs.host, prefs.connectPort), savedPairedPort = true)
-                if (!localOnly) main.post {
-                    if (current()) discovery = DexDiscovery(context) { _, endpoint, _ -> endpoint?.let(::enqueue) }.also { it.start() }
-                }
                 val candidates = VdmRecoverySchedule()
                 var nextEnvironmentCheck = 0L
+                var liveRoutes = emptyList<DexEndpoint>()
                 while (current() && SystemClock.elapsedRealtime() < deadline) {
                     if (VdmHostLink.isReady) return true
                     val now = SystemClock.elapsedRealtime()
@@ -136,14 +135,15 @@ internal object VdmHostRecovery {
                         // without delivering mDNS on this network. Re-read; never scan ports.
                         val currentTls = localTlsPort()
                         val (wifi, debugging) = PhoneAdbEndpointRequest.environment(context)
-                        val wasLocalOnly = localOnly
                         localOnly = !VdmRecoveryPolicy.discoveryAllowed(wifi, debugging, currentTls)
                         VdmRecoveryEndpoints.tlsLoopback(currentTls)?.let { enqueue(it, savedPairedPort = true) }
-                        if (wasLocalOnly && !localOnly) main.post {
+                        if (wifi != false && discovery == null) main.post {
                             if (current() && discovery == null) discovery = DexDiscovery(context) { _, endpoint, _ ->
-                                endpoint?.let(::enqueue)
+                                advertised = endpoint
                             }.also { it.start() }
                         }
+                        liveRoutes = VdmRecoveryEndpoints.advertised(advertised, wifi, DexAccess::acceptsHost)
+                        liveRoutes.forEach(candidates::offer)
                         nextEnvironmentCheck = now + 500
                     }
                     while (true) candidates.offer(endpoints.poll() ?: break)
@@ -154,7 +154,8 @@ internal object VdmHostRecovery {
                         Thread.sleep(80)
                         continue
                     }
-                    if (!VdmRecoveryPolicy.endpointAllowed(endpoint, localOnly) || !DexAccess.acceptsHost(endpoint.host)) continue
+                    if ((endpoint !in liveRoutes && !VdmRecoveryPolicy.endpointAllowed(endpoint, localOnly)) ||
+                        !DexAccess.acceptsHost(endpoint.host)) continue
                     // DexAccess already caps TCP connect at 3s. Keep a separate, longer read
                     // deadline for the authenticated bootstrap command (up to 15s).
                     val remaining = (deadline - now).coerceIn(1, 20_000).toInt()

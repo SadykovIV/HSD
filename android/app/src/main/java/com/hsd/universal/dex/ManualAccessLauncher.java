@@ -51,7 +51,8 @@ public final class ManualAccessLauncher {
     private static int run(String[] args, String phoneRequestToken) {
         int result = 0;
         try {
-            ManualAccessPolicy.Options options = ManualAccessPolicy.Options.parse(args);
+            boolean savedOptions = args.length == 1 && "--saved".equals(args[0]);
+            ManualAccessPolicy.Options options = ManualAccessPolicy.Options.parse(savedOptions ? new String[0] : args);
             boolean deskAa = ManualAccessPolicy.ANDROID_AUTO;
             if (options.help) {
                 if (deskAa) {
@@ -74,6 +75,11 @@ public final class ManualAccessLauncher {
                 int uid = packageUid();
                 String runAsUid = run(5000, "run-as", ManualAccessPolicy.PACKAGE, "--user", Integer.toString(uid / 100000), "id", "-u").trim();
                 check(runAsUid.equals(Integer.toString(uid)), "Android не предоставил доступ к данным " + ManualAccessPolicy.APP_NAME + " через run-as. Проверьте, что команда активации запущена для установленного APK и текущего пользователя Android.");
+                if (savedOptions) {
+                    byte[] prefs = readPreferences(Integer.toString(uid / 100000), "hsd_dex");
+                    options = new ManualAccessPolicy.Options(ActivationPreferences.read(prefs, "desktop_usb_playback_audio", true),
+                        ActivationPreferences.read(prefs, "desktop_panel_control", false), false);
+                }
                 boolean newActivation = activate(uid, options, phoneRequestToken);
                 rememberControllerAddress(uid);
                 if (newActivation) {
@@ -172,14 +178,15 @@ public final class ManualAccessLauncher {
                 check(output.failure == null, output.failure);
             }
             check(output.pid != null, "Нет PID собственного процесса запуска: завершение запрещено.");
-            long beforeKill = SystemClock.elapsedRealtime();
             stopOwnedLauncher(output.pid, token, options);
             launcherStopped = true;
             launcher.waitFor(3, TimeUnit.SECONDS);
+            long verifyAfter = SystemClock.elapsedRealtime();
+            requestFreshHeartbeat(uid);
             System.out.println("Проверяю доступ после завершения собственного ADB-запуска…");
             long heartbeatDeadline = SystemClock.elapsedRealtime() + 12_000;
             while (SystemClock.elapsedRealtime() < heartbeatDeadline) {
-                JSONObject status = heartbeat(uid, beforeKill);
+                JSONObject status = heartbeat(uid, verifyAfter);
                 if (status != null) {
                     status = ensureKeyboard(uid, status);
                     requireCapabilities(status, options);
@@ -233,15 +240,19 @@ public final class ManualAccessLauncher {
                 s.equals(component + ".cluster.ClusterNavigationListener") ||
                 s.equals(component + ManualAccessPolicy.PACKAGE + ".cluster.ClusterNavigationListener"));
             if (!approved) return false;
-            // SharedPreferences restores the backup first if its last write was interrupted.
-            byte[] prefs = readCommand(3000, HudActivationPreference.MAX_BYTES, true,
-                "run-as", ManualAccessPolicy.PACKAGE, "--user", user, "sh", "-c",
-                "if [ ! -e shared_prefs ]; then printf '<map/>'; exit; fi; " +
-                "[ -d shared_prefs ] && [ -x shared_prefs ] || exit 1; " +
-                "f=shared_prefs/aa.xml; if [ -e \"$f.bak\" ]; then f=$f.bak; fi; " +
-                "if [ -f \"$f\" ]; then exec cat \"$f\"; fi; [ ! -e \"$f\" ] && printf '<map/>'");
-            return HudActivationPreference.enabled(prefs);
+            return ActivationPreferences.hudEnabled(readPreferences(user, "aa"));
         } catch (Exception unavailable) { return false; }
+    }
+
+    private static byte[] readPreferences(String user, String name) throws Exception {
+        // SharedPreferences restores the backup first after an interrupted write.
+        return readCommand(3000, ActivationPreferences.MAX_BYTES, true,
+            "run-as", ManualAccessPolicy.PACKAGE, "--user", user, "sh", "-c",
+            "if [ ! -e shared_prefs ]; then printf '<map/>'; exit; fi; " +
+            "[ -d shared_prefs ] && [ -x shared_prefs ] || exit 1; " +
+            "f=$1; if [ -e \"$f.bak\" ]; then f=$f.bak; fi; " +
+            "if [ -f \"$f\" ]; then exec cat \"$f\"; fi; [ ! -e \"$f\" ] && printf '<map/>'",
+            "sh", "shared_prefs/" + name + ".xml");
     }
 
     private static DisplayHelperRendezvous liveRecovery(int uid) {
@@ -265,6 +276,7 @@ public final class ManualAccessLauncher {
         // A live helper may be waiting for the next retry on a newly registered display.
         // Only launch a replacement if its authenticated connection has actually gone.
         if (!Boolean.TRUE.equals(status.opt("displayHelper"))) launchDisplayHelper(uid, record.token, record.panel, record);
+        requestFreshHeartbeat(uid);
         long deadline = launched + 18_000;
         while (SystemClock.elapsedRealtime() < deadline) {
             JSONObject current = heartbeat(uid, launched);
@@ -308,6 +320,16 @@ public final class ManualAccessLauncher {
                 "Доступ уже работает без управления экраном. Включите эту опцию в " + ManualAccessPolicy.APP_NAME + ", завершите доступ в приложении и повторите команду с --screen.");
             System.out.println(PhoneActivationPolicy.PANEL_UNAVAILABLE + "\n" + PhoneActivationPolicy.PANEL_MESSAGE);
         }
+    }
+
+    // Ask the existing activation to recheck its own grants now. The request itself is
+    // never evidence of readiness. The periodic heartbeat also covers lost filesystem events.
+    private static void requestFreshHeartbeat(int uid) throws InterruptedException {
+        try {
+            run(1500, "run-as", ManualAccessPolicy.PACKAGE, "--user", Integer.toString(uid / 100000),
+                "sh", "-c", ": > files/" + ManualAccessPolicy.STATUS_REFRESH);
+        } catch (InterruptedException e) { throw e; }
+        catch (Exception ignored) { /* Periodic verification remains available. */ }
     }
 
     private static JSONObject heartbeat(int uid, Long after) {

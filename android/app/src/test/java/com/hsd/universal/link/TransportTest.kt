@@ -435,6 +435,26 @@ class TransportTest {
     }
 
     @Test
+    fun malformedHeaderClosesBeforePeerDisconnects() {
+        val input = PipedInputStream()
+        val peer = PipedOutputStream(input)
+        val t = StreamTransport(input, ByteArrayOutputStream(), TransportCaps.USB_AOA, "test", clock = clock)
+        val closed = CountDownLatch(1)
+        var reason = ""
+        try {
+            t.start({ _, _ -> error("invalid header reached the session") }, { _, _ -> }, { reason = it; closed.countDown() })
+            peer.write(ByteArray(10) { 0x7f })
+            peer.flush()
+            assertTrue(closed.await(2, TimeUnit.SECONDS))
+            assertTrue(reason.startsWith("CarLife:"))
+            assertFalse(t.usbEndpointLost)
+        } finally {
+            t.close()
+            peer.close()
+        }
+    }
+
+    @Test
     fun streamCloseDoesNotCallOnClosed() {
         val inp = BlockingIn()
         val t = StreamTransport(inp, ByteArrayOutputStream(), TransportCaps.USB_AOA, "test", clock = clock)

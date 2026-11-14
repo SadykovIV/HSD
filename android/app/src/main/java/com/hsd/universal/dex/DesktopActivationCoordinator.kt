@@ -54,7 +54,7 @@ internal object DesktopActivationCoordinator {
         }
 
         /** Endpoint discovery is supplied by the one service that owns the pairing prompt. */
-        fun ensureReady(discovered: () -> DexEndpoint?, startDiscovery: () -> Unit,
+        fun ensureReady(discovered: () -> DexEndpoint?, startDiscovery: () -> Unit, onAttempt: (DexEndpoint) -> Unit,
                         stage: (Stage) -> Unit, committing: () -> Unit): Result {
             check(Looper.myLooper() != Looper.getMainLooper())
             var locked = false
@@ -102,7 +102,7 @@ internal object DesktopActivationCoordinator {
                             requireIdleForModePreparation()
                             if (!DexPrefs(context).hasPaired) throw PairingRequired()
                             stage(Stage.PREPARING_RECOVERY)
-                            val endpoint = endpointRequest.resolve(discovered, startDiscovery) { next() == DesktopReadinessPolicy.Step.READY }
+                            val endpoint = endpointRequest.resolve(discovered, startDiscovery, onAttempt) { next() == DesktopReadinessPolicy.Step.READY }
                                 ?: return@repeat
                             checkActive()
                             // This stage is entered only from an explicit activation and the user's saved opt-in.
@@ -116,7 +116,7 @@ internal object DesktopActivationCoordinator {
                             requireGrantAuthorization()
                             if (!DexPrefs(context).hasPaired) throw PairingRequired()
                             stage(Stage.CHECKING)
-                            val endpoint = endpointRequest.resolve(discovered, startDiscovery) {
+                            val endpoint = endpointRequest.resolve(discovered, startDiscovery, onAttempt) {
                                 next() != DesktopReadinessPolicy.Step.ACQUIRE_GRANTS
                             } ?: return@repeat
                             checkActive()

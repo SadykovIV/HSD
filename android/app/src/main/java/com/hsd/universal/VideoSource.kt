@@ -7,12 +7,10 @@ import android.graphics.Paint
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
-import android.media.MediaCodec
-import android.media.MediaCodecInfo
-import android.media.MediaFormat
-import android.os.Bundle
 import android.os.SystemClock
 import android.view.Surface
+import com.hsd.universal.aa.AaTranscoder
+import com.hsd.universal.aa.TranscodeOutput
 
 /**
  * H.264-энкодер (Surface input) и рисовалка заглушки моста (текст, пока AA не подключился).
@@ -43,10 +41,7 @@ class VideoSource(
     /** Текст состояния под изображением приложения вместо ещё не готового рабочего стола. */
     @Volatile var banner: String? = null
 
-    @Volatile private var running = false
-    private var codec: MediaCodec? = null
-    private var surface: Surface? = null
-    private var drainThread: Thread? = null
+    @Volatile private var encoder: AaTranscoder? = null
     private var renderThread: Thread? = null
     var encoderName: String = "?"
         private set
@@ -54,185 +49,74 @@ class VideoSource(
     private val image = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val text = Paint(Paint.ANTI_ALIAS_FLAG).apply { typeface = Typeface.DEFAULT_BOLD }
 
+    private val output = object : TranscodeOutput {
+        override fun onEncoderConfig(csd: ByteArray) = listener.onConfig(csd)
+        override fun onEncoderFrame(data: ByteArray, key: Boolean) = listener.onFrame(data, key)
+        override fun onTranscodeError(msg: String) = listener.onError(msg, null)
+        override fun onNeedAaKeyFrame() = Unit
+    }
+
     @Synchronized
     fun start() {
-        if (running) return
-        val c = MediaCodec.createEncoderByType(MIME)
-        encoderName = c.name
-        var s: Surface? = null
+        if (encoder != null) return
+        val active = AaTranscoder(width, height, fps, bitrate, output, tuning = "cbr", baidu = baidu, directSurface = true)
         try {
-            if (baidu) {
-                // формат Baidu (h242): с level 256, при отказе без него, дальше обычная лесенка
-                var done = false
-                for (withLevel in listOf(true, false)) {
-                    try {
-                        c.configure(formatBaidu(withLevel), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-                        AppLog.i("заглушка: энкодер в формате Baidu ($width x $height ${fps}fps ${bitrate / 1000}kbps VBR${if (withLevel) ", level 256" else ", без level"})")
-                        done = true
-                        break
-                    } catch (e: Exception) {
-                        AppLog.e("configure в формате Baidu (${if (withLevel) "с level 256" else "без level"}) не прошёл", e)
-                        c.reset()
-                    }
-                }
-                if (!done) configureFallback(c)
-            } else {
-                configureFallback(c)
-            }
-            s = c.createInputSurface()
-            c.start()
+            active.start()
+            // Software Canvas draws to the relay's SurfaceTexture. The relay supplies EGL
+            // or a negotiated YUV image to MediaCodec, just as it does for the desktop.
+            val input = checkNotNull(active.surfaceInput).surface
+            encoderName = active.encoderName
+            encoder = active
+            renderThread = Thread({ renderLoop(active, input) }, "video-render").also { it.start() }
         } catch (e: Exception) {
-            // codec ещё null: stop() вышел бы сразу, аппаратный энкодер освобождаем здесь
-            try {
-                s?.release()
-            } catch (_: Exception) {
-            }
-            try {
-                c.release()
-            } catch (_: Exception) {
-            }
+            encoder = null
+            active.stop()
             throw e
         }
-        surface = s
-        codec = c
-        running = true
-        drainThread = Thread({ drainLoop(c) }, "video-enc-drain").also { it.start() }
-        renderThread = Thread({ renderLoop() }, "video-render").also { it.start() }
     }
 
-    private fun configureFallback(c: MediaCodec) {
-        try {
-            c.configure(format(withExtras = true), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-        } catch (e: Exception) {
-            AppLog.e("configure с profile/CBR не прошёл, пробую минимальный формат", e)
-            c.reset()
-            c.configure(format(withExtras = false), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-        }
-    }
+    fun requestKeyFrame() { encoder?.requestSyncFrame() }
 
-    /** Как Baidu MediaFormatUtils :41-60: Baseline, VBR, level 256 (AVCLevel3), I-frame 1 с, повтор кадра 100 мс. */
-    private fun formatBaidu(withLevel: Boolean): MediaFormat {
-        val f = MediaFormat.createVideoFormat(MIME, width, height)
-        f.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-        f.setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
-        f.setInteger(MediaFormat.KEY_FRAME_RATE, fps)
-        f.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
-        f.setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 100_000L)
-        f.setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
-        f.setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
-        if (withLevel) f.setInteger(MediaFormat.KEY_LEVEL, MediaCodecInfo.CodecProfileLevel.AVCLevel3)
-        f.setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
-        return f
-    }
-
-    private fun format(withExtras: Boolean): MediaFormat {
-        val f = MediaFormat.createVideoFormat(MIME, width, height)
-        f.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-        f.setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
-        f.setInteger(MediaFormat.KEY_FRAME_RATE, fps)
-        f.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
-        if (withExtras) {
-            f.setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
-            f.setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
-            f.setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
-        }
-        return f
-    }
-
-    fun requestKeyFrame() {
-        try {
-            codec?.setParameters(Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0) })
-        } catch (e: Exception) {
-            AppLog.e("requestKeyFrame", e)
-        }
-    }
-
-    /** Битрейт на лету (воздух: политика битрейта ведёт и заглушку). false = кодека нет или параметр не принят. */
     fun setBitrate(bps: Int): Boolean {
-        val c = codec ?: return false
-        return try {
-            c.setParameters(Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, bps) })
-            true
-        } catch (e: Exception) {
-            AppLog.e("битрейт заглушки", e)
-            false
-        }
+        val active = encoder ?: return false
+        active.setBitrate(bps)
+        return active.currentBitrate == bps
     }
 
     @Synchronized
     fun stop() {
-        if (!running && codec == null) return
-        running = false
-        renderThread?.join(1000)
-        drainThread?.join(1000)
+        val active = encoder ?: return
+        encoder = null
+        val worker = renderThread
+        renderThread = null
         try {
-            codec?.stop()
-        } catch (_: Exception) {
-        }
-        try {
-            codec?.release()
-        } catch (_: Exception) {
-        }
-        try {
-            surface?.release()
-        } catch (_: Exception) {
-        }
-        codec = null
-        surface = null
-    }
-
-    private fun drainLoop(c: MediaCodec) {
-        val info = MediaCodec.BufferInfo()
-        try {
-            while (running) {
-                val idx = c.dequeueOutputBuffer(info, 50_000)
-                when {
-                    idx >= 0 -> {
-                        val buf = c.getOutputBuffer(idx)
-                        if (buf != null && info.size > 0) {
-                            val arr = ByteArray(info.size)
-                            buf.position(info.offset)
-                            buf.limit(info.offset + info.size)
-                            buf.get(arr)
-                            val data = AnnexB.normalize(arr)
-                            if (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) {
-                                listener.onConfig(data)
-                            } else {
-                                listener.onFrame(data, info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0)
-                            }
-                        }
-                        c.releaseOutputBuffer(idx, false)
-                    }
-                    idx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED ->
-                        AppLog.i("энкодер: формат вывода $encoderName: ${c.outputFormat}", ui = false)
-                }
+            if (worker != null && worker !== Thread.currentThread()) {
+                worker.interrupt()
+                worker.join(1000)
             }
-        } catch (e: Exception) {
-            if (running) listener.onError("drain энкодера", e)
+        } finally {
+            active.stop()
         }
     }
 
-    private fun renderLoop() {
-        val s = surface ?: return
+    private fun renderLoop(active: AaTranscoder, input: Surface) {
         val frameMs = 1000L / fps
         var next = SystemClock.elapsedRealtime()
         try {
-            while (running) {
-                // программный Canvas: lockHardwareCanvas на Surface энкодера валит media.codec на Xiaomi с vndk v30
-                // (Redmi 9T/9S, POCO X3 Pro: SIGSEGV в FenceTime::Snapshot::getFlattenedSize, за ним abort нашего процесса)
-                val canvas = s.lockCanvas(null)
+            while (encoder === active) {
+                val canvas = input.lockCanvas(null)
                 try {
-                    draw(canvas)
+                    drawBanner(canvas, banner.orEmpty())
                 } finally {
-                    s.unlockCanvasAndPost(canvas)
+                    input.unlockCanvasAndPost(canvas)
                 }
                 framesRendered++
                 next += frameMs
-                val d = next - SystemClock.elapsedRealtime()
-                if (d > 0) Thread.sleep(d) else next = SystemClock.elapsedRealtime()
+                val delay = next - SystemClock.elapsedRealtime()
+                if (delay > 0) Thread.sleep(delay) else next = SystemClock.elapsedRealtime()
             }
         } catch (e: Exception) {
-            if (running) listener.onError("рендер на Surface энкодера", e)
+            if (encoder === active) listener.onError("рендер заставки", e)
         }
     }
 
@@ -333,12 +217,8 @@ class VideoSource(
         return best
     }
 
-    private fun draw(c: Canvas) {
-        drawBanner(c, banner ?: "")
-    }
-
     companion object {
-        const val MIME = "video/avc"
+        const val MIME = AaTranscoder.MIME
 
         private val BG = Color.rgb(0x0E, 0x14, 0x1A) // фон иконки
         private val STATUS = Color.rgb(0xB8, 0xC4, 0xCC)

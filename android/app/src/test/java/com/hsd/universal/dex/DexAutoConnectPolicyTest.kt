@@ -68,4 +68,20 @@ class DexAutoConnectPolicyTest {
         policy.observeAccessory("other-car")
         assertFalse(policy.stopped)
     }
+
+    @Test fun lateEnumerationCanBeSeenByEachObserverEvenAfterAnotherObserverGotThereFirst() {
+        val policy = DexAutoConnectPolicy()
+        policy.observeAccessory(null)
+        assertNull(policy.attachment)
+        policy.observeAccessory("car")
+        val first = requireNotNull(policy.attachment)
+        policy.stop()
+        repeat(3) { policy.observeAccessory("car"); assertEquals(first, policy.attachment) }
+        assertTrue(policy.stopped)
+        policy.observeAccessory(null)
+        assertNull(policy.attachment)
+        policy.observeAccessory("car")
+        assertNotEquals(first, policy.attachment)
+        assertFalse(policy.stopped)
+    }
 }

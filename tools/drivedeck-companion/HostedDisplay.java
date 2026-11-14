@@ -5,8 +5,18 @@ import android.content.Context;
 import android.content.ContextWrapper;
 import android.os.Build;
 import android.view.Display;
+import android.view.View;
+
+import com.hsd.universal.shared.DesktopRenderPolicy;
 
 public final class HostedDisplay {
+    public static int[] renderGeometry(int width, int height, int density, boolean compact, View renderer) {
+        Display display = renderer.getDisplay();
+        Display.Mode mode = display == null ? null : display.getMode();
+        long parentPixels = mode == null ? 0 : (long) mode.getPhysicalWidth() * mode.getPhysicalHeight();
+        return DesktopRenderPolicy.geometry(width, height, density, compact, parentPixels);
+    }
+
     @SuppressWarnings("deprecation")
     public static Display of(Activity activity) {
         return Build.VERSION.SDK_INT >= 30 ? activity.getDisplay() : activity.getWindowManager().getDefaultDisplay();

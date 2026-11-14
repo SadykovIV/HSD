@@ -90,6 +90,7 @@ class CarLifeSession(
     private val onNavigationInterestChanged: () -> Unit = {},
     private val onDesktopOutputLost: (owner: CarLifeSession, hadPicture: Boolean) -> Unit = { _, _ -> },
     private val brandArtwork: android.graphics.Bitmap? = null,
+    private val onProtocolEstablished: (CarLifeSession) -> Unit = {},
     private val onClosed: (String) -> Unit,
 ) : VideoSource.Listener, CarlifeLink {
 
@@ -98,6 +99,12 @@ class CarLifeSession(
 
     /** Транспорт сессии: usb-aoa, tcp-debug или tcp6. */
     val transportKind: String get() = transport.caps.kind
+    private val protocolSeen = AtomicBoolean(false)
+    val protocolEstablished: Boolean get() = protocolSeen.get()
+
+    private fun establishProtocol() {
+        if (protocolSeen.compareAndSet(false, true)) onProtocolEstablished(this)
+    }
     /** A source restart must never revive a closed session or a failed channel. */
     val outputConnected: Boolean get() = !closed.get() && !transport.outputEndpointLost
 
@@ -246,7 +253,6 @@ class CarLifeSession(
                 "ceilingKbps" to bitratePolicy.ceilingBps / 1000, "mode" to mode.label, "transcode" to bridge.transcodeEnabled)
         }
         CarLifeState.setStatus(R.string.projection_version_wait)
-        transport.start(::dispatch, ::logTx) { reason -> close(reason, transportLost = transport.outputEndpointLost) }
         sched.scheduleWithFixedDelay({ tick() }, 1, 1, TimeUnit.SECONDS)
         if (cfg.desktopVideo != null) {
             // A final capture block or a static map may have no following video/audio callback.
@@ -265,6 +271,9 @@ class CarLifeSession(
             }
         }
         AppLog.i("звонки: ${if (callsOn) "слежу (VW CNS2 Delphi: сообщаю ГУ MODULE_STATUS PHONE + TELE_STATE)" else "не слежу (флажок выкл или нет READ_PHONE_STATE)"}")
+        // The reader can synchronously close a session on its first header or EOF.
+        // Install everything close() retires before handing it a live input stream.
+        transport.start(::dispatch, ::logTx) { reason -> close(reason, transportLost = transport.outputEndpointLost) }
     }
 
     /** Only the active link may update the shared core (it survives a short USB reconnect). */
@@ -501,6 +510,7 @@ class CarLifeSession(
                     return
                 }
                 huVersion = "${reply.major}.${reply.minor}"
+                establishProtocol()
                 CarLifeState.protocol = "ГУ шлёт версию $huVersion"
                 AppLog.i("== ВЕРСИЯ ПРОТОКОЛА ГУ: major=${reply.major} minor=${reply.minor}")
                 WLog.ev(WLog.HS, "HU_PROTOCOL_VERSION", "version" to huVersion)
@@ -747,7 +757,10 @@ class CarLifeSession(
         val rh = f?.let { PbReader.int(it, 2) } ?: 0
         val rf = f?.let { PbReader.int(it, 3) } ?: 0
         requested = "${rw}x$rh fps=$rf"
-        if (rw > 0 && rh > 0) onHuSize(rw, rh)
+        if (rw > 0 && rh > 0) {
+            establishProtocol()
+            onHuSize(rw, rh)
+        }
         AppLog.i("== ГУ ПРОСИТ РАЗРЕШЕНИЕ: ${rw}x$rh fps=$rf")
         WLog.ev(WLog.HS, "VIDEO_ENCODER_INIT", "size" to "${rw}x$rh", "fps" to rf)
         if (videoInited && pendingW > 0) {
@@ -942,6 +955,7 @@ class CarLifeSession(
     }
 
     override val isAir: Boolean get() = air
+    override val repeatAvcParameterSets: Boolean get() = cfg.desktopVideo != null
 
     override fun sendVideoTakeover(payload: ByteArray): Boolean = sendVideoTakeoverAt(payload, null)
 
@@ -1440,7 +1454,9 @@ class CarLifeSession(
         }
         // Gesture opcodes also normalize to action 3; only raw TOUCH_ACTION means CANCEL.
         val desktopCancel = bridge.desktopInputEnabled && m.type == Msg.TOUCH_ACTION && t.masked == 3
-        if (t.masked in TOUCH_TO_AA || desktopCancel) bridge.onCarlifeTouch(t.action, t.x, t.y, t.px, t.py)
+        if (t.masked in TOUCH_TO_AA || desktopCancel) {
+            bridge.onCarlifeTouch(t.action, t.x, t.y, t.px, t.py)
+        }
         CarLifeState.touch = "$touchMode; событий=$touchCount; пальцев макс=$maxFingers; последний act=${t.action} x=${t.x} y=${t.y}" +
             (if (n > 1) " px=${t.px} py=${t.py}" else "")
     }
@@ -1711,7 +1727,7 @@ class CarLifeSession(
         sb.append("  HU_AUTHEN_REQUEST: ${if (sawAuthRequest) "ПРИШЁЛ randomValue=$authRandom" else "не приходил"}\n")
         sb.append("  HU_AUTHEN_RESULT: ${huAuthResult ?: "не приходил"}\n")
         sb.append("  запрошенное разрешение: $requested; ответ: $chosen\n")
-        sb.append("  тач: $touchMode, событий=$touchCount\n")
+        sb.append("  тач: $touchMode, событий=$touchCount, повторов DOWN=${bridge.repeatedProjectionDowns}\n")
         sb.append("  видео: кадров=$vFrames ключевых=$vKeys heartbeat=$vBeats сброшено=$vDropped\n")
         sb.append("  нагрев: статус ${thermalName(thermalStatus)}, макс. ступень ${thermalThrottle.maxLevel.name}, разгрузка ${thermalThrottle.throttledMs / 1000} с\n")
         sb.append("  HU_INFO: ${huInfo ?: "не приходил"}\n")

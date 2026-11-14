@@ -87,6 +87,7 @@ class HeadUnitSimulator(
     /** Raw H.264 (Annex-B) of the projection is written here if set. */
     private val videoOut: OutputStream? = null,
     private val previousUsbFrames: Int = 0,
+    private val initialFocus: InitialFocus = InitialFocus.IMMEDIATE,
     private val offeredModes: List<VideoConfiguration>? = null,
     private val offeredIndices: List<Int> = listOf(0),
     private val videoCodec: MediaCodecType = MediaCodecType.MEDIA_CODEC_VIDEO_H264_BP,
@@ -96,12 +97,16 @@ class HeadUnitSimulator(
      */
     omitZeroFields: Boolean = false,
     private val authorizationStatus: Int? = 0,
+    private val encryptAuthorization: Boolean = false,
+    private val disconnectDuringTls: Boolean = false,
     private val receiverClock: java.util.Date? = null,
     private val protocolVersion: Pair<Int, Int> = if (modernNoAcks) 6 to 1 else 1 to 6,
     val huCert: PhoneIdentity = SelfSignedCertificate.generate("AARE simulated head unit").let {
         PhoneIdentity(it.certificate, it.keyPair.private)
     },
 ) {
+    enum class InitialFocus { IMMEDIATE, AFTER_FIRST_FRAME, NATIVE }
+    val stoppedVideo = CountDownLatch(1)
     /** False when encoding like a proto3 head unit: fields set to 0 are not written. */
     private val writeZeros = !omitZeroFields
     private val cryptor = Cryptor(huCert.certificate, huCert.privateKey, client = true)
@@ -143,8 +148,9 @@ class HeadUnitSimulator(
         Thread({
             try {
                 repeat(previousUsbFrames) {
-                    // Outer USB frame boundaries only. A new phone session cannot use the old ciphertext.
-                    transport.output.write(byteArrayOf((it % 4).toByte(), 11, 0, 4, 1, 2, 3, 4))
+                    val frame = if (it % 2 == 0) byteArrayOf(3, 11, 0, 4, 1, 2, 3, 4)
+                        else byteArrayOf(0, 2, 0, 1, 4)
+                    transport.output.write(frame)
                 }
                 transport.output.flush()
                 sendPlain(0, ControlMsg.VERSION_REQUEST, java.nio.ByteBuffer.allocate(4).putShort(protocolVersion.first.toShort()).putShort(protocolVersion.second.toShort()).array())
@@ -191,6 +197,21 @@ class HeadUnitSimulator(
     private fun control(m: AapMessage) {
         when (m.id) {
             ControlMsg.VERSION_RESPONSE -> {
+                val response = java.nio.ByteBuffer.wrap(m.bodyBytes())
+                val modernVersion = protocolVersion.first > 1 || protocolVersion.first == 1 && protocolVersion.second > 7
+                check(response.short.toInt() == if (modernVersion) 6 else 1)
+                check(response.short.toInt() == if (modernVersion) 1 else 7)
+                check(response.short.toInt() == 0)
+                if (protocolVersion.first > 1 || protocolVersion.first == 1 && protocolVersion.second >= 6) {
+                    val config = aap_protobuf.service.control.message.VersionResponseOptionsOuterClass.VersionResponseOptions
+                        .parseFrom(response).connectionConfiguration
+                    check(config.hasPingConfiguration() && config.pingConfiguration.intervalMs > 0 &&
+                        config.pingConfiguration.timeoutMs >= config.pingConfiguration.intervalMs)
+                } else check(!response.hasRemaining())
+                if (disconnectDuringTls) {
+                    transport.close()
+                    return
+                }
                 cryptor.beginHandshake()
                 sendPlain(0, ControlMsg.ENCAPSULATED_SSL, cryptor.handshake(ByteArray(0)))
             }
@@ -205,7 +226,11 @@ class HeadUnitSimulator(
                         } catch (_: java.security.cert.CertificateNotYetValidException) { -23 }
                           catch (_: java.security.cert.CertificateExpiredException) { -24 }
                     } ?: authorizationStatus
-                    sendPlain(0, ControlMsg.AUTH_COMPLETE, AuthResponse.newBuilder().apply { if (writeZeros || status != 0) setStatus(status) }.build().toByteArray())
+                    val auth = AuthResponse.newBuilder().apply { if (writeZeros || status != 0) setStatus(status) }.build()
+                    if (encryptAuthorization) {
+                        tlsUp = true
+                        send(0, ControlMsg.AUTH_COMPLETE, auth)
+                    } else sendPlain(0, ControlMsg.AUTH_COMPLETE, auth.toByteArray())
                     tlsUp = status == 0
                 }
             }
@@ -238,12 +263,17 @@ class HeadUnitSimulator(
 
     private fun mediaSink(m: AapMessage) {
         when (m.id) {
-            MediaMsg.SETUP -> send(m.channel, MediaMsg.CONFIG, Config.newBuilder().setStatus(Config.Status.STATUS_READY)
-                .setMaxUnacked(maxUnacked).addAllConfigurationIndices(if (m.channel == video) offeredIndices else listOf(0)).build())
+            MediaMsg.SETUP -> {
+                if (m.channel == video && initialFocus == InitialFocus.NATIVE) requestFocusNative()
+                send(m.channel, MediaMsg.CONFIG, Config.newBuilder().setStatus(Config.Status.STATUS_READY)
+                    .setMaxUnacked(maxUnacked).addAllConfigurationIndices(if (m.channel == video) offeredIndices else listOf(0)).build())
+            }
             MediaMsg.START -> if (m.channel == video) videoStart = Start.parseFrom(m.bodyBytes())
+            MediaMsg.STOP -> if (m.channel == video) stoppedVideo.countDown()
             MediaMsg.VIDEO_FOCUS_REQUEST -> {
                 focusRequests.incrementAndGet()
                 val r = VideoFocusRequestNotification.parseFrom(m.bodyBytes())
+                if (r.mode == VideoFocusMode.VIDEO_FOCUS_PROJECTED && initialFocus != InitialFocus.IMMEDIATE) return
                 send(video, MediaMsg.VIDEO_FOCUS_NOTIFICATION, VideoFocusNotification.newBuilder()
                     .setFocus(if (r.mode == VideoFocusMode.VIDEO_FOCUS_NATIVE) VideoFocusMode.VIDEO_FOCUS_NATIVE else VideoFocusMode.VIDEO_FOCUS_PROJECTED)
                     .setUnsolicited(false).build())
@@ -255,6 +285,14 @@ class HeadUnitSimulator(
             }
             MediaMsg.DATA -> {
                 if (m.channel == video) {
+                    if (initialFocus == InitialFocus.AFTER_FIRST_FRAME && videoFrames.get() == 0) {
+                        val bytes = m.body.copyOfRange(m.bodyOffset + 8, m.bodyOffset + m.bodyLength)
+                        val hevc = videoCodec == MediaCodecType.MEDIA_CODEC_VIDEO_H265
+                        val types = com.hsd.universal.AnnexB.nalTypes(bytes, hevc)
+                        check(videoStart != null && codecConfigs.get() > 0 &&
+                            (if (hevc) types.any { it in 16..21 } else 5 in types)) { "First video was not decodable: $types" }
+                        requestFocusProjected()
+                    }
                     videoOut?.write(m.body, m.bodyOffset + 8, m.bodyLength - 8)
                     videoBytes.addAndGet(m.bodyLength - 8)
                     videoFrames.incrementAndGet()
@@ -292,10 +330,15 @@ class HeadUnitSimulator(
     /** Taps the screen at (x, y). */
     fun tap(x: Int, y: Int) {
         for (action in listOf(PointerAction.ACTION_DOWN, PointerAction.ACTION_UP)) {
-            send(input, InputMsg.INPUT_REPORT, InputReport.newBuilder().setTimestamp(System.nanoTime())
-                .setTouchEvent(TouchEvent.newBuilder().setAction(action).setActionIndex(0)
-                    .addPointerData(TouchEvent.Pointer.newBuilder().setX(x).setY(y).setPointerId(0))).build())
+            touch(action.number, 0, com.hsd.universal.aa.TouchPoint(0, x, y))
         }
+    }
+
+    fun touch(action: Int?, index: Int, vararg contacts: com.hsd.universal.aa.TouchPoint) {
+        val event = TouchEvent.newBuilder().setActionIndex(index)
+        if (action != null) event.setActionValue(action)
+        for (p in contacts) event.addPointerData(TouchEvent.Pointer.newBuilder().setX(p.x).setY(p.y).setPointerId(p.id))
+        send(input, InputMsg.INPUT_REPORT, InputReport.newBuilder().setTimestamp(System.nanoTime()).setTouchEvent(event).build())
     }
 
     /** Presses and releases a car key (Android keycode numbering). */

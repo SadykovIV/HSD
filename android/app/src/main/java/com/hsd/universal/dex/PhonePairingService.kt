@@ -24,7 +24,6 @@ import com.hsd.universal.BrandArtwork
 import com.hsd.universal.R
 import kotlinx.coroutines.runBlocking
 import java.util.UUID
-import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.Executors
 
 /** The code is transient. A notification reply never carries an address, command or requested permission. */
@@ -59,9 +58,9 @@ class PhonePairingService : Service() {
         Thread(task, "${com.hsd.universal.BuildConfig.BRAND}-pairing-cancel").apply { isDaemon = true }
     }
     private var discovery: DexDiscovery? = null
-    private val discoveryGeneration = AtomicLong()
     private val savedRetry = SavedAdbRetryGate()
-    @Volatile private var pairing: DexEndpoint? = null
+    private val pairingWindow = ActivePairingWindow()
+    @Volatile private var pairedThisAttempt = false
     @Volatile private var connection: DexEndpoint? = null
     @Volatile private var cancelled = false
     @Volatile private var waitingCode = false
@@ -138,7 +137,7 @@ class PhonePairingService : Service() {
                 PhoneActivationStatus.clearFinished(this)
                 publish(Phase.CHECKING, getString(R.string.desktop_checking_readiness, DesktopTransport.shortName))
                 if (PhonePairingPromptPolicy.offer(DesktopActivationCoordinator.isReady(this), forcePair,
-                        step == DesktopReadinessPolicy.Step.RECONFIGURATION_REQUIRED)) {
+                        step == DesktopReadinessPolicy.Step.RECONFIGURATION_REQUIRED, prefs.hasPaired)) {
                     showCode(null, optional = true)
                 }
                 worker = Thread({ activate(forcePair) }, "${com.hsd.universal.BuildConfig.BRAND}-desk-activation").also { it.start() }
@@ -249,7 +248,6 @@ class PhonePairingService : Service() {
             while (true) {
                 checkActive()
                 codeGate?.takeCode()?.let { pairWithNotification(initialCode = it) }
-                savedRetry.markTried(knownConnectEndpoints(), PhoneAdbEndpointRequest.environment(this))
                 try {
                     val result = DesktopActivationCoordinator.request(applicationContext, needs, explicit = true,
                         allowAcquireGrants = !resumingCommitted) {
@@ -257,14 +255,16 @@ class PhonePairingService : Service() {
                     }.use { request ->
                         coordinator = request
                         try {
-                            request.ensureReady({ connection }, ::ensureDiscovery, { stage ->
+                            request.ensureReady({ connection }, ::ensureDiscovery, { endpoint ->
+                                savedRetry.markTried(listOf(endpoint), PhoneAdbEndpointRequest.environment(this))
+                            }, { stage ->
                                 when (stage) {
-                                    DesktopActivationCoordinator.Stage.CHECKING -> update(getString(R.string.desktop_checking_the_saved_access), Phase.CHECKING)
+                                    DesktopActivationCoordinator.Stage.CHECKING -> update(getString(if (pairedThisAttempt)
+                                        R.string.desktop_pairing_saved_connecting else R.string.desktop_checking_the_saved_access), Phase.CHECKING)
                                     DesktopActivationCoordinator.Stage.PREPARING_RECOVERY -> update(getString(R.string.desktop_preparing_recovery_without_wi_fi), Phase.PREPARING_RECOVERY)
                                     DesktopActivationCoordinator.Stage.RECOVERING_DESKTOP -> update(getString(R.string.desktop_preparing_the_desk), Phase.RECOVERING_DESKTOP)
                                     DesktopActivationCoordinator.Stage.DISPATCHED -> update(getString(R.string.desktop_enable_access_it_s_about_to_restart, DesktopTransport.shortName), Phase.DISPATCHED)
                                 }
-                                if (stage != DesktopActivationCoordinator.Stage.DISPATCHED) showCode(null, optional = true)
                             }, {
                                 synchronized(attemptLock) {
                                     checkActive()
@@ -348,57 +348,32 @@ class PhonePairingService : Service() {
     }
 
     private fun ensureDiscovery() {
-        if (!discoveryAllowed()) return
         postAttempt { startDiscoveryOnMain() }
     }
 
-    private fun discoveryAllowed(): Boolean = if (waitingCode || snapshot.phase == Phase.PAIRING)
-        PhoneAdbEndpointRequest.pairingDiscoveryAllowed(this) else PhoneAdbEndpointRequest.discoveryAllowed(this)
-
     private fun startDiscoveryOnMain() {
-        if (discovery != null || !discoveryAllowed()) return
-        val generation = discoveryGeneration.get()
+        if (discovery != null || !PhoneAdbEndpointRequest.pairingDiscoveryAllowed(this)) return
         discovery = DexDiscovery(this) { p, c, _ ->
-            if (!destroyed && !finished && !cancelled && generation == discoveryGeneration.get()) {
-                pairing = p
+            if (!destroyed && !finished && !cancelled) {
+                pairingWindow.advertised(p)
                 connection = c
             }
         }.also { it.start() }
     }
 
-    /** A pairing sheet owns a one-time port; never reuse a cached port from an earlier sheet. */
-    private fun refreshPairingDiscovery() {
-        val generation = discoveryGeneration.incrementAndGet()
-        pairing = null
-        connection = null
-        postAttempt {
-            if (generation != discoveryGeneration.get()) return@postAttempt
-            discovery?.close()
-            discovery = null
-            pairing = null
-            connection = null
-            startDiscoveryOnMain()
-        }
-    }
-
-    private fun knownConnectEndpoints(): List<DexEndpoint> {
-        val prefs = DexPrefs(this)
-        return listOfNotNull(connection, PhoneAdbEndpointRequest.tlsEndpoint(), IndependentRecoveryAccess.recoveryEndpoint(this)) +
-            VdmRecoveryEndpoints.candidates(DexEndpoint(prefs.host, prefs.connectPort), true, DexAccess::acceptsHost)
-    }
-
     /** An unavailable listener is not evidence that Android revoked the saved key. */
     private fun waitForSavedConnectionOrCode() {
         val deadline = SystemClock.elapsedRealtime() + CODE_TIMEOUT_MS
-        showCode(null, savedRetryAllowed = true)
-        refreshPairingDiscovery()
+        if (pairedThisAttempt) update(getString(R.string.desktop_pairing_saved_waiting_for_connection))
+        else showCode(null, savedRetryAllowed = true)
         while (SystemClock.elapsedRealtime() < deadline) {
             checkActive()
             if (codeGate?.hasCode() == true) return
             ensureDiscovery()
             val environment = PhoneAdbEndpointRequest.environment(this)
-            if (PhoneAdbEndpointRequest.discoveryAllowed(this)) {
-                if (savedRetry.fresh(connection, environment) || savedRetry.fresh(PhoneAdbEndpointRequest.tlsEndpoint(), environment)) {
+            if (environment.first != false) {
+                val live = VdmRecoveryEndpoints.advertised(connection, environment.first, DexAccess::acceptsHost)
+                if (live.any { savedRetry.fresh(it, environment) } || savedRetry.fresh(PhoneAdbEndpointRequest.tlsEndpoint(), environment)) {
                     AppLog.i("PHONE saved pairing retry: fresh debugging endpoint or changed wireless state", false)
                     return
                 }
@@ -409,6 +384,7 @@ class PhonePairingService : Service() {
     }
 
     private fun pairWithNotification(initialProblem: String? = null, initialCode: String? = null) {
+        pairedThisAttempt = false
         val deadline = SystemClock.elapsedRealtime() + CODE_TIMEOUT_MS
         var problem: String? = initialProblem
         var suppliedCode = initialCode
@@ -429,8 +405,7 @@ class PhonePairingService : Service() {
             checkActive()
             try {
                 update(getString(R.string.desktop_i_m_looking_for_an_open_pairing_window_for), Phase.PAIRING)
-                refreshPairingDiscovery()
-                val endpoint = awaitEndpoint(20_000) { pairing }
+                val endpoint = awaitEndpoint(20_000, pairingWindow::take)
                 if (endpoint == null) {
                     problem = getString(R.string.desktop_no_pairing_window_found_turn_on_wi_fi_and)
                     continue
@@ -441,6 +416,7 @@ class PhonePairingService : Service() {
                         checkActive()
                         runBlocking { DexAccess.pair(applicationContext, endpoint.port, code, endpoint.host, request = request) }
                         checkActive()
+                        pairedThisAttempt = true
                     } finally { pairingRequest = null }
                 }
                 postAttempt { notifications.cancel(CODE_ID) }
@@ -480,6 +456,7 @@ class PhonePairingService : Service() {
         notifications.notify(PROGRESS_ID, progress(message))
     }
     private fun showCode(problem: String?, reopen: Boolean = true, optional: Boolean = false, savedRetryAllowed: Boolean = false) = postAttempt {
+        if (optional && pairedThisAttempt) return@postAttempt
         val previous = codeGate?.token()
         synchronized(attemptLock) {
             if (reopen) codeGate?.open()
@@ -498,7 +475,7 @@ class PhonePairingService : Service() {
         else getString(R.string.desktop_open_the_pairing_window_in_wireless_debugging_enter_6_e26c, DesktopTransport.shortName)
         val message = listOfNotNull(problem, if (blocked) getString(R.string.desktop_the_code_entry_notification_is_disabled) else null, prompt).joinToString("\n")
         if (!optional) {
-            publish(Phase.WAITING_CODE, message)
+            publish(if (savedRetryAllowed) Phase.CHECKING else Phase.WAITING_CODE, message)
             notifications.notify(PROGRESS_ID, progress(status))
         }
         if (inAppOnly) notifications.cancel(CODE_ID) else {

@@ -36,8 +36,9 @@ if generated.exists():shutil.rmtree(generated)
 generated.mkdir()
 if profile.symbols is None:
     # Native renderer and its typed Binder client are supplied by the author's HeadSwap APK.
-    # Only the entry-point resolver and API 29 display access are added.
-    host_sources = [base/'HostedDisplay.java', base/'HSDHost.java', base/'shared/com/hsd/universal/shared/ProjectionHost.java']
+    host_sources = [base/'HostedDisplay.java', base/'HSDHost.java', base/'ProjectionSettings.java',
+                    base/'shared/com/hsd/universal/shared/ProjectionHost.java',
+                    base/'shared/com/hsd/universal/shared/DesktopRenderPolicy.java']
     run(javac, '--release', '8', '-classpath', android, '-d', classes, *host_sources)
 else:
     generate_symbols(profile, decoded, generated/'ru/drivedeck/hsd/CompanionSymbols.java')

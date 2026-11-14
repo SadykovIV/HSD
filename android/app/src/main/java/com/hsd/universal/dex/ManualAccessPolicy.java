@@ -21,6 +21,7 @@ public final class ManualAccessPolicy {
     public static final String AM_CLASS = "com.android.commands.am.Am";
     static final String HUD_ARGUMENT = "hsd_hud_api";
     public static final long MAX_HEARTBEAT_AGE_MS = 15_000;
+    static final String STATUS_REFRESH = "computer-access-refresh";
     private static final Pattern TOKEN = Pattern.compile("[0-9a-f]{32}");
     private static final Pattern UID = Pattern.compile("^Uid:\\s+(\\d+)\\s+(\\d+)\\s+(\\d+)\\s+(\\d+)\\s*$", Pattern.MULTILINE);
 
