@@ -578,6 +578,10 @@
     <string name="projection_wifi_starting">Waiting for Wi-Fi to turn on. HSD will continue automatically.</string>
     <string name="projection_wifi_join_failed">Could not join the head unit’s Wi-Fi network. %1$s</string>
     <string name="carplay_bond_needed">Pair this phone with the selected head unit over Bluetooth.</string>
+    <string name="carplay_wait_service">Paired with %1$s. Waiting for its CarPlay service. Open wireless CarPlay on the head unit.</string>
+    <string name="carplay_service_timeout">The devices are paired. The CarPlay channel did not open. Open wireless CarPlay on the head unit or adapter and select this phone.</string>
+    <string name="aa_usb_recovering">USB connection interrupted. Reconnecting Android Auto.</string>
+    <string name="aa_wait_receiver_video">Sending video. Waiting for the head unit to acknowledge the stream or select Android Auto.</string>
     <string name="carplay_bond_confirm">Confirm the matching Bluetooth code on the phone and head unit. HSD is waiting for pairing to finish.</string>
     <string name="carplay_pair_wifi">Turn on Wi-Fi before pairing. The head unit uses Bluetooth to exchange the code and Wi-Fi to start CarPlay.</string>
     <string name="carplay_bond_timeout">Bluetooth pairing timed out. Start pairing again and confirm the code on both screens.</string>
@@ -662,7 +666,7 @@
     <string name="desktop_activation_notifications_are_offline_and_select_the_input_in">"Activation notifications are off. Open %1$s to enter the code in the app."</string>
     <string name="desktop_allow_hsd_access_to_shizuku_authorized_applications">"Allow HSD access to Shizuku → “Authorized Applications”."</string>
     <string name="desktop_android_auto_aac_encoder_is_not_available_the_image">"Android Auto · AAC encoder unavailable. Video is active."</string>
-    <string name="desktop_android_auto_connected_negotiating_the_display">"Android Auto connected · negotiating the %1$s display"</string>
+    <string name="desktop_android_auto_connected_negotiating_the_display">Android Auto is negotiating the %1$s display</string>
     <string name="desktop_android_auto_is_completed">"Android Auto session ended · %1$s · %2$s"</string>
     <string name="desktop_android_didn_t_open_the_sound_repeat_activation_with">"Android could not start %1$s audio. Activate again with audio enabled, then reconnect."</string>
     <string name="desktop_android_has_not_launched_the_desktop_service">"Android has not launched the desktop service"</string>

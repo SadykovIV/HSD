@@ -18,6 +18,7 @@ internal fun <T : Closeable> connectCarPlayRfcomm(
     outgoing: (ProjectionResources) -> T,
     log: (String) -> Unit,
     timeoutMs: Long = TimeUnit.MINUTES.toMillis(2),
+    timeoutMessage: String = "Канал Bluetooth iAP2 не открылся. Откройте беспроводной CarPlay на магнитоле.",
 ): T {
     val result = CompletableFuture<Pair<ProjectionResources, T>>()
     val receiving = ProjectionResources()
@@ -61,7 +62,7 @@ internal fun <T : Closeable> connectCarPlayRfcomm(
             listOf("incoming", "outgoing").joinToString { "$it=${if (it in failures) "failed" else "pending"}" }
         }
         log("RFCOMM timeout · $directions")
-        throw IOException("За ${timeoutMs / 1000} секунд канал Bluetooth iAP2 не открылся. Выберите Apple CarPlay на магнитоле. Для первого сопряжения включите видимость телефона в настройках подключения HSD.", e)
+        throw IOException(timeoutMessage, e)
     } finally {
         result.cancel(false)
         if (winner !== receiving) receiving.close()
@@ -87,20 +88,23 @@ internal fun <T : Closeable> dialCarPlayRfcomm(
     var delayMs = initialRetryMs
     var attempt = 0
     while (stopped.count != 0L) {
-        val socket = open()
-        current.set(socket)
+        var socket: T? = null
         var connected = false
         try {
-            if (stopped.count == 0L) break
             attempt++
+            socket = open()
+            current.set(socket)
+            if (stopped.count == 0L) break
             connect(socket)
             connected = true
             return socket
         } catch (e: IOException) {
             if (stopped.count == 0L) break
+            // A failed accept means the listener itself closed; retrying that handle would spin.
+            if (socket == null && initialRetryMs == 0L) throw e
             log("RFCOMM $role attempt $attempt · ${bluetoothError(e)} · retry in ${delayMs} ms")
         } finally {
-            if (!connected && current.compareAndSet(socket, null)) runCatching(socket::close)
+            if (socket != null && !connected && current.compareAndSet(socket, null)) runCatching(socket::close)
         }
         if (stopped.await(delayMs, TimeUnit.MILLISECONDS)) break
         delayMs = minOf(delayMs * 2, 12_000)

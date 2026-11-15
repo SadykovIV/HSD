@@ -21,6 +21,7 @@ internal class CarPlayProjection(
     private val lifetime: ProjectionResources,
     private val status: (String) -> Unit,
     private val ended: (String) -> Unit,
+    private val ready: () -> Unit = {},
 ) : ProjectionSession, DesktopProjectionOutput {
     private val main = Handler(Looper.getMainLooper())
     private val closing = AtomicBoolean(false)
@@ -83,6 +84,7 @@ internal class CarPlayProjection(
                 delivery.frameWritten(SystemClock.elapsedRealtime())
                 if (first.compareAndSet(true, false)) {
                     firstFrameAt = SystemClock.elapsedRealtime()
+                    ready()
                     main.removeCallbacks(frameTimeout)
                     val text =
                         context.getString(R.string.desktop_carplay_desk_h_264, display?.width, display?.height)

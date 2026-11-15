@@ -84,6 +84,7 @@ class HeadUnitSimulator(
     val dpi: Int = 160,
     private val maxUnacked: Int = 4,
     private val modernNoAcks: Boolean = false,
+    private val requestPings: Boolean = true,
     /** Raw H.264 (Annex-B) of the projection is written here if set. */
     private val videoOut: OutputStream? = null,
     private val previousUsbFrames: Int = 0,
@@ -105,7 +106,7 @@ class HeadUnitSimulator(
         PhoneIdentity(it.certificate, it.keyPair.private)
     },
 ) {
-    enum class InitialFocus { IMMEDIATE, AFTER_FIRST_FRAME, NATIVE }
+    enum class InitialFocus { IMMEDIATE, AFTER_FIRST_FRAME, NATIVE, UNCONFIRMED }
     val stoppedVideo = CountDownLatch(1)
     /** False when encoding like a proto3 head unit: fields set to 0 are not written. */
     private val writeZeros = !omitZeroFields
@@ -125,6 +126,9 @@ class HeadUnitSimulator(
     val videoFrames = AtomicInteger()
     val videoBytes = AtomicInteger()
     val codecConfigs = AtomicInteger()
+    val decodableStarts = AtomicInteger()
+    private var videoHeadersPending = false
+    val mediaFocusRequests = AtomicInteger()
     val audioChunks = AtomicInteger()
     val nonSilentAudioChunks = AtomicInteger()
     /** Set false to simulate a head unit that stops acking audio mid-stream (#82). */
@@ -246,6 +250,7 @@ class HeadUnitSimulator(
             }
             ControlMsg.AUDIO_FOCUS_REQUEST -> {
                 val req = AudioFocusRequest.parseFrom(m.bodyBytes())
+                if (req.audioFocusType == AudioFocusRequestType.AUDIO_FOCUS_GAIN) mediaFocusRequests.incrementAndGet()
                 val state = when (req.audioFocusType) {
                     AudioFocusRequestType.AUDIO_FOCUS_RELEASE -> AudioFocusStateType.AUDIO_FOCUS_STATE_LOSS
                     AudioFocusRequestType.AUDIO_FOCUS_GAIN_TRANSIENT, AudioFocusRequestType.AUDIO_FOCUS_GAIN_TRANSIENT_MAY_DUCK ->
@@ -280,11 +285,19 @@ class HeadUnitSimulator(
             }
             MediaMsg.VIDEO_FOCUS_NOTIFICATION -> focusNotifications.add(VideoFocusNotification.parseFrom(m.bodyBytes()).focus)
             MediaMsg.CODEC_CONFIG -> {
+                if (m.channel == video) videoHeadersPending = true
                 codecConfigs.incrementAndGet()
                 videoOut?.write(m.body, m.bodyOffset, m.bodyLength)
             }
             MediaMsg.DATA -> {
                 if (m.channel == video) {
+                    if (videoHeadersPending) {
+                        val bytes = m.body.copyOfRange(m.bodyOffset + 8, m.bodyOffset + m.bodyLength)
+                        val hevc = videoCodec == MediaCodecType.MEDIA_CODEC_VIDEO_H265
+                        val types = com.hsd.universal.AnnexB.nalTypes(bytes, hevc)
+                        if (if (hevc) types.any { it in 16..21 } else 5 in types) decodableStarts.incrementAndGet()
+                        videoHeadersPending = false
+                    }
                     if (initialFocus == InitialFocus.AFTER_FIRST_FRAME && videoFrames.get() == 0) {
                         val bytes = m.body.copyOfRange(m.bodyOffset + 8, m.bodyOffset + m.bodyLength)
                         val hevc = videoCodec == MediaCodecType.MEDIA_CODEC_VIDEO_H265
@@ -303,7 +316,7 @@ class HeadUnitSimulator(
                         nonSilentAudioChunks.incrementAndGet()
                 }
                 val session = if (m.channel == video) videoStart?.sessionId ?: 0 else 0
-                if (!modernNoAcks && (m.channel == video || ackAudio))
+                if (!modernNoAcks && (if (m.channel == video) initialFocus != InitialFocus.UNCONFIRMED else ackAudio))
                     send(m.channel, MediaMsg.ACK, Ack.newBuilder().apply { if (session != 0 || writeZeros) setSessionId(session) }.setAck(1).build())
             }
         }
@@ -365,6 +378,8 @@ class HeadUnitSimulator(
                 .addData(RelativeEvent.Rel.newBuilder().setKeycode(65536 /* rotary */).setDelta(detents))).build())
     }
 
+    fun acknowledgeVideo(sessionId: Int) = send(video, MediaMsg.ACK, Ack.newBuilder().setSessionId(sessionId).setAck(1).build())
+
     fun requestFocusNative() = send(video, MediaMsg.VIDEO_FOCUS_NOTIFICATION,
         VideoFocusNotification.newBuilder().setFocus(VideoFocusMode.VIDEO_FOCUS_NATIVE).setUnsolicited(true).build())
 
@@ -400,8 +415,8 @@ class HeadUnitSimulator(
             .setHeadunitInfo(HeadUnitInfo.newBuilder().setMake("AARE").setModel("Simulator").setYear("2026")
                 .setHeadUnitMake("AARE").setHeadUnitModel("hu-sim").setHeadUnitSoftwareVersion("1"))
             .setDisplayName("Simulated car")
-            .setConnectionConfiguration(ConnectionConfiguration.newBuilder().setPingConfiguration(
-                PingConfiguration.newBuilder().setIntervalMs(1000).setTimeoutMs(3000).setTrackedPingCount(5)))
+            .apply { if (requestPings) setConnectionConfiguration(ConnectionConfiguration.newBuilder().setPingConfiguration(
+                PingConfiguration.newBuilder().setIntervalMs(1000).setTimeoutMs(3000).setTrackedPingCount(5))) }
             .addChannels(Service.newBuilder().setId(video).setMediaSinkService(MediaSinkService.newBuilder()
                 .setAvailableType(videoCodec)
                 .addAllVideoConfigs(offeredModes ?: listOf(displayMode,

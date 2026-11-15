@@ -73,9 +73,11 @@ abstract class MediaSinkChannel(service: Service, name: String, private val code
             }
             MediaMsg.ACK -> {
                 val ack = Ack.parseFrom(msg.bodyBytes())
-                sinceAck.set(0)
                 val n = if (ack.hasAck()) ack.ack else 1
-                // Never go negative: some head units ack frames sent before a restart.
+                // Older receivers omit the session id or send zero. A tagged ACK from a
+                // retired START must not grant the new stream credits or confirm reception.
+                if (!started || n <= 0 || (ack.sessionId != 0 && ack.sessionId != mediaSession)) return
+                sinceAck.set(0)
                 unacked.updateAndGet { maxOf(0, it - n) }
                 onAcked()
             }
@@ -197,6 +199,7 @@ class VideoChannel(
 
         /** The complete access unit reached the transport writer. */
         fun onFrameWritten(keyFrame: Boolean, ptsUs: Long, bytes: Int) {}
+        fun onReceiverConfirmed() {}
 
         /** The head unit changed the UI layout (insets, margins, theme) of the running stream. */
         fun onUiConfig(config: UiConfig) {}
@@ -211,6 +214,12 @@ class VideoChannel(
         private set
     // CONFIG/START opens the decoder. Some receivers report UI focus only after decoding video.
     val acceptsVideo get() = ready && started && focusMode?.let(::isProjected) != false
+    @Volatile var receiverConfirmed = false
+        private set
+    private var submittedVideo = false
+    private var videoGeneration = 0L
+    private var wroteKeyFrame = false
+    private var receiverEvidence = false
     @Volatile var videoExpectedSinceNanos: Long? = 0L
         private set
 
@@ -270,6 +279,7 @@ class VideoChannel(
             attemptedCodecs.clear()
             attemptedCodecs.add(type)
             if (next != chosen) clearPending() else discardQueuedFrames()
+            clearReceiverEvidence()
             chosen = next
             startIndex = index
             sentAt.clear()
@@ -343,25 +353,56 @@ class VideoChannel(
         sentAt.clear()
     }
 
+    private fun clearReceiverEvidence() {
+        videoGeneration++
+        receiverConfirmed = false
+        submittedVideo = false
+        wroteKeyFrame = false
+        receiverEvidence = false
+    }
+
+    private fun confirmIfReady() {
+        if (!receiverConfirmed && acceptsVideo && wroteKeyFrame && (receiverEvidence || focusMode?.let(::isProjected) == true)) {
+            receiverConfirmed = true
+            listener.onReceiverConfirmed()
+        }
+    }
+
+    /** Some receivers omit both video ACK and focus. Input on this display is receiver-side evidence. */
+    fun noteDisplayInput() = synchronized(lock) {
+        if (acceptsVideo && submittedVideo && focusMode != VideoFocusMode.VIDEO_FOCUS_PROJECTED_NO_INPUT_FOCUS) {
+            receiverEvidence = true
+            confirmIfReady()
+        }
+    }
+
     private fun setFocus(mode: VideoFocusMode) {
         val projected = isProjected(mode)
+        var notifyFocus = true
         synchronized(lock) {
             val previous = focusMode
-            if (previous == mode) return
+            if (previous == mode && !projected) return
             focusMode = mode
             if (projected) {
-                if (previous?.let(::isProjected) == true) return // Only input ownership changed.
                 if (videoExpectedSinceNanos == null) videoExpectedSinceNanos = System.nanoTime()
                 if (!started && ready && chosen != null) startStream(startIndex)
-                discardQueuedFrames()
-                if (acceptsVideo) codecConfig?.let { sendCodecConfigData(it, 0, it.size, dataPriority) }
+                if (previous?.let(::isProjected) != true || previous == mode) {
+                    // A repeated projected focus can follow a decoder reset without a native
+                    // transition. Reuse START, but send headers and a decodable frame again.
+                    if (previous == mode && (!acceptsVideo || needKeyFrame)) return
+                    discardQueuedFrames()
+                    if (acceptsVideo) codecConfig?.let { sendCodecConfigData(it, 0, it.size, dataPriority) }
+                }
+                notifyFocus = previous != mode
+                confirmIfReady()
             } else {
+                clearReceiverEvidence()
                 videoExpectedSinceNanos = null
                 discardQueuedFrames()
                 if (mode == VideoFocusMode.VIDEO_FOCUS_NATIVE) stopStream()
             }
         }
-        listener.onVideoFocus(projected)
+        if (notifyFocus) listener.onVideoFocus(projected) else listener.onKeyFrameNeeded()
     }
 
     /** Asks the head unit to show its own UI (e.g. the driver chose "exit" on the phone). */
@@ -413,6 +454,10 @@ class VideoChannel(
 
     override fun onAcked() {
         synchronized(lock) {
+            if (submittedVideo && acceptsVideo) {
+                receiverEvidence = true
+                confirmIfReady()
+            }
             // Acks are cumulative: whatever is beyond the in-flight count has been acked, and the
             // newest of those gives the latency.
             var acked = -1L
@@ -427,14 +472,24 @@ class VideoChannel(
             val p = pending.removeFirst()
             val t = System.nanoTime()
             outstandingWrites++
-            val writtenSession = mediaSession
+            val generation = videoGeneration
+            submittedVideo = true
             if (ackless) sentAt.clear() else sentAt.addLast(t)
             sendData(p.buf, p.offset, p.length, p.ptsUs, Priority.VIDEO) {
-                lastFrameWriteNanos = System.nanoTime()
-                sendLatencyMs = (lastFrameWriteNanos - t) / 1_000_000
                 p.recycle(p.buf)
-                if (mediaSession == writtenSession) listener.onFrameWritten(p.key, p.ptsUs, p.length)
-                synchronized(lock) { outstandingWrites--; pump() }
+                val current = synchronized(lock) {
+                    val active = videoGeneration == generation && acceptsVideo
+                    if (active) {
+                        lastFrameWriteNanos = System.nanoTime()
+                        sendLatencyMs = (lastFrameWriteNanos - t) / 1_000_000
+                        if (p.key) wroteKeyFrame = true
+                        confirmIfReady()
+                    }
+                    outstandingWrites--
+                    pump()
+                    active
+                }
+                if (current) listener.onFrameWritten(p.key, p.ptsUs, p.length)
             }
         }
         pendingFrames = pending.size
@@ -446,6 +501,7 @@ class VideoChannel(
             focusMode = null
             videoExpectedSinceNanos = 0L
             chosen = null
+            clearReceiverEvidence()
             clearPending()
         }
     }
@@ -513,10 +569,11 @@ class AudioChannel(service: Service, private val listener: Listener? = null,
     /** Whether [sendPcm] would send a chunk now rather than drop it. */
     val hasRoom: Boolean get() = started && (ackless || unacked.get() < maxUnacked + SLACK)
 
-    fun sendPcm(buf: ByteArray, offset: Int, length: Int, timestampUs: Long): Boolean {
+    @JvmOverloads
+    fun sendPcm(buf: ByteArray, offset: Int, length: Int, timestampUs: Long, onSent: (() -> Unit)? = null): Boolean {
         if (!started) return false
         if (!ackless && unacked.get() >= maxUnacked + SLACK) { droppedChunks++; noteAttempt(); return false }
-        sendData(buf, offset, length, timestampUs, Priority.AUDIO)
+        sendData(buf, offset, length, timestampUs, Priority.AUDIO, onSent)
         return true
     }
 

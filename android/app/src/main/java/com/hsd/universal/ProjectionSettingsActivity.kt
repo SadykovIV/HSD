@@ -430,7 +430,11 @@ internal class ProjectionSettingsActivity : Activity() {
 
     @SuppressLint("MissingPermission")
     private fun pickBondedDevice() {
-        val devices = getSystemService(BluetoothManager::class.java)?.adapter?.bondedDevices.orEmpty().sortedBy { it.name.orEmpty() }
+        val adapter = getSystemService(BluetoothManager::class.java)?.adapter
+        // The receiver can look up our phone service as soon as its Bluetooth menu opens.
+        if (route == ProjectionRoute.CARPLAY && adapter?.isEnabled == true)
+            runCatching { CarPlayBluetoothService.prepare(adapter) }
+        val devices = adapter?.bondedDevices.orEmpty().sortedBy { it.name.orEmpty() }
         if (devices.isEmpty()) {
             AlertDialog.Builder(this).setTitle(getString(R.string.desktop_paired_devices))
                 .setMessage(getString(R.string.desktop_pair_the_phone_with_the_head_unit_then_select))

@@ -332,6 +332,8 @@ open class DexSetupActivity : Activity() {
                     desktopConnectionReady() -> showState(getString(R.string.desktop_connected, desktopName),
                         getString(R.string.desktop_projecting_the_desktop_to, projectionName) + (if (prefs.usbPlaybackAudio)
                             DesktopAudioState.status(this@DexSetupActivity) else getString(R.string.desktop_audio_uses_the_phone_s_current_output)) + lockIsolationHint())
+                    CarLifeState.waitingForVideoReceiver -> showState(getString(R.string.desktop_waiting_for, projectionName),
+                        getString(R.string.aa_wait_receiver_video), busy = true)
                     DexState.running && CarLifeState.running -> showState(getString(R.string.desktop_waiting_for, projectionName),
                         getString(R.string.desktop_the_head_unit_is_waiting_for_video_open_on, projectionName), busy = true)
                     Actions.lastUsbResult.state == Actions.UsbScanState.WAITING_FOR_ACCESSORY -> {

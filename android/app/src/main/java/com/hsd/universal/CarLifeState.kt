@@ -26,6 +26,7 @@ object CarLifeState {
     @Volatile var running: Boolean = false
     @Volatile var awaitingCarLifeUsbHandshake: Boolean = false
     @Volatile var waitingForUsbVersion: Boolean = false
+    @Volatile var waitingForVideoReceiver: Boolean = false
 
     /** Текущая сессия идёт по Wi-Fi (TCP), а не по кабелю; false - сессии нет или она по USB. */
     @Volatile var wirelessSession: Boolean = false
@@ -45,6 +46,7 @@ object CarLifeState {
 
     fun resetSession() {
         waitingForUsbVersion = false
+        waitingForVideoReceiver = false
         protocol = "-"
         auth = "-"
         video = "-"

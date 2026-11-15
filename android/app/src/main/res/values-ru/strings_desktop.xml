@@ -559,6 +559,10 @@
     <string name="projection_wifi_starting">Ожидаю включения Wi-Fi. HSD продолжит подключение автоматически.</string>
     <string name="projection_wifi_join_failed">Не удалось подключиться к сети Wi-Fi магнитолы. %1$s</string>
     <string name="carplay_bond_needed">Выполните Bluetooth-сопряжение телефона с выбранной магнитолой.</string>
+    <string name="carplay_wait_service">Есть сопряжение с %1$s. Ждём ответа службы CarPlay. Откройте беспроводной CarPlay на магнитоле.</string>
+    <string name="carplay_service_timeout">Устройства сопряжены. Магнитола не открыла канал CarPlay. Откройте беспроводной CarPlay на магнитоле или адаптере и выберите телефон.</string>
+    <string name="aa_usb_recovering">Связь по USB прервалась. Восстанавливаем Android Auto.</string>
+    <string name="aa_wait_receiver_video">Отправляем видео. Ждём подтверждения от магнитолы. Откройте на ней Android Auto.</string>
     <string name="carplay_bond_confirm">Подтвердите совпадающий код Bluetooth на телефоне и магнитоле. HSD ждёт завершения сопряжения.</string>
     <string name="carplay_pair_wifi">Включите Wi-Fi перед сопряжением. Магнитола сверяет код по Bluetooth, а для запуска CarPlay ей нужен Wi-Fi.</string>
     <string name="carplay_bond_timeout">Истекло время сопряжения. Запустите сопряжение ещё раз и подтвердите код на обоих экранах.</string>
@@ -643,7 +647,7 @@
     <string name="desktop_activation_notifications_are_offline_and_select_the_input_in">"Уведомления активации отключены. Откройте %1$s и выберите ввод в приложении."</string>
     <string name="desktop_allow_hsd_access_to_shizuku_authorized_applications">"Разрешите доступ HSD в Shizuku → «Авторизованные приложения»."</string>
     <string name="desktop_android_auto_aac_encoder_is_not_available_the_image">"Android Auto · кодировщик AAC недоступен, изображение передаётся"</string>
-    <string name="desktop_android_auto_connected_negotiating_the_display">"Android Auto · соединение установлено, согласуем экран %1$s"</string>
+    <string name="desktop_android_auto_connected_negotiating_the_display">Android Auto согласует экран %1$s с магнитолой</string>
     <string name="desktop_android_auto_is_completed">"Android Auto завершён · %1$s · %2$s"</string>
     <string name="desktop_android_didn_t_open_the_sound_repeat_activation_with">"Android не открыл звук %1$s. Повторите активацию с включённым звуком и подключитесь снова."</string>
     <string name="desktop_android_has_not_launched_the_desktop_service">"Android не запустил службу рабочего стола"</string>

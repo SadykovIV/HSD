@@ -119,7 +119,7 @@ internal class DesktopProjectionSource(private val context: Context, private val
 
     fun outputLost(hadPicture: Boolean, carriedAudio: Boolean) {
         if (!closed) DesktopMusicPlayback.usbOutputLost(context, this, hadPicture && DexState.running,
-            carriedAudio = carriedAudio && prefs.usbPlaybackAudio && core.audioViaUsb && output.audioRate() != null)
+            carriedAudio = carriedAudio && prefs.usbPlaybackAudio && core.audioViaUsb)
     }
 
     fun requestKeyFrame() { if (!closed) core.onCarlifeKeyFrameRequest() }

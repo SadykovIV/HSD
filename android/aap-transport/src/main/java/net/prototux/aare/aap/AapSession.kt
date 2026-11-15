@@ -46,10 +46,7 @@ class PhoneDescription(
 )
 
 class SessionOptions(
-    /**
-     * Whether the phone originates pings. The official phone only does on wireless links; on USB
-     * it just answers the head unit's.
-     */
+    /** Originate pings by default on wireless. On USB honor an interval supplied by the receiver. */
     val sendPings: Boolean = true,
     /** The head unit certificates the user trusts; null accepts any certificate. */
     val pins: PinStore? = null,
@@ -171,6 +168,7 @@ class AapSession(
 
     @Volatile private var lastInboundMs = now()
     @Volatile private var pingIntervalMs = 1_000L
+    private var receiverRequestedPings = false
     /**
      * Silence that means the link is dead. Only applied once the head unit has shown it takes part
      * in keep-alives (some never answer the phone's pings); USB unplugs are caught by I/O errors.
@@ -502,7 +500,10 @@ class AapSession(
         discovery = resp
         log.i("head unit: ${describe(resp)}")
         resp.connectionConfiguration?.pingConfiguration?.let { pc ->
-            if (pc.hasIntervalMs() && pc.intervalMs > 0) pingIntervalMs = pc.intervalMs.toLong().coerceIn(250, 5_000)
+            if (pc.hasIntervalMs() && pc.intervalMs > 0) {
+                receiverRequestedPings = true
+                pingIntervalMs = pc.intervalMs.toLong().coerceIn(250, 5_000)
+            }
             if (pc.hasTimeoutMs() && pc.timeoutMs > 0) deadAfterMs = maxOf(pc.timeoutMs.toLong() * 3, 20_000L)
         }
         val wanted = callbacks.onServiceDiscovery(this, resp)
@@ -545,7 +546,7 @@ class AapSession(
     private fun startKeepAlive() {
         scheduler.scheduleWithFixedDelay({
             if (closed.get()) return@scheduleWithFixedDelay
-            if (options.sendPings) {
+            if (options.sendPings || receiverRequestedPings) {
                 sendControl(ControlMsg.PING_REQUEST, PingRequest.newBuilder().setTimestamp(System.nanoTime() / 1_000).build())
             }
             val silent = now() - lastInboundMs

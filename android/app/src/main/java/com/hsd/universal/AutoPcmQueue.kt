@@ -17,6 +17,14 @@ internal class AutoPcmQueue(private val calibration: ReceiverAudioCalibration,
     private var videoLagUs = 0L
     private var trim = 0
     private var closed = false
+    private var playing = false
+
+    @Synchronized fun setPlaying(enabled: Boolean) {
+        if (!enabled) clear()
+        if (playing == enabled || closed) return
+        playing = enabled
+        if (enabled && queue.isNotEmpty()) schedule(queue.first().dueUs, System.nanoTime() / 1000)
+    }
 
     @Synchronized fun videoWritten(ptsUs: Long) {
         val age = System.nanoTime() / 1000 - ptsUs
@@ -35,7 +43,7 @@ internal class AutoPcmQueue(private val calibration: ReceiverAudioCalibration,
         }
         queue.addLast(Packet(pcm, ptsUs, due))
         bytes += pcm.size
-        if (queue.size == 1) schedule(due, now)
+        if (playing && queue.size == 1) schedule(due, now)
         return true
     }
 
@@ -44,7 +52,7 @@ internal class AutoPcmQueue(private val calibration: ReceiverAudioCalibration,
     }
 
     @Synchronized private fun drain() {
-        while (!closed && queue.isNotEmpty()) {
+        while (playing && !closed && queue.isNotEmpty()) {
             val packet = queue.first()
             val now = System.nanoTime() / 1000
             if (packet.dueUs > now) { schedule(packet.dueUs, now); return }

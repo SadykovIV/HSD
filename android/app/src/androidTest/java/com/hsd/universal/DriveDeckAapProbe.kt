@@ -18,6 +18,8 @@ import com.hsd.universal.desktop.DriveDeckFullscreenActivity
 import com.hsd.universal.dex.*
 import com.hsd.universal.qa.VdmProbeHost
 import net.prototux.aare.aap.MemoryPinStore
+import net.prototux.aare.aap.PhoneIdentity
+import net.prototux.aare.aap.PinStore
 import net.prototux.aare.aap.SocketTransport
 import net.prototux.aare.aap.Transport
 import net.prototux.aare.transport.UsbAccessoryTransport
@@ -66,6 +68,7 @@ class DriveDeckAapProbe : Instrumentation() {
     private var usbActivation = false
     private var wifiOffRoute: ProjectionRoute? = null
     private var initialFocus = HeadUnitSimulator.InitialFocus.IMMEDIATE
+    private var interruptUsb = false
     private var hevc = false
     override fun onCreate(arguments: Bundle?) {
         super.onCreate(arguments)
@@ -110,6 +113,7 @@ class DriveDeckAapProbe : Instrumentation() {
         usbActivation = arguments?.getString("protocol") == "usb-activation"
         wifiOffRoute = arguments?.getString("wifiOffRoute")?.let(ProjectionRoute::valueOf)
         arguments?.getString("initialFocus")?.let { initialFocus = HeadUnitSimulator.InitialFocus.valueOf(it) }
+        interruptUsb = arguments?.getString("fault") == "usb-write"
         start()
     }
     override fun onStart() {
@@ -364,6 +368,7 @@ class DriveDeckAapProbe : Instrumentation() {
                             else -> null
                         }
                         val version = when {
+                            interruptUsb -> 1 to 4
                             v13 -> 1 to 3
                             v15 -> 1 to 5
                             v4 || rejected != null || silentAuth -> 4 to 0
@@ -372,12 +377,24 @@ class DriveDeckAapProbe : Instrumentation() {
                         }
                         val hu = HeadUnitSimulator(car, authorizationStatus = if (silentAuth) null else if (receiverClock != null) 0 else rejected ?: 0,
                             disconnectDuringTls = disconnectDuringTls, encryptAuthorization = encryptAuthorization,
-                            receiverClock = receiverClock, initialFocus = initialFocus,
+                            receiverClock = receiverClock, initialFocus = initialFocus, requestPings = !interruptUsb,
                             protocolVersion = version, width = test?.panelW ?: 1280, height = test?.panelH ?: 720,
                             previousUsbFrames = oldUsbFrames, offeredModes = test?.modes, offeredIndices = test?.indices ?: listOf(0), maxUnacked = if (modern) 1 else 4, modernNoAcks = modern, videoOut = video, videoCodec = codec)
                         val peer = if (authCase) "usb|qa-refusal-${java.util.UUID.randomUUID()}" else "qa-wired"
-                        val projection = AutoProjection(context, phone, sender, if (authCase) identity else pins, peer,
-                            { statuses.add(it) }, { statuses.add(it); closed.countDown() })
+                        val ready = CountDownLatch(1)
+                        val failWrites = java.util.concurrent.atomic.AtomicBoolean()
+                        val reopenChecked = CountDownLatch(1)
+                        val transport = if (!interruptUsb) phone else object : Transport by phone {
+                            override val output = object : java.io.FilterOutputStream(phone.output) {
+                                override fun write(bytes: ByteArray, offset: Int, length: Int) {
+                                    if (failWrites.get()) throw java.io.IOException("write failed: EIO (I/O error)")
+                                    out.write(bytes, offset, length)
+                                }
+                            }
+                        }
+                        val projection = AutoProjection(context, transport, sender, if (authCase) identity else pins, peer,
+                            { statuses.add(it) }, { statuses.add(it); closed.countDown() }, ready::countDown,
+                            canReopenUsb = { reopenChecked.countDown(); interruptUsb })
                         try {
                             runOnMainSync { projection.start() }
                             if (lateUsbVersion) {
@@ -436,6 +453,36 @@ class DriveDeckAapProbe : Instrumentation() {
                             check(pins.get("qa-wired").contains(fingerprint(hu.huCert.certificate)))
                             check(hu.openedChannels.containsAll(listOf(hu.video, hu.input)))
                             await { DexState.running && DexState.displayId > 0 && hu.codecConfigs.get() > 0 && hu.videoFrames.get() >= 20 }
+                            if (initialFocus == HeadUnitSimulator.InitialFocus.UNCONFIRMED) {
+                                val sessionId = requireNotNull(hu.videoStart).sessionId
+                                val frames = hu.videoFrames.get()
+                                hu.acknowledgeVideo(sessionId + 1)
+                                await("frames continue without a receiver confirmation") { hu.videoFrames.get() >= frames + 8 }
+                                check(ready.count == 1L && !projection.freshVideo() && !DesktopAudioState.running &&
+                                    statuses.contains(context.getString(R.string.aa_wait_receiver_video)))
+                                if (interruptUsb) hu.tap(240, 240) else hu.acknowledgeVideo(sessionId)
+                                check(ready.await(3, TimeUnit.SECONDS) && projection.freshVideo())
+                                result.putString("receiver_confirmation", "local writes and stale ACK ignored; confirmed by " +
+                                    if (interruptUsb) "display input" else "current stream ACK")
+                                hu.requestFocusProjected()
+                            }
+                            check(ready.await(3, TimeUnit.SECONDS))
+                            val sessionId = hu.videoStart?.sessionId
+                            val starts = hu.decodableStarts.get()
+                            hu.requestFocusProjected()
+                            await("decoder restart in the current video session") { hu.decodableStarts.get() > starts }
+                            check(hu.videoStart?.sessionId == sessionId)
+                            result.putString("decoder_restart", "codec headers and independent frame with the original START")
+                            if (!interruptUsb) await("negotiated keepalive") { hu.pingsAnswered.get() > 0 }
+                            if (!shizuku && DesktopAudioAccess.hasPermission(context)) {
+                                await("ready audio sink") { projection.audioRate() != null }
+                                val nowUs = System.nanoTime() / 1000
+                                val audio = com.hsd.universal.aa.CarlifeAudio
+                                check(projection.audio(audio.MEDIA_INIT, ByteArray(0), nowUs))
+                                check(projection.audio(audio.MEDIA_DATA, ByteArray(1920), nowUs))
+                                check(hu.mediaFocusRequests.get() == 0 && hu.audioChunks.get() == 0)
+                                result.putString("startup_audio", "silent capture left the head unit's audio focus alone")
+                            }
                             result.putInt("received_video_frames", hu.videoFrames.get())
                             val display = DexState.displayId
                             fun size(id: Int) = context.getSystemService(android.hardware.display.DisplayManager::class.java)
@@ -570,7 +617,17 @@ class DriveDeckAapProbe : Instrumentation() {
                                 try {
                                     tone.play()
                                     await("non-silent AAP audio") { hu.nonSilentAudioChunks.get() > 0 }
+                                    check(hu.mediaFocusRequests.get() >= 1)
                                     result.putInt("AAP_audio_packets_with_signal", hu.nonSilentAudioChunks.get())
+                                    if (interruptUsb) {
+                                        check(isUsb && hu.pingsAnswered.get() == 0)
+                                        failWrites.set(true)
+                                        check(closed.await(10, TimeUnit.SECONDS) && projection.retryUsbOpen)
+                                        check(reopenChecked.count == 0L && !DexState.running && statuses.last().contains("EIO"))
+                                        checkUsbRecovery(context, sender, pins, peer, hu.huCert)
+                                        result.putString("usb_interruption", "AAP 1.4 write EIO during video and music; new descriptor to the same receiver resumed projection")
+                                        return@videoTest
+                                    }
                                 } finally { tone.release() }
                             } else {
                                 check(!DesktopAudioState.running)
@@ -610,6 +667,7 @@ class DriveDeckAapProbe : Instrumentation() {
                             }
                             hu.sayByeBye()
                             check(closed.await(18, TimeUnit.SECONDS)) { "DriveDeck failed to release on disconnect" }
+                            check(!projection.retryUsbOpen)
                             check(!DexState.running)
                         } finally {
                             runOnMainSync { projection.stop("Test session finished") }
@@ -633,6 +691,27 @@ class DriveDeckAapProbe : Instrumentation() {
             finish(Activity.RESULT_CANCELED, result)
         }
     }
+    private fun checkUsbRecovery(context: Context, sender: PhoneIdentity, pins: PinStore, peer: String, receiver: PhoneIdentity) {
+        val descriptors = ParcelFileDescriptor.createSocketPair()
+        val hu = HeadUnitSimulator(localPipe(descriptors[1]), protocolVersion = 1 to 4, huCert = receiver)
+        val ready = CountDownLatch(1)
+        val closed = CountDownLatch(1)
+        val next = AutoProjection(context, UsbAccessoryTransport(descriptors[0], "USB reopened accessory"),
+            sender, pins, peer, {}, { closed.countDown() }, ready::countDown)
+        try {
+            runOnMainSync { next.start() }
+            hu.start()
+            check(ready.await(18, TimeUnit.SECONDS) && hu.firstVideoFrame.await(3, TimeUnit.SECONDS))
+            await("replacement USB session delivering video") { next.freshVideo() && hu.videoFrames.get() >= 10 }
+            hu.sayByeBye()
+            check(closed.await(10, TimeUnit.SECONDS) && !next.retryUsbOpen && !DexState.running)
+        } finally {
+            runOnMainSync { next.stop("USB recovery test finished") }
+            hu.stop()
+            closed.await(8, TimeUnit.SECONDS)
+        }
+    }
+
     private fun checkUsbReopen() {
         val old = ParcelFileDescriptor.createSocketPair()
         val retired = UsbAccessoryTransport(old[0], "USB test accessory")

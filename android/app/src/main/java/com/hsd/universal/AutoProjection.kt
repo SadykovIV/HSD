@@ -31,7 +31,8 @@ import net.prototux.aare.aap.channels.VideoChannel
 /** AAP as the phone. The receiver selects channels and DriveDeck produces the actual pixels. */
 internal class AutoProjection(private val context: Context, transport: Transport, identity: PhoneIdentity,
                               private val pins: PinStore, private val peer: String, private val status: (String) -> Unit,
-                              private val ended: (String) -> Unit, private val ready: () -> Unit = {}) :
+                              private val ended: (String) -> Unit, private val ready: () -> Unit = {},
+                              private val canReopenUsb: () -> Boolean = { false }) :
     ProjectionSession, AapSession.Callbacks, VideoChannel.Listener, InputChannel.Listener, DesktopProjectionOutput {
     private val cluster = AutoCluster(context)
     private val wired = transport.usbAccessory
@@ -48,15 +49,30 @@ internal class AutoProjection(private val context: Context, transport: Transport
     private val calibration = com.hsd.universal.link.ReceiverAudioCalibration(context, "aap-" + com.hsd.universal.ProjectionRoute.selected(context).name.lowercase())
     private val audioEncoder = AutoAudioEncoder()
     @Volatile private var audioEncoderFailed = false
+    // Writer completions from a retired focus grant must not arm the next grant's unplug policy.
+    private class AudioGrant {
+        val delivered = java.util.concurrent.atomic.AtomicBoolean()
+        var firstSignalUs: Long? = null // PCM worker only
+        val onWritten: () -> Unit = {
+            if (delivered.compareAndSet(false, true)) AppLog.i("AAP AUDIO first packet with playback signal written", false)
+        }
+    }
+    @Volatile private var audioGrant: AudioGrant? = null
     private val pcmQueue = AutoPcmQueue(calibration) { data, timestamp ->
         val sink = playback
-        if (!stopping && audioFocus && sink != null) {
+        val grant = audioGrant
+        if (!stopping && grant != null && sink != null) {
             val type = sink.service.mediaSinkService.availableType
-            if (type == MediaCodecType.MEDIA_CODEC_AUDIO_PCM) sink.sendPcm(data, 10, data.size - 10, timestamp)
+            val hasSignal = !grant.delivered.get() && (10 until data.size).any { data[it] != 0.toByte() }
+            if (hasSignal && grant.firstSignalUs == null) grant.firstSignalUs = timestamp
+            if (type == MediaCodecType.MEDIA_CODEC_AUDIO_PCM)
+                sink.sendPcm(data, 10, data.size - 10, timestamp, if (hasSignal) grant.onWritten else null)
             else if (!audioEncoderFailed) sink.config?.let { config ->
                 try {
                     audioEncoder.offer(data, 10, timestamp, config.samplingRate, type == MediaCodecType.MEDIA_CODEC_AUDIO_AAC_LC_ADTS) { out, pts ->
-                        sink.sendPcm(out, 10, out.size - 10, pts)
+                        val signal = grant.firstSignalUs
+                        sink.sendPcm(out, 10, out.size - 10, pts,
+                            if (!grant.delivered.get() && signal != null && pts >= signal) grant.onWritten else null)
                     }
                 } catch (error: Exception) {
                     audioEncoderFailed = true
@@ -101,8 +117,8 @@ internal class AutoProjection(private val context: Context, transport: Transport
     private lateinit var videoChannel: VideoChannel
     private var input: InputChannel? = null
     private var playback: AudioChannel? = null
-    @Volatile private var audioFocus = false
     private var audioRequested = false
+    private var awaitingAudioFocus = false
     private var width = 0
     private var height = 0
     @Volatile private var runningConfig: VideoConfiguration? = null
@@ -249,6 +265,7 @@ internal class AutoProjection(private val context: Context, transport: Transport
                 runningConfig = config
                 codecConfig = null
                 pendingConfiguration = null
+                if (!videoChannel.receiverConfirmed) delivery.start(SystemClock.elapsedRealtime())
                 old.requestKeyFrame()
                 return
             }
@@ -302,9 +319,10 @@ internal class AutoProjection(private val context: Context, transport: Transport
         AppLog.i("AAP VIDEO focus=${videoChannel.focusMode} started=${videoChannel.started}", false)
         main.post { if (!stopping) updateFirstFrameDeadline() }
         if (projected) {
-            delivery.start(SystemClock.elapsedRealtime())
+            if (!delivery.hasPicture()) delivery.start(SystemClock.elapsedRealtime())
             onKeyFrameNeeded()
         } else {
+            CarLifeState.waitingForVideoReceiver = false
             val hadPicture = delivery.hasPicture()
             delivery.pause()
             pcmQueue.clear()
@@ -359,23 +377,42 @@ internal class AutoProjection(private val context: Context, transport: Transport
         if (stopping || !videoChannel.acceptsVideo) return
         writtenBytes.addAndGet(bytes.toLong())
         pcmQueue.videoWritten(ptsUs)
-        delivery.frameWritten(SystemClock.elapsedRealtime())
+        if (videoChannel.receiverConfirmed) delivery.frameWritten(SystemClock.elapsedRealtime())
         if (keyFrame && !submitted) {
             submitted = true
-            ready()
             main.removeCallbacks(deadline)
             com.hsd.universal.AppLog.i("Android Auto: первый ключевой кадр записан, $width × $height, $bytes байт")
+            main.post {
+                if (!stopping && videoChannel.acceptsVideo && !videoChannel.receiverConfirmed) {
+                    CarLifeState.waitingForVideoReceiver = true
+                    status(context.getString(R.string.aa_wait_receiver_video))
+                }
+            }
+        }
+    }
+
+    override fun onReceiverConfirmed() {
+        main.post {
+            if (stopping || !videoChannel.receiverConfirmed || !videoChannel.acceptsVideo) return@post
+            val ageMs = (System.nanoTime() - videoChannel.lastFrameWriteNanos).coerceAtLeast(0) / 1_000_000
+            delivery.frameWritten(SystemClock.elapsedRealtime() - ageMs)
+            CarLifeState.waitingForVideoReceiver = false
+            ready()
+            AppLog.i("AAP VIDEO receiver confirmed · focus=${videoChannel.focusMode ?: "implicit"}", false)
             val message = "$profile · $width × $height · ${if (videoChannel.codec == h265) "H.265" else "H.264"}"
             com.hsd.universal.CarLifeState.video = message
             publish(message)
         }
     }
-    override fun freshVideo() = !stopping && delivery.isFlowing(SystemClock.elapsedRealtime())
+    override fun freshVideo() = !stopping && ::videoChannel.isInitialized && videoChannel.receiverConfirmed &&
+        videoChannel.acceptsVideo && delivery.isFlowing(SystemClock.elapsedRealtime())
 
     override fun onInput(report: InputReport) {
         val desktop = source ?: return
         if (stopping || !videoChannel.acceptsVideo || !submitted ||
             videoChannel.focusMode == VideoFocusMode.VIDEO_FOCUS_PROJECTED_NO_INPUT_FOCUS) return
+        if (report.touchEvent.pointerDataCount > 0 || report.keyEvent.keysCount > 0 || report.relativeEvent.dataCount > 0)
+            videoChannel.noteDisplayInput()
         if (report.hasTouchEvent()) onTouch(desktop, report.touchEvent)
         // The desktop API injects a full down/up pair for a key.
         for (key in report.keyEvent.keysList) if (!key.down) {
@@ -422,46 +459,72 @@ internal class AutoProjection(private val context: Context, transport: Transport
         if (stopping || audioRate() == null) return false
         when (type) {
             CarlifeAudio.MEDIA_STOP, CarlifeAudio.MEDIA_PAUSE -> {
-                pcmQueue.clear()
+                audioGrant = null
+                pcmQueue.setPlaying(false)
                 sink.stopPlayback()
+                audioEncoder.close()
                 if (audioRequested) session.requestAudioFocus(AudioFocusRequestType.AUDIO_FOCUS_RELEASE, Priority.AUDIO)
                 audioRequested = false
-                audioFocus = false
+                awaitingAudioFocus = false
             }
-            CarlifeAudio.MEDIA_INIT, CarlifeAudio.MEDIA_RESUME, CarlifeAudio.MEDIA_DATA -> {
+            CarlifeAudio.MEDIA_INIT, CarlifeAudio.MEDIA_RESUME -> {
+                if (audioGrant == null && !awaitingAudioFocus) audioRequested = false
+            }
+            CarlifeAudio.MEDIA_DATA -> {
                 if (!audioRequested) {
+                    if (pcm.all { it == 0.toByte() }) return true
                     audioRequested = true
-                    session.requestAudioFocus(AudioFocusRequestType.AUDIO_FOCUS_GAIN)
+                    if (audioGrant == null) {
+                        awaitingAudioFocus = true
+                        AppLog.i("AAP AUDIO requesting media focus for playback", false)
+                        session.requestAudioFocus(AudioFocusRequestType.AUDIO_FOCUS_GAIN, Priority.AUDIO)
+                    } else {
+                        sink.startPlayback()
+                        pcmQueue.setPlaying(true)
+                    }
                 }
-                if (type == CarlifeAudio.MEDIA_DATA) {
-                    if (!audioFocus) return false
-                    sink.startPlayback()
-                    val bytes = ByteArray(10 + pcm.size)
-                    pcm.copyInto(bytes, 10)
-                    return pcmQueue.enqueue(bytes, ptsUs)
-                }
+                if (audioGrant == null && !awaitingAudioFocus) return false
+                val bytes = ByteArray(10 + pcm.size)
+                pcm.copyInto(bytes, 10)
+                return pcmQueue.enqueue(bytes, ptsUs)
             }
             else -> return false
         }
         return true
     }
 
-    override fun onAudioFocus(session: AapSession, notification: AudioFocusNotification) {
-        audioFocus = notification.focusState.number in listOf(1, 2, 6)
-        if (!audioFocus) pcmQueue.clear()
+    @Synchronized override fun onAudioFocus(session: AapSession, notification: AudioFocusNotification) {
+        if (stopping) return
+        awaitingAudioFocus = false
+        AppLog.i("AAP AUDIO receiver focus=${notification.focusState}", false)
+        if (notification.focusState.number in listOf(1, 2, 6)) {
+            if (audioGrant == null) audioGrant = AudioGrant()
+            if (audioRequested) {
+                playback?.startPlayback()
+                pcmQueue.setPlaying(true)
+            }
+        } else {
+            audioGrant = null
+            pcmQueue.setPlaying(false)
+            playback?.stopPlayback()
+            audioEncoder.close()
+        }
     }
     override fun onClosed(session: AapSession, reason: String, error: Throwable?) {
         val oldUsb = session.closedDuring == AapSession.State.VERSION && session.oldUsbFramesBeforeVersion > 0
-        retryUsbOpen = !stopping && !oldUsb && session.closedDuring == AapSession.State.VERSION && error is java.io.IOException
         networkInterrupted = !stopping && session.closedDuring == AapSession.State.RUNNING &&
             error is java.io.IOException && error !is javax.net.ssl.SSLException
+        retryUsbOpen = wired && !stopping && error is java.io.IOException &&
+            ((!oldUsb && session.closedDuring == AapSession.State.VERSION) || networkInterrupted)
         val lostUsbPicture = wired && !stopping && error is java.io.IOException && delivery.hasPicture()
+        val carriedAudio = audioGrant?.delivered?.get() == true
         val interruptedAuth = !stopping && error != null &&
             (session.closedDuring == AapSession.State.HANDSHAKE || session.closedDuring == AapSession.State.AUTH)
         stopping = true
         main.post {
-            if (lostUsbPicture) source?.outputLost(true, carriedAudio = true)
+            if (lostUsbPicture) source?.outputLost(true, carriedAudio && !(retryUsbOpen && canReopenUsb()))
             if (wired) CarLifeState.waitingForUsbVersion = false
+            CarLifeState.waitingForVideoReceiver = false
             main.removeCallbacks(sample)
             pcmQueue.close()
             audioEncoder.close()

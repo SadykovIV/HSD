@@ -11,6 +11,19 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class CarPlayRfcommTest {
+    @Test fun outgoingSocketFactoryCanRecoverDuringServiceDiscovery() {
+        ProjectionResources().use { life ->
+            var opens = 0
+            val socket = Closeable {}
+            val result = dialCarPlayRfcomm(life, open = {
+                if (++opens == 1) throw IOException("service unavailable")
+                socket
+            }, connect = {}, log = {}, initialRetryMs = 1)
+            assertSame(socket, result)
+            assertEquals(2, opens)
+        }
+    }
+
     @Test fun lateAccessoryServiceGetsAFreshSocketAndRetiresFailedSockets() {
         var opened = 0
         var attempts = 0

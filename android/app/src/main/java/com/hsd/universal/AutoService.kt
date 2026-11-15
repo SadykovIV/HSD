@@ -137,8 +137,12 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
                 }
             }
             if (mode == ProjectionRoute.USB) {
-                device = usb.autoAccessory()?.takeIf(usb::hasPermission)
+                val current = usb.autoAccessory()?.takeIf(usb::hasPermission)
                     ?: error(service.getString(R.string.desktop_connect_the_cable_and_allow_hsd_to_open_the))
+                check(usbOpenRetries == 0 || current == device) {
+                    service.getString(R.string.desktop_connect_the_cable_and_allow_hsd_to_open_the)
+                }
+                device = current
             }
         } catch (error: RuntimeException) {
             complete(error.message ?: service.getString(R.string.desktop_could_not_start_connection))
@@ -152,25 +156,25 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
             try {
                 val publish: (String) -> Unit = { message -> main.post { if (ticket == generation) update(message) } }
                 val ended: (String) -> Unit = { message -> main.post { if (ticket == generation) complete(message) } }
+                val ready: () -> Unit = {
+                    main.post {
+                        if (ticket == generation && !stopping && !CarLifeState.running) {
+                            CarLifeState.running = true
+                            if (mode == ProjectionRoute.USB) Actions.onUsbSessionStarted(service)
+                        }
+                    }
+                }
                 val session = if (mode == ProjectionRoute.CARPLAY) {
-                    carPlay(lifetime, publish, ended)
+                    CarPlayProjection(this, lifetime, publish, ended, ready)
                 } else {
                     val identity = ProjectionIdentity(this)
                     val (transport, peer, phone) = openAuto(mode, attached, lifetime, identity)
                     lifetime.own(transport::close)
-                    AutoProjection(this, transport, phone, identity, peer, publish, ended) {
-                        main.post {
-                            if (mode == ProjectionRoute.USB && ticket == generation && !stopping && !CarLifeState.running) {
-                                CarLifeState.running = true
-                                Actions.onUsbSessionStarted(service)
-                            }
-                        }
-                    }
+                    AutoProjection(this, transport, phone, identity, peer, publish, ended, ready, ::canReopenUsb)
                 }
                 main.post {
                     if (ticket == generation && !stopping) {
                         projection = session
-                        CarLifeState.running = mode != ProjectionRoute.USB
                         runCatching { session.start() }.onFailure { finish(it.message ?: service.getString(R.string.desktop_failed_to_start_projection)) }
                     } else lifetime.close()
                 }
@@ -235,9 +239,6 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
         }
     }
 
-    private fun carPlay(lifetime: ProjectionResources, publish: (String) -> Unit, ended: (String) -> Unit): ProjectionSession =
-        CarPlayProjection(this, lifetime, publish, ended)
-
     private fun notification(message: String): Notification {
         val open = PendingIntent.getActivity(this, 1, Intent(this, DexSetupActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         val stop = PendingIntent.getService(this, 2, Intent(this, AutoService::class.java).setAction(BridgeService.ACTION_STOP), PendingIntent.FLAG_IMMUTABLE)
@@ -272,6 +273,11 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
         reconnectUntil = 0
         if (projection == null) complete(message) else projection?.stop(message)
     }
+    private fun canReopenUsb(): Boolean {
+        val attached = device ?: return false
+        return route == ProjectionRoute.USB && !stopping && usbOpenRetries < 2 &&
+            runCatching { usb.hasPermission(attached) && usb.autoAccessory() == attached }.getOrDefault(false)
+    }
     private fun complete(message: String, connectError: Boolean = false) {
         generation++
         val carPlay = projection as? CarPlayProjection
@@ -286,14 +292,16 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
         resources = null
         currentResources?.close()
         val attached = device
+        val auto = projection as? AutoProjection
         val usbFailed = route == ProjectionRoute.USB && !stopping && attached != null &&
-            (!CarLifeState.running || (projection as? AutoProjection)?.rejectedVideo == true)
-        if (usbFailed && (connectError || (projection as? AutoProjection)?.retryUsbOpen == true) &&
-            usbOpenRetries < 2 && runCatching { usb.autoAccessory() == attached }.getOrDefault(false)) {
+            (!CarLifeState.running || auto?.rejectedVideo == true || auto?.retryUsbOpen == true)
+        if ((connectError || auto?.retryUsbOpen == true) && canReopenUsb()) {
             projection = null
+            CarLifeState.running = false
             retryPending = true
             usbOpenRetries++
-            update(service.getString(R.string.desktop_usb_is_not_ready_retrying_android_auto_negotiation))
+            AppLog.i("Android Auto USB · reopening attached accessory · attempt=$usbOpenRetries", false)
+            update(service.getString(if (lost) R.string.aa_usb_recovering else R.string.desktop_usb_is_not_ready_retrying_android_auto_negotiation))
             main.postDelayed(reconnect, usbOpenRetries * 750L)
             return
         }
@@ -304,6 +312,7 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
         }
         CarLifeState.running = false
         projection = null
+        com.hsd.universal.AppLog.i("${route.protocol}: $message")
         if (!stopping && route.usesHeadUnitHotspot) {
             val radio = ProjectionWifi.read(service)
             if (radio.needsEnable) {
@@ -313,7 +322,6 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
         }
         CarLifeState.waitingForProjectionWifi = false
         CarLifeState.setStatus(message)
-        com.hsd.universal.AppLog.i("${route.protocol}: $message")
         getSharedPreferences("projection", MODE_PRIVATE).edit()
             .putString("last", message).putString("last." + route.name, message).apply()
         if (!stopping && route == ProjectionRoute.CARPLAY && carPlay != null) {

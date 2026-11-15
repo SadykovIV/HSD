@@ -23,6 +23,9 @@ import io.github.shaonialife.cardeck.transport.StreamDuplexStream
 import java.net.InetAddress
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
 import net.prototux.aare.aap.AapLog
 import net.prototux.aare.aap.wireless.*
@@ -109,8 +112,12 @@ internal class CarPlayBootstrap(
         check(adapter.isEnabled) { "Включите Bluetooth и повторите подключение" }
         val device = adapter.getRemoteDevice(remote)
         awaitBond(device, adapter)
-        val local = LocalBluetoothIdentity.resolve(context, life)
-        status("CarPlay · выберите Apple CarPlay на магнитоле. Ожидаю соединение Bluetooth…")
+        val name = device.name?.takeIf(String::isNotBlank) ?: "CarPlay"
+        status(context.getString(R.string.carplay_wait_service, name))
+        // Resolve our identity alongside SDP so neither Bluetooth role misses the peer's handshake.
+        val identity = FutureTask { LocalBluetoothIdentity.resolve(context, life) }
+        life.own { identity.cancel(true) }
+        kotlin.concurrent.thread(name = "CarPlay local identity", isDaemon = true) { identity.run() }
         fun trace(message: String) = AppLog.i("CarPlay Bluetooth · $message", false)
         val cached = runCatching { device.uuids?.any { it.uuid == ACCESSORY_IAP2 } }.getOrNull()
         trace("bonded · accessory iAP2 in SDP cache=${cached ?: "unknown"}")
@@ -133,18 +140,28 @@ internal class CarPlayBootstrap(
                 CarPlayBluetoothService.release(listener)
             }
         }, outgoing = { resources ->
+            if (cached != true) refreshAccessoryServices(device, resources, ::trace)
             dialCarPlayRfcomm(resources, open = {
                 check(adapter.isEnabled && device.bondState == BluetoothDevice.BOND_BONDED) {
                     "Проверьте Bluetooth и сопряжение с магнитолой"
                 }
                 IapCandidate(device.createRfcommSocketToServiceRecord(ACCESSORY_IAP2))
             }, connect = { it.negotiate(true) }, log = ::trace)
-        }, log = ::trace)
+        }, log = ::trace, timeoutMessage = context.getString(R.string.carplay_service_timeout))
+        val local by lazy {
+            try { identity.get() } catch (error: ExecutionException) { throw error.cause ?: error }
+        }
         val link = candidate.link
         val deviceInfo = CarPlayDeviceInformation(connectedDeviceUuids.acquire(life))
         val wifi = HeadUnitNetwork(context, AapLog.Stdout, 60_000, requireIpv4 = false)
         life.own(wifi::release)
-        var stage = R.string.carplay_stage_identification
+        var stage = 0
+        fun advance(next: Int) {
+            if (stage == next) return
+            stage = next
+            status("CarPlay · ${context.getString(next)}")
+        }
+        advance(R.string.carplay_stage_identification)
         var bonjour: CarPlayDiscovery? = null
         var direct: Pair<String, Int>? = null
         var peerKey: ByteArray? = null
@@ -165,14 +182,13 @@ internal class CarPlayBootstrap(
                     4 -> WifiSecurity.WPA3_PERSONAL
                     else -> error("Неподдерживаемая защита сети CarPlay ($sec)")
                 }
-            stage = R.string.carplay_stage_wifi
-            status("CarPlay · подключаюсь к сети магнитолы")
+            advance(R.string.carplay_stage_wifi)
             val result = wifi.join(WifiCredentials(ssid, password, null, security, sec, null))
             if (result is JoinResult.Failed) error(if (result.status == WppStatus.PHONE_WIFI_DISABLED) result.message
                 else context.getString(R.string.projection_wifi_join_failed, result.message))
             val network = checkNotNull(wifi.network) { "Соединение с Wi-Fi магнитолы завершено" }
             bonjour = CarPlayDiscovery(context, network, local, life, ::trace).also { it.start() }
-            stage = R.string.carplay_stage_discovery
+            advance(R.string.carplay_stage_discovery)
             trace("Wi-Fi joined · waiting for CarPlay endpoint")
         }
         var setup: CarPlayWirelessSetup? = null
@@ -206,18 +222,18 @@ internal class CarPlayBootstrap(
                             fun ids(list: List<Int>) = list.distinct().take(64).joinToString(",") { it.toString(16) }.ifEmpty { "none" }
                             trace("identified · sends=${ids(sends)} · receives=${ids(receives)}")
                             exchange.identified(sends)
-                            stage = if (exchange.stage == AccessoryAuthExchange.Stage.SERIAL_OR_CERTIFICATE)
-                                R.string.carplay_stage_serial_or_certificate else R.string.carplay_stage_certificate
+                            advance(if (exchange.stage == AccessoryAuthExchange.Stage.SERIAL_OR_CERTIFICATE)
+                                R.string.carplay_stage_serial_or_certificate else R.string.carplay_stage_certificate)
                         }
                         0xaa06, 0xaa01, 0xaa03 -> {
                             exchange.receive(frame.messageId, fields)
                             when (frame.messageId) {
                                 0xaa06 -> if (exchange.stage == AccessoryAuthExchange.Stage.CERTIFICATE)
-                                    stage = R.string.carplay_stage_certificate
-                                0xaa01 -> stage = R.string.carplay_stage_signature
+                                    advance(R.string.carplay_stage_certificate)
+                                0xaa01 -> advance(R.string.carplay_stage_signature)
                                 0xaa03 -> {
                                     trace("accessory verified · requesting Wi-Fi session")
-                                    stage = R.string.carplay_stage_credentials
+                                    advance(R.string.carplay_stage_credentials)
                                     checkNotNull(setup).announce(local, deviceInfo, android.os.SystemClock.elapsedRealtime(), ::send)
                                 }
                             }
@@ -252,5 +268,33 @@ internal class CarPlayBootstrap(
         }
         val phase = context.getString(stage)
         error(context.getString(if (link.isAlive || bonjour != null) R.string.carplay_setup_timeout else R.string.carplay_setup_closed, phase))
+    }
+
+    /** Only the outgoing role waits for SDP. Incoming RFCOMM remains available during the lookup. */
+    private fun refreshAccessoryServices(device: BluetoothDevice, resources: ProjectionResources, trace: (String) -> Unit) {
+        val finished = CountDownLatch(1)
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                @Suppress("DEPRECATION") val peer = intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
+                if (peer == device) finished.countDown()
+            }
+        }
+        val filter = IntentFilter(BluetoothDevice.ACTION_UUID)
+        resources.own(finished::countDown)
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= 33) context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+            else @Suppress("DEPRECATION") context.registerReceiver(receiver, filter)
+            try {
+                if (resources.isClosed) return
+                val requested = device.fetchUuidsWithSdp()
+                val replied = requested && finished.await(6, TimeUnit.SECONDS)
+                if (!resources.isClosed) {
+                    val uuids = device.uuids
+                    trace("SDP refresh · requested=$requested reply=$replied accessory iAP2=${uuids?.any { it.uuid == ACCESSORY_IAP2 } ?: "unknown"}")
+                }
+            } finally { context.unregisterReceiver(receiver) }
+        } catch (error: SecurityException) {
+            trace("SDP refresh unavailable · ${error.javaClass.simpleName}")
+        }
     }
 }
