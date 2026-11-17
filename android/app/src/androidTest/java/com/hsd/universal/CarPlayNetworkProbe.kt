@@ -33,6 +33,13 @@ internal class CarPlayNetworkProbe(private val context: Context, private val aac
     private val delayedFeedback = CompletableFuture<Int>()
     private val udpKeepalives = java.util.concurrent.atomic.AtomicInteger()
     private val watchdogFailure = CompletableFuture<String>()
+    private val hidConfiguration = CompletableFuture<Boolean>()
+    private val timingReply = CompletableFuture<Boolean>()
+    private val videoFrames = java.util.concurrent.atomic.AtomicInteger()
+    private val eventAcks = java.util.concurrent.atomic.AtomicInteger()
+    private val videoFinished = CompletableFuture<Boolean>()
+    private val audioFinished = CompletableFuture<Boolean>()
+    private val gesturesFinished = CompletableFuture<Boolean>()
 
     /** A second Android codec decodes the receiver's decrypted raw access units. Check the
      * fundamental against its neighbours, not just the presence of non-zero compressed data. */
@@ -144,6 +151,7 @@ internal class CarPlayNetworkProbe(private val context: Context, private val aac
                         BinaryPlist.encode(
                             mapOf(
                                 "keepAliveSendStatsAsBody" to aac,
+                                "hidDevices" to listOf(mapOf("uuid" to "touch", "hidDescriptor" to byteArrayOf(5, 13, 9, 4))),
                                 "displays" to
                                     listOf(
                                         mapOf(
@@ -164,8 +172,22 @@ internal class CarPlayNetworkProbe(private val context: Context, private val aac
                             )
                         )
                     method == "SETUP" && path == "/setup" -> {
-                        check(((BinaryPlist.parse(body) as Map<*, *>)["timingPort"] as Long) > 0)
-                        val setup = mutableMapOf("eventPort" to events.localPort.toLong())
+                        val timingPort = ((BinaryPlist.parse(body) as Map<*, *>)["timingPort"] as Long).toInt()
+                        check(timingPort > 0)
+                        task("CarPlay QA timing") {
+                            DatagramSocket(0, local).use { timing ->
+                                timing.soTimeout = 3000
+                                val request = ByteArray(32)
+                                request[0] = 0x80.toByte(); request[1] = 0xd2.toByte(); request[3] = 7
+                                byteArrayOf(0x83.toByte(), 0xc1.toByte(), 0x17, 0xcc.toByte(), 0x12, 0x34, 0x56, 0x78).copyInto(request, 24)
+                                timing.send(DatagramPacket(request, request.size, local, timingPort))
+                                val reply = DatagramPacket(ByteArray(256), 256)
+                                timing.receive(reply)
+                                timingReply.complete(reply.length == 32 && reply.data[1] == 0xd3.toByte() &&
+                                    reply.data.copyOfRange(8, 16).contentEquals(request.copyOfRange(24, 32)))
+                            }
+                        }
+                        val setup = mutableMapOf("eventPort" to if (aac) events.localPort.toShort().toLong() else events.localPort.toLong())
                         if (aac) {
                             setup["keepAlivePort"] = idle.localPort.toShort().toLong()
                             task("CarPlay QA idle watchdog") { watchKeepalives(socket) }
@@ -197,6 +219,11 @@ internal class CarPlayNetworkProbe(private val context: Context, private val aac
                     }
                     method == "RECORD" -> {
                         record.countDown()
+                        byteArrayOf()
+                    }
+                    path == "/command" -> {
+                        val cmd = BinaryPlist.parse(body) as Map<*, *>
+                        if (cmd["type"] == "hidSetInputMode") hidConfiguration.complete(true)
                         byteArrayOf()
                     }
                     aac && path == "/feedback" && !delayedFeedback.isDone -> {
@@ -260,7 +287,6 @@ internal class CarPlayNetworkProbe(private val context: Context, private val aac
                 heartbeats.incrementAndGet()
                 continue
             }
-            if (captured.isDone) continue
             if (head[4].toInt() == 1) {
                 check(head[6].toInt() == 4 && buf.getFloat(16) == 320f && buf.getFloat(20) == 240f)
                 val config = DataInputStream(body.inputStream())
@@ -283,8 +309,11 @@ internal class CarPlayNetworkProbe(private val context: Context, private val aac
                 frame.write(ByteArray(n).also(nals::readFully))
             }
             check(csd.isNotEmpty())
-            File(context.cacheDir, "carplay-receiver.h264").writeBytes(csd + frame.toByteArray())
-            captured.complete(decode(csd, frame.toByteArray()))
+            videoFrames.incrementAndGet()
+            if (!captured.isDone) {
+                File(context.cacheDir, "carplay-receiver.h264").writeBytes(csd + frame.toByteArray())
+                captured.complete(decode(csd, frame.toByteArray()))
+            }
         }
     }
 
@@ -299,6 +328,7 @@ internal class CarPlayNetworkProbe(private val context: Context, private val aac
         val codec = MediaCodec.createByCodecName(info.name)
         try {
             val f = MediaFormat.createVideoFormat("video/avc", 320, 240)
+            f.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, frame.size)
             val csd = com.hsd.universal.aa.H264Stream.nalUnits(headers)
             csd.forEachIndexed { i, b -> f.setByteBuffer("csd-" + i, ByteBuffer.wrap(b)) }
             codec.configure(f, null, null, 0)
@@ -337,7 +367,9 @@ internal class CarPlayNetworkProbe(private val context: Context, private val aac
             codec.configure(f, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
             codec.start()
             val info = MediaCodec.BufferInfo()
-            repeat(50) { n ->
+            val started = System.nanoTime()
+            repeat(if (aac) 900 else 50) { n ->
+                if (aac) waitUntil(started + n * 1_000_000_000L / 30)
                 val id = codec.dequeueInputBuffer(35000)
                 if (id >= 0) {
                     val pixels =
@@ -356,12 +388,20 @@ internal class CarPlayNetworkProbe(private val context: Context, private val aac
                     val b = ByteArray(info.size)
                     codec.getOutputBuffer(o)!!.get(b)
                     codec.releaseOutputBuffer(o, false)
-                    if (b.isNotEmpty() && session.video.send(b, info.presentationTimeUs)) return
+                    if (b.isNotEmpty() && session.video.send(b, info.presentationTimeUs) && !aac) return
                 }
             }
-            error("No encoded frame")
+            check(aac && videoFrames.get() >= 600) { "Continuous video stopped: ${videoFrames.get()} frames" }
         } finally {
             codec.release()
+        }
+    }
+
+    private fun waitUntil(deadline: Long) {
+        while (true) {
+            val remaining = deadline - System.nanoTime()
+            if (remaining <= 0) return
+            TimeUnit.NANOSECONDS.sleep(remaining)
         }
     }
 
@@ -388,8 +428,10 @@ internal class CarPlayNetworkProbe(private val context: Context, private val aac
                         derive("Events-Read-Encryption-Key"),
                         derive("Events-Write-Encryption-Key"),
                     )
+                repeat(if (aac) 30 else 1) { index ->
+                val sequence = 7 + index
                 val request =
-                    "POST /command RTSP/1.0\r\nCSeq: 7\r\nContent-Length: ${message.size}\r\n\r\n"
+                    "POST /command ${if (aac) "HTTP/1.1" else "RTSP/1.0"}\r\nCSeq: $sequence\r\nContent-Length: ${message.size}\r\n\r\n"
                         .toByteArray() + message
                 s.getOutputStream().write(cipher.encrypt(request))
                 val d = DataInputStream(s.getInputStream())
@@ -399,7 +441,16 @@ internal class CarPlayNetworkProbe(private val context: Context, private val aac
                 packet[0] = a.toByte()
                 packet[1] = b.toByte()
                 d.readFully(packet, 2, packet.size - 2)
-                gesture.complete(cipher.decrypt(packet).data.decodeToString().contains("CSeq: 7"))
+                val reply = cipher.decrypt(packet).data.decodeToString()
+                check(reply.startsWith("${if (aac) "HTTP/1.1" else "RTSP/1.0"} 200 OK\r\n")) {
+                    "Receiver expected an event response, got a phone-originated request or wrong protocol"
+                }
+                check(reply.contains("CSeq: $sequence\r\n"))
+                eventAcks.incrementAndGet()
+                gesture.complete(true)
+                if (aac) Thread.sleep(1000)
+                }
+                gesturesFinished.complete(true)
             }
             val ep =
                 CarPlayEndpoint(
@@ -421,19 +472,35 @@ internal class CarPlayNetworkProbe(private val context: Context, private val aac
                 )
             val display = s.start()
             check(display.width == 320)
-            generateVideo(s)
+            if (aac) task("CarPlay QA continuous video") {
+                generateVideo(s)
+                videoFinished.complete(true)
+            } else generateVideo(s)
             audio.soTimeout = 5000
+            var previousAudioSequence: Int? = null
+            var previousAudioTimestamp: Long? = null
             fun receiveUnit(): ByteArray {
                 val data = DatagramPacket(ByteArray(8192),8192)
                 audio.receive(data)
                 val p = data.data.copyOf(data.length)
                 check((p[1].toInt() and 127) == if (aac) 102 else 100)
+                val header = ByteBuffer.wrap(p).order(ByteOrder.BIG_ENDIAN)
+                val sequence = header.getShort(2).toInt() and 65535
+                val timestamp = header.getInt(4).toLong() and 0xffffffffL
+                previousAudioSequence?.let { check(sequence == (it + 1) and 65535) { "RTP packet sequence gap" } }
+                previousAudioTimestamp?.let {
+                    check(timestamp == (it + if (aac) 1024 else 352) and 0xffffffffL) { "RTP sample clock gap" }
+                }
+                previousAudioSequence = sequence; previousAudioTimestamp = timestamp
                 return AirPlayCrypto.chachaOpen(AirPlayStreamKeys.chachaStreamKey(peer.pvShared, audioId.get()),
                     ByteArray(4) + p.takeLast(8).toByteArray(), p.copyOfRange(12, p.size-8), p.copyOfRange(4,12))
             }
             val verified = if (aac) {
                 val sender = checkNotNull(s.audio)
-                repeat(24) { n ->
+                task("CarPlay QA continuous audio") {
+                val started = System.nanoTime()
+                repeat(1292) { n ->
+                    waitUntil(started + n * 1024_000_000_000L / 44100)
                     val pcm = ByteBuffer.allocate(4096).order(ByteOrder.LITTLE_ENDIAN)
                     repeat(1024) { i ->
                         val sample = (3000 * kotlin.math.sin(2 * Math.PI * 440 * (n * 1024 + i) / 44100)).toInt().toShort()
@@ -441,7 +508,19 @@ internal class CarPlayNetworkProbe(private val context: Context, private val aac
                     }
                     sender.offer(pcm.array(), n * 1024_000_000L / 44100)
                 }
-                verify440Hz(List(16) { receiveUnit() })
+                audioFinished.complete(true)
+                }
+                val units = ArrayList<ByteArray>()
+                var packets = 0
+                while (!audioFinished.isDone) {
+                    val unit = receiveUnit()
+                    if (units.size < 16) units.add(unit)
+                    packets++
+                    if (packets >= 1280) break // Encoder may retain a final access unit until close.
+                }
+                check(packets >= 1200) { "Continuous audio stopped: $packets packets" }
+                check(audioFinished.get(5, TimeUnit.SECONDS) && videoFinished.get(8, TimeUnit.SECONDS))
+                verify440Hz(units)
             } else {
                 val expected = ByteArray(352 * 4) { (it and 127).toByte() }
                 s.audio!!.offer(expected)
@@ -450,6 +529,9 @@ internal class CarPlayNetworkProbe(private val context: Context, private val aac
                 actual.size
             }
             check(input.get(4, TimeUnit.SECONDS) && gesture.get(4, TimeUnit.SECONDS))
+            check(hidConfiguration.get(4, TimeUnit.SECONDS) && timingReply.get(4, TimeUnit.SECONDS))
+            check(gesturesFinished.get(8, TimeUnit.SECONDS))
+            check(threadErrors.isEmpty()) { "Receiver failed during live media: ${threadErrors.first()}" }
             return Bundle().apply {
                 if (aac) {
                     CompletableFuture.anyOf(watchdogFailure, delayedFeedback).get(24, TimeUnit.SECONDS)
@@ -461,10 +543,14 @@ internal class CarPlayNetworkProbe(private val context: Context, private val aac
                         "Media heartbeat stalled during optional feedback: $received"
                     }
                     putInt("CarPlay_heartbeats_during_delayed_feedback",received)
+                    putInt("CarPlay_continuous_video_frames",videoFrames.get())
+                    putInt("CarPlay_continuous_event_acknowledgements",eventAcks.get())
+                    putInt("CarPlay_continuous_media_seconds",30)
                 }
                 putInt("CarPlay_decoded_YUV_bytes", captured.get(8, TimeUnit.SECONDS))
                 putInt(if (aac) "CarPlay_440Hz_decoded_AAC_frames" else "CarPlay_authenticated_PCM_bytes", verified)
                 putString("CarPlay_HID", "encrypted event and CSeq acknowledgement")
+                putString("CarPlay_channels", "phone commands on control only; events contain matching responses; timing challenge echoed")
             }
         } catch (e: Exception) {
             threadErrors.forEach(e::addSuppressed)

@@ -34,6 +34,7 @@ object CrashLog {
                 e.printStackTrace(PrintWriter(sw))
                 AppLog.e("CRASH !!!!!! необработанное исключение в потоке '${t.name}'", e)
                 AppLog.detail(sw.toString().prependIndent("    "))
+                AppLog.flush()
             } catch (_: Throwable) {
             }
             prev?.uncaughtException(t, e)

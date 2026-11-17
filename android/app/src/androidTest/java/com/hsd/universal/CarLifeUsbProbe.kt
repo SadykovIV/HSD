@@ -26,6 +26,8 @@ import com.hsd.universal.link.StreamTransport
 import com.hsd.universal.link.TransportCaps
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.io.FilterOutputStream
+import java.io.InterruptedIOException
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -35,7 +37,7 @@ import java.util.concurrent.locks.LockSupport
 private const val RECEIVER_LOOPBACK = "127.0.0.1"
 
 /** Real CarLife input and timed PCM on one duplex bulk stream. Only the clocked media source is synthetic. */
-internal fun checkCarLifeGestureAudio(port: Int): String {
+internal fun checkCarLifeGestureAudio(port: Int, synchronize: Boolean = true): String {
     require(port in 1..65535)
     val core = AaBridgeCore({ _, _ -> }).apply { desktopInputEnabled = true }
     val single = AtomicInteger()
@@ -52,8 +54,32 @@ internal fun checkCarLifeGestureAudio(port: Int): String {
     val geometry = DesktopVideoSelection(DesktopResolution.R1280_720, 0)
     return Socket().use { socket ->
         socket.connect(InetSocketAddress(RECEIVER_LOOPBACK, port), 5000)
-        val transport = StreamTransport.fromPfd(ParcelFileDescriptor.fromSocket(socket), TransportCaps.USB_AOA, "CarLife gesture fixture")
-        val session = CarLifeSession(transport, SessionConfig(desktopVideo = geometry), core, onClosed = { finished.countDown() })
+        val maxWriteMs = java.util.concurrent.atomic.AtomicLong()
+        // Bound completion of bulk writes, as with a USB endpoint. Throttling only the
+        // host's TCP reader would instead benchmark the opaque megabyte-sized ADB buffers.
+        val bulk = object : FilterOutputStream(socket.getOutputStream()) {
+            var due = 0L
+            var began = 0L
+            override fun write(bytes: ByteArray, offset: Int, length: Int) {
+                if (began == 0L) began = System.nanoTime()
+                due = maxOf(due, System.nanoTime()) + length * 1_000_000_000L / 4_000_000
+                while (true) {
+                    val left = due - System.nanoTime()
+                    if (left <= 0) break
+                    LockSupport.parkNanos(left)
+                    if (Thread.currentThread().isInterrupted) throw InterruptedIOException("Fixture stopped")
+                }
+                out.write(bytes, offset, length)
+            }
+            override fun flush() {
+                out.flush()
+                if (began != 0L) maxWriteMs.accumulateAndGet((System.nanoTime() - began) / 1_000_000, ::maxOf)
+                began = 0L
+            }
+        }
+        val transport = StreamTransport(socket.getInputStream(), bulk, TransportCaps.USB_AOA,
+            "CarLife gesture fixture: 4 MB/s bulk", closeFd = socket::close)
+        val session = CarLifeSession(transport, SessionConfig(desktopVideo = geometry, synchronizeAudioVideo = synchronize), core, onClosed = { finished.countDown() })
         try {
             session.start()
             session.hidePlaceholder()
@@ -61,15 +87,17 @@ internal fun checkCarLifeGestureAudio(port: Int): String {
             while (!core.isCarlifeStarted && SystemClock.elapsedRealtime() < deadline) Thread.sleep(5)
             check(core.isCarlifeStarted)
             val start = System.nanoTime()
+            var maxSourceLateUs = 0L
             val pcm = ByteArray(1920) // 10 ms at 48 kHz, stereo, 16-bit
-            repeat(400) { tick ->
+            repeat(2000) { tick ->
                 val target = start + tick * 10_000_000L
                 val wait = target - System.nanoTime()
                 if (wait > 0) LockSupport.parkNanos(wait)
+                maxSourceLateUs = maxOf(maxSourceLateUs, (System.nanoTime() - target) / 1000)
                 if (tick % 4 == 0) {
                     // A detailed moving map generates larger access units during zoom.
                     val activePinch = pinch.get() > 0
-                    val frame = ByteArray(if (activePinch) 24_000 else 2_000)
+                    val frame = ByteArray(if (activePinch && tick % 200 < 100) 240_000 else 2_000)
                     frame[3] = 1
                     frame[4] = if (tick % 20 == 0) 0x65 else 0x41
                     session.sendVideoAt(frame, target / 1000L)
@@ -78,12 +106,17 @@ internal fun checkCarLifeGestureAudio(port: Int): String {
                 pcm[1] = (tick ushr 8).toByte()
                 core.onAudioData(AapMessages.CH_AUDIO_MEDIA, pcm, target / 1000L)
             }
+            check(transport.audioExpiredPackets == 0L && transport.audioOverflowPackets == 0L) {
+                "PCM expired=${transport.audioExpiredPackets} overflow=${transport.audioOverflowPackets} " +
+                    "max source scheduling lateness=${maxSourceLateUs/1000}ms max whole-message write=${maxWriteMs.get()}ms"
+            }
             check(finished.await(10, TimeUnit.SECONDS)) { "Receiver did not acknowledge the final PCM sample" }
             check(single.get() >= 50 && pinch.get() >= 100) { "single=$single pinch=$pinch" }
             check(transitions == buildList { addAll(listOf(0, 1, 0)); repeat(10) { add(5); add(6) }; add(1) }) {
                 "Unexpected contact transitions: $transitions"
             }
-            "single=$single pinch=$pinch"
+            "single=$single pinch=$pinch; 2000 PCM packets; no expired or overflowing audio; " +
+                "max source scheduling lateness=${maxSourceLateUs/1000}ms max whole-message write=${maxWriteMs.get()}ms"
         } finally { session.close("gesture fixture complete") }
     }
 }
@@ -142,6 +175,7 @@ internal fun checkCarLifeBulk(test: Instrumentation, port: Int, tone: () -> Audi
         socket.connect(InetSocketAddress(RECEIVER_LOOPBACK, port), 5000)
         val transport = StreamTransport.fromPfd(ParcelFileDescriptor.fromSocket(socket), TransportCaps.USB_AOA, "USB bulk fixture")
         val session = CarLifeSession(transport, SessionConfig(desktopVideo = selection, desktopBitrateBps = prefs.desktopBitrateMbps * 1_000_000,
+            fpsSetting = prefs.desktopFps, synchronizeAudioVideo = prefs.synchronizeAudioVideo,
             desktopAvc = DesktopEncoderSupport.surfaceEncoders("video/avc", prefs.desktopBitrateMbps * 1_000_000)), core) { closed.countDown() }
         var desktop = false
         var picture = false
@@ -152,9 +186,9 @@ internal fun checkCarLifeBulk(test: Instrumentation, port: Int, tone: () -> Audi
         try {
             session.start()
             source.start()
-            test.runOnMainSync { capture.attach(core, true, session::canCaptureDesktopAudio) }
+            test.runOnMainSync { capture.attach(core, true, restartAfterCalls = true, canCapture = session::canCaptureDesktopAudio) }
             player.play()
-            val until = SystemClock.elapsedRealtime() + 40_000
+            val until = SystemClock.elapsedRealtime() + 65_000
             while (closed.count > 0 && SystemClock.elapsedRealtime() < until) {
                 if (DexState.displayId > 0 && !desktop) desktop = desktopReady(DexState.displayId)
                 if (session.hasFreshDesktopVideo()) {

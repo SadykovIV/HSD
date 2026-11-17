@@ -83,6 +83,8 @@ interface CarTransport {
     val queuedVideoFrames: Int
     /** Age of the video write currently in progress, or zero when no video is being written. */
     val videoWriteAgeMs: Long get() = 0L
+    /** Actual congestion age of pending video; excludes deliberate pacing on the A/V clock. */
+    val videoQueueAgeMs: Long get() = videoWriteAgeMs
 
     /** Скорость слива видео, байт/с (0 = ещё не измерена). */
     val drainBytesPerSec: Double

@@ -353,7 +353,8 @@ open class BridgeService : Service() {
             usbHandoffFrom = null
             val userStop = intent.getBooleanExtra(EXTRA_USER_STOP, true)
             val reason = if (userStop) "остановлено пользователем" else "остановка текущего сеанса"
-            com.hsd.universal.dex.DesktopMusicPlayback.cancel(reason)
+            if (userStop) com.hsd.universal.dex.DesktopMusicPlayback.stop(reason)
+            else com.hsd.universal.dex.DesktopMusicPlayback.cancel(reason)
             cancelDesktopRecovery()
             cancelWirelessWaiting("стоп")
             val s = session
@@ -1049,7 +1050,7 @@ open class BridgeService : Service() {
             transport.caps.kind == TransportCaps.TCP6.kind
         val clusterTransport = desktopOutput || transport.caps.kind == TransportCaps.TCP_DEBUG.kind
         val cfg = SessionConfig(
-            screenOn, false, if (desktopVideo != null) com.hsd.universal.aa.FpsSetting.AUTO else aaPrefs.fpsSetting,
+            screenOn, false, if (desktopVideo != null) dexPrefs.desktopFps else aaPrefs.fpsSetting,
             metaMusic = clusterTransport && aaPrefs.metaMusic, metaNavi = clusterTransport && aaPrefs.metaNavi,
             metaNaviStreetNames = aaPrefs.metaNaviStreetNames,
             naviField6 = aaPrefs.naviField6, desktopVideo = desktopVideo,
@@ -1057,6 +1058,7 @@ open class BridgeService : Service() {
             desktopAvc = if (desktopVideo != null && DesktopTransport.universal)
                 com.hsd.universal.aa.DesktopEncoderSupport.surfaceEncoders("video/avc", dexPrefs.desktopBitrateMbps * 1_000_000) else null,
             receiverAudio = if (desktopVideo != null) com.hsd.universal.link.ReceiverAudioCalibration(this, transport.caps.kind) else null,
+            synchronizeAudioVideo = dexPrefs.synchronizeAudioVideo,
         )
         MetaRelay.PROGRESS_UNIT = if (aaPrefs.progressSeconds) 1 else 1000
 
@@ -1109,10 +1111,10 @@ open class BridgeService : Service() {
             onHuSize = { w, hh -> aaPrefs.saveHuSize(w, hh) },
             onNavigationInterestChanged = { main.post { if (!stopRequested && session === sref[0]) clusterNavigation?.subscriptionChanged() } },
             onDesktopOutputLost = { owner, hadPicture ->
-                val carriedAudio = dexPrefs.usbPlaybackAudio && h.core.audioViaUsb
+                val carriedAudio = dexPrefs.usbPlaybackAudio && h.core.audioViaUsb && desktopAudio.hasForwardedAudio
                 main.post {
                     if (!stopRequested && session === owner)
-                        com.hsd.universal.dex.DesktopMusicPlayback.usbOutputLost(this, owner, hadPicture && DexState.running, carriedAudio)
+                        com.hsd.universal.dex.DesktopMusicPlayback.outputLost(this, owner, hadPicture && DexState.running, carriedAudio)
                 }
             }
         ) { reason -> main.post { onSessionClosed(sref[0]!!, reason, accessory) } }
@@ -1122,8 +1124,9 @@ open class BridgeService : Service() {
             transport.caps.kind == TransportCaps.USB_AOA.kind,
             ready = { session === s && DexState.running && s.hasFreshDesktopVideo() },
             audioReady = { !DexPrefs(this).usbPlaybackAudio || !h.core.audioViaUsb ||
-                com.hsd.universal.dex.DesktopAudioState.running })
-        desktopAudio.attach(h.core, desktopOutput) {
+                com.hsd.universal.dex.DesktopAudioState.running },
+            carriesAudio = { session === s && desktopAudio.hasForwardedAudio && h.core.audioViaUsb })
+        desktopAudio.attach(h.core, desktopOutput, restartAfterCalls = true) {
             session === s && s.canCaptureDesktopAudio()
         }
         com.hsd.universal.dex.DelegatedPanelAccess.attachOutput(s) {
@@ -1371,8 +1374,8 @@ open class BridgeService : Service() {
         phoneIdleTimer?.stop()
         phoneIdleTimer = null
         com.hsd.universal.dex.DelegatedPanelAccess.detachOutput(s)
-        desktopAudio.detach()
         com.hsd.universal.dex.DesktopMusicPlayback.linkClosed(s)
+        desktopAudio.detach()
         cancelDesktopRecovery()
         session = null
         CarLifeState.running = false
@@ -1486,8 +1489,8 @@ open class BridgeService : Service() {
         phoneIdleTimer = null
         audioDiag.stop()
         com.hsd.universal.dex.DelegatedPanelAccess.restoreAll()
-        desktopAudio.close()
         com.hsd.universal.dex.DesktopMusicPlayback.serviceDestroyed(this, physicalUsbDetached)
+        desktopAudio.close()
         session?.close("сервис уничтожен")
         host?.shutdown("сервис уничтожен")
         scheduler.shutdown()

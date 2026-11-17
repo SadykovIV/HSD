@@ -70,7 +70,7 @@ internal class CarPlayIapChannel(
                         when (frame.messageId) {
                             0x1d01 -> {
                                 receives = fields.filter { it.id == 7 }.flatMap { it.asU16List() }
-                                exchange.identified(fields.filter { it.id == 6 }.flatMap { it.asU16List() })
+                                exchange.identified()
                             }
                             0xaa06, 0xaa01, 0xaa03 -> {
                                 exchange.receive(frame.messageId, fields)

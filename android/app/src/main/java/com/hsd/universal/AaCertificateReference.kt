@@ -17,6 +17,12 @@ import java.util.Date
 
 /** Public Android Auto 17.8.663874 credentials used to distinguish the phone, issuer and receiver roles. */
 internal class AaCertificateReference(private val root: X509Certificate, private val carService: X509Certificate) {
+    fun isAutomotiveRoot(certificate: X509Certificate) = certificate == root
+
+    /** Unlike an explicitly selected independent identity, an automatic APK identity MUST chain to our anchor. */
+    fun trustedPhoneChain(chain: List<X509Certificate>, now: Instant): List<X509Certificate>? =
+        if (chain.isNotEmpty() && permitsTlsRole(chain.first(), "1.3.6.1.5.5.7.3.1")) automotivePath(chain, now) else null
+
     enum class Match(@StringRes val label: Int) {
         CAR_SERVICE(R.string.aa_reference_car_service),
         GOOGLE_AUTOMOTIVE_LINK(R.string.aa_reference_google_chain),

@@ -194,7 +194,6 @@
     <string name="desktop_enable_dpi_adjustment">"Включить исправление DPI"</string>
     <string name="desktop_enable_the_activation_channel">"Включите канал «Активация %1$s»."</string>
     <string name="desktop_enable_the_input_pairing_code_channel">"Включите канал «Ввод кода сопряжения»."</string>
-    <string name="desktop_enable_usb_debugging">"Включите отладку по USB"</string>
     <string name="desktop_enabling_access">"Включаю доступ %1$s…"</string>
     <string name="desktop_enter_0_to_2000_ms">"Введите от 0 до 2000 мс"</string>
     <string name="desktop_enter_a_port_from_1_to_65535">"Введите порт от 1 до 65535"</string>
@@ -262,7 +261,9 @@
     <string name="desktop_how_to_turn_off_the_phone_screen">"Способ отключения экрана телефона"</string>
     <string name="desktop_how_to_turn_off_the_screen">"Способ отключения экрана"</string>
     <string name="desktop_hsd_certificate">"Сертификат HSD"</string>
-    <string name="desktop_hsd_creates_a_certificate_the_first_time_it_connects">"HSD создаёт сертификат при первом подключении. Если магнитола требует сертификат своего издателя, выберите выданный вам ключ в Android."</string>
+    <string name="desktop_hsd_creates_a_certificate_the_first_time_it_connects">В режиме «Автоматически» используется проверенный сертификат из HSD. Устанавливать Android Auto не требуется. Если установленный Android Auto содержит более свежий действующий сертификат, HSD может использовать его. Проверенные сертификаты также могут обновляться автоматически через интернет. При ручном выборе используется выбранный сертификат.</string>
+    <string name="aa_auto_identity_unavailable">Нет действующего сертификата для автоматического подключения Android Auto. Подключитесь к интернету, проверьте обновления сертификатов и дату на телефоне. Также можно выбрать сертификат в разделе «Сертификаты Android Auto».</string>
+    <string name="aa_installed_identity_unavailable">Не удалось получить действующий сертификат из установленного Android Auto. Обновите Android Auto на телефоне и подключитесь снова. Другой сертификат можно выбрать в разделе «Сертификаты Android Auto».</string>
     <string name="desktop_hsd_sends_the_next_street_name_with_the_turn">"Вместе со стрелкой и расстоянием HSD передаёт название следующей улицы, если его указал навигатор. На совместимых приборных панелях и HUD название появляется во время ведения по маршруту."</string>
     <string name="desktop_i_m_checking_the_saved_connection_turn_on_wi">"Проверяю сохранённое подключение. Включите Wi-Fi и беспроводную отладку."</string>
     <string name="desktop_i_m_checking_to_activate_the_independent_screen_activation">"Проверяю запуск независимого экрана. Активация продолжится автоматически."</string>
@@ -304,7 +305,6 @@
     <string name="desktop_looking_for_pairing_dialog">"Ищу окно сопряжения…"</string>
     <string name="desktop_looking_for_phone">"Ищу телефон…"</string>
     <string name="desktop_main_app_code">"Основное приложение · %1$s (код %2$d)"</string>
-    <string name="desktop_make_phone_discoverable">"Сделать телефон видимым"</string>
     <string name="desktop_manages">"Управляет %1$s"</string>
     <string name="desktop_screen_control_phone">"Управляет телефон"</string>
     <string name="desktop_managing_the_phone_display">"Управление дисплеем телефона"</string>
@@ -351,7 +351,6 @@
     <string name="desktop_open_notification_shade">"Открыть шторку уведомлений"</string>
     <string name="desktop_open_on_head_unit">"Открыть на ГУ"</string>
     <string name="desktop_open_on_the_head_unit">"Открыть на головном устройстве?"</string>
-    <string name="desktop_open_settings">"Открыть настройки"</string>
     <string name="desktop_open_shizuku">"Открыть Shizuku"</string>
     <string name="desktop_open_shizuku_authorized_apps_and_allow_then_come_back">"Откройте Shizuku → «Авторизованные приложения» и разрешите %1$s. Затем вернитесь сюда."</string>
     <string name="desktop_open_the_app_notification_settings_on_your_phone_and">"Откройте настройки уведомлений приложений на телефоне и разрешите уведомления навигатору."</string>
@@ -363,7 +362,6 @@
     <string name="desktop_open_the_shizuku_app_on_your_phone_and_start">"Откройте приложение Shizuku на телефоне и запустите службу."</string>
     <string name="desktop_open_this_setting_manually_on_this_phone">"На этом телефоне откройте нужный пункт вручную в настройках Android."</string>
     <string name="desktop_open_up_on_a_head_unit_and_connect_a">"Откройте %1$s на магнитоле и подключите USB-кабель с передачей данных."</string>
-    <string name="desktop_open_up_on_a_head_unit_plug_in_a">"Откройте %1$s на магнитоле и подключите USB-кабель. Рабочий стол запустится автоматически; Wi-Fi и сопряжение для подключения не нужны."</string>
     <string name="desktop_open_wi_fi_settings">"Открыть Wi-Fi"</string>
     <string name="desktop_open_wireless_carlife_on_a_head_unit_the_head">"Откройте беспроводной CarLife на магнитоле. Магнитола может использовать общую сеть Wi-Fi, точку доступа или согласовать Wi-Fi Direct через Bluetooth."</string>
     <string name="desktop_open_wireless_on_your_head_unit">"Откройте беспроводной %1$s на магнитоле."</string>
@@ -422,7 +420,6 @@
     <string name="desktop_ready_to_connect_automatically">"Готов к автоматическому подключению"</string>
     <string name="desktop_ready_to_set_up">"Готов к настройке"</string>
     <string name="desktop_reconfigure_the_pairing">"Настроить сопряжение заново"</string>
-    <string name="desktop_reconnect_the_cable_and_tap_connect">"Переподключите кабель и нажмите «Подключить»."</string>
     <string name="desktop_reconnect_the_usb_cable_or_tap_connect">"Подключите USB заново или нажмите «Подключить»."</string>
     <string name="desktop_reconnecting">"Перезапускаю подключение…"</string>
     <string name="desktop_recovery_after_disabling_usb_it_will_enable_adb_network">"Для восстановления после отключения USB %1$s включит сетевую ADB-отладку для ранее разрешённых ключей. Она доступна через сетевые интерфейсы, без TLS. Режим действует до возврата обычного режима ADB или перезагрузки."</string>
@@ -537,7 +534,7 @@
     <string name="desktop_this_phone_s_ip_address">"IP этого телефона"</string>
     <string name="desktop_this_profile_requires_an_apk_compatible_panel_from_the">"Для этого профиля нужен совместимый APK панели от автора CarBridge. Самостоятельное приложение CarBridge Offline v0.43 не объявляет интерфейс панелей %1$s."</string>
     <string name="desktop_this_will_take_a_few_seconds">"Это займёт несколько секунд."</string>
-    <string name="desktop_to_activate_from_your_computer_and_restore_an_independent">"Для активации с компьютера и восстановления независимого экрана по кабелю на Android 17."</string>
+    <string name="desktop_to_activate_from_your_computer_and_restore_an_independent">"Для первой активации с компьютера по USB. Уже выданный доступ не зависит от положения переключателя. Восстановление службы экрана требует доступного авторизованного ADB-канала, в том числе беспроводного."</string>
     <string name="desktop_to_change_access_to_the_screen_control_stop_the">"Чтобы изменить доступ к управлению экраном, остановите подключение. Способ и таймер уже включённой функции можно настроить ниже."</string>
     <string name="desktop_to_change_the_activation_method_stop_the_connection">"Для смены способа активации остановите подключение."</string>
     <string name="desktop_to_change_the_profile_stop_the_connection">"Для смены профиля остановите подключение."</string>
@@ -579,10 +576,8 @@
     <string name="desktop_update_shizuku">"Обновите Shizuku"</string>
     <string name="desktop_update_to">"Обновить до"</string>
     <string name="desktop_usb_connection_failed">"USB не подключился"</string>
-    <string name="desktop_usb_debugging">"отладку по USB"</string>
     <string name="desktop_usb_debugging_fae9">"Отладка по USB"</string>
     <string name="desktop_usb_disconnected">"USB отключён"</string>
-    <string name="desktop_use_for_initial_pairing_when_the_head_unit_searches">"Для первого сопряжения, когда магнитола ищет устройства"</string>
     <string name="desktop_use_profile">"Использовать профиль %1$s?"</string>
     <string name="desktop_use_profile_7e5d">"Использовать"</string>
     <string name="desktop_use_this_connection">"Использовать этот способ"</string>
@@ -776,7 +771,6 @@
     <string name="desktop_the_dex_control_channel_has_closed">"Канал управления DeX закрылся"</string>
     <string name="desktop_the_dex_process_has_concluded">"Процесс DeX завершился: %1$s"</string>
     <string name="desktop_the_firmware_did_not_allow_window_mode_dex">"Прошивка не разрешила оконный режим DeX: %1$s"</string>
-    <string name="desktop_the_head_unit_closed_the_connection_during_authorization_if">"Магнитола закрыла соединение во время авторизации. Если она требует сертификат телефона, выберите его в разделе «Сертификаты Android Auto»."</string>
     <string name="desktop_the_head_unit_continued_the_previous_usb_session_without">"Магнитола продолжила предыдущий USB-сеанс без нового VERSION_REQUEST. Завершите проекцию на магнитоле и подключитесь заново."</string>
     <string name="desktop_the_head_unit_offered_an_empty_desktop_area">"Магнитола предложила пустую область рабочего стола"</string>
     <string name="desktop_the_launch_result_has_not_yet_been_confirmed">"Результат запуска пока не подтверждён. Откройте %1$s."</string>
@@ -894,7 +888,6 @@
     <string name="carplay_pair_from_phone_hint">Включите сопряжение на магнитоле. Выберите её в настройках Bluetooth телефона, затем вернитесь в HSD.</string>
     <string name="carplay_stage_identification">получение сведений о магнитоле</string>
     <string name="carplay_stage_certificate">получение сертификата магнитолы</string>
-    <string name="carplay_stage_serial_or_certificate">получение сертификата магнитолы или его серийного номера</string>
     <string name="carplay_invalid_accessory_signature">Магнитола передала недействительную подпись iAP2.</string>
     <string name="carplay_stage_signature">получение подписи магнитолы</string>
     <string name="carplay_stage_credentials">получение параметров Wi-Fi от магнитолы</string>
@@ -916,6 +909,6 @@
     <string name="aa_auth_certificate">Магнитола отклонила сертификат телефона (%1$s). Выберите подходящий сертификат в настройках Android Auto.</string>
     <string name="aa_auth_busy">Магнитола занята (%1$s). Завершите другой сеанс проекции и подключитесь снова.</string>
     <string name="aa_auth_rejected">Магнитола отклонила авторизацию Android Auto (%1$s).</string>
-    <string name="aa_auth_unspecified">Магнитола отклонила авторизацию Android Auto (%1$s). Если на магнитоле появилось сообщение о времени, сверьте дату, год и часовой пояс с телефоном. Если часы совпадают, проверьте, работает ли штатный Android Auto. Для HSD можно выбрать сертификат телефона, которому доверяет эта магнитола, в разделе «Сертификаты Android Auto».</string>
+    <string name="aa_auth_unspecified">Магнитола отклонила авторизацию Android Auto (%1$s). Этот код сам по себе не означает ошибку времени. Обновите HSD и выберите «Автоматически» в разделе «Сертификаты Android Auto».</string>
     <string name="desktop_encoder_start_failure">Не удалось открыть %1$s при %2$d×%3$d, %4$d кадр/с. %5$s</string>
 </resources>

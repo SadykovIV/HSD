@@ -3,6 +3,12 @@ package com.hsd.universal.carplay
 import io.github.shaonialife.cardeck.airplay.ControlCipher
 import java.io.*
 import java.net.Socket
+import java.net.SocketTimeoutException
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
+import kotlin.concurrent.thread
 
 /**
  * Persistent RTSP framing. Decrypt a single complete record at a time to preserve surplus pipelined
@@ -50,30 +56,88 @@ internal class AirPlayWire(socket: Socket, private val channel: String = "RTSP")
 
     private var sequence = 0
     private var sessionToken: String? = null
+    @Volatile private var multiplexed = false
+    private var readerFailure: Exception? = null
+    private val pending = linkedMapOf<Int, CompletableFuture<Message>>()
 
-    @Synchronized
+    /** Pairing changes ciphers synchronously. Afterwards one reader owns all control responses,
+     * so optional telemetry cannot hold the write lock or consume a command's response. */
+    fun startResponseReader(failed: (Exception) -> Unit) {
+        synchronized(this) { check(!multiplexed); multiplexed = true }
+        thread(name = "CarPlay control responses", isDaemon = true) {
+            try {
+                while (true) {
+                    val response = read()
+                    check(response.line.startsWith("RTSP/") || response.line.startsWith("HTTP/")) {
+                        "CarPlay: request received on control response channel"
+                    }
+                    val waiter = synchronized(this) {
+                        val cseq = response.headers["cseq"]?.toIntOrNull()
+                        if (cseq != null) pending.remove(cseq)
+                        else {
+                            check(pending.size == 1) { "CarPlay: ambiguous response without CSeq" }
+                            pending.remove(pending.keys.single())
+                        }
+                    }
+                    // A late response to a timed-out request cannot satisfy a newer request.
+                    waiter?.complete(response)
+                }
+            } catch (error: Exception) {
+                val waiters = synchronized(this) {
+                    readerFailure = error
+                    pending.values.toList().also { pending.clear() }
+                }
+                waiters.forEach { it.completeExceptionally(error) }
+                failed(error)
+            }
+        }
+    }
+
     fun request(
         method: String,
         path: String,
         body: ByteArray = byteArrayOf(),
         type: String? = if (body.isEmpty()) null else "application/x-apple-binary-plist",
+        timeoutMillis: Long = 12_000,
     ): ByteArray {
-        sequence++
-        val contentType = type?.let { "Content-Type: $it\r\n" }.orEmpty()
-        val session = sessionToken?.let { "Session: $it\r\n" }.orEmpty()
-        val extra =
-            if (path.startsWith("/pair-"))
-                "X-Apple-HKP: 2\r\n" + (if (path == "/pair-verify") "X-Apple-PD: 1\r\n" else "")
-            else ""
-        write(
-            "$method $path RTSP/1.0\r\nCSeq: $sequence\r\nUser-Agent: AirPlay/566.25.21\r\n${extra}${session}${contentType}Content-Length: ${body.size}\r\n\r\n",
-            body,
-        )
-        val response = read()
-        check((response.headers["cseq"]?.toIntOrNull() ?: sequence) == sequence) { "CarPlay: неожиданный CSeq" }
+        var waiter: CompletableFuture<Message>? = null
+        val number: Int
+        val direct: Message?
+        synchronized(this) {
+            readerFailure?.let { throw it }
+            check(pending.size < 32) { "CarPlay: too many outstanding control requests" }
+            number = ++sequence
+            if (multiplexed) waiter = CompletableFuture<Message>().also { pending[number] = it }
+            val contentType = type?.let { "Content-Type: $it\r\n" }.orEmpty()
+            val session = sessionToken?.let { "Session: $it\r\n" }.orEmpty()
+            val extra =
+                if (path.startsWith("/pair-"))
+                    "X-Apple-HKP: 2\r\n" + (if (path == "/pair-verify") "X-Apple-PD: 1\r\n" else "")
+                else ""
+            try {
+                write(
+                    "$method $path RTSP/1.0\r\nCSeq: $number\r\nUser-Agent: AirPlay/566.25.21\r\n${extra}${session}${contentType}Content-Length: ${body.size}\r\n\r\n",
+                    body,
+                )
+                direct = if (multiplexed) null else read()
+            } catch (error: Exception) { pending.remove(number); throw error }
+        }
+        val response = direct ?: try {
+            if (timeoutMillis == 0L) checkNotNull(waiter).get()
+            else checkNotNull(waiter).get(timeoutMillis, TimeUnit.MILLISECONDS)
+        } catch (_: TimeoutException) {
+            synchronized(this) { pending.remove(number) }
+            throw SocketTimeoutException("$channel $method $path response timed out")
+        } catch (error: ExecutionException) { throw (error.cause as? Exception ?: error) }
+        catch (error: InterruptedException) {
+            synchronized(this) { pending.remove(number) }
+            Thread.currentThread().interrupt()
+            throw IOException("$channel interrupted", error)
+        }
+        check((response.headers["cseq"]?.toIntOrNull() ?: number) == number) { "CarPlay: неожиданный CSeq" }
         val status = response.line.split(' ').getOrNull(1)?.toIntOrNull() ?: throw IOException("Некорректный ответ RTSP")
         if (status !in 200..299) throw RtspError(status, method, path)
-        response.headers["session"]?.substringBefore(';')?.let { sessionToken = it }
+        response.headers["session"]?.substringBefore(';')?.let { synchronized(this) { sessionToken = it } }
         return response.data
     }
 
@@ -86,16 +150,12 @@ internal class AirPlayWire(socket: Socket, private val channel: String = "RTSP")
 
     fun respond(message: Message) {
         val number = message.headers["cseq"]?.toIntOrNull() ?: 0
-        write("RTSP/1.0 200 OK\r\nCSeq: $number\r\nContent-Length: 0\r\n\r\n", byteArrayOf())
-    }
-
-    @Synchronized
-    fun command(body: ByteArray) {
-        sequence++
-        write(
-            "POST /command RTSP/1.0\r\nCSeq: $sequence\r\nContent-Type: application/x-apple-binary-plist\r\nContent-Length: ${body.size}\r\n\r\n",
-            body,
-        )
+        val protocol = when (message.line.substringAfterLast(' ')) {
+            "HTTP/1.0" -> "HTTP/1.0"
+            "HTTP/1.1" -> "HTTP/1.1"
+            else -> "RTSP/1.0"
+        }
+        write("$protocol 200 OK\r\nCSeq: $number\r\nContent-Length: 0\r\n\r\n", byteArrayOf())
     }
 
     @Synchronized

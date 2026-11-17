@@ -73,6 +73,9 @@ interface VideoTranscoder {
     /** Сменить целевую частоту на лету, без пересоздания кодека. */
     fun setTargetFps(fps: Int) {}
 
+    /** Peak source-to-encoder age since the previous control sample, independent of log sampling. */
+    fun takeFrameLatencyMs(): Double = 0.0
+
     /** Текущий битрейт энкодера, бит/с (0 = неизвестен). */
     val currentBitrate: Int get() = 0
 

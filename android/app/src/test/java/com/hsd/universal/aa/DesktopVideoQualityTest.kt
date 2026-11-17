@@ -79,7 +79,7 @@ class DesktopVideoQualityTest {
         assertEquals(1_500_000, policy.ceilingBps)
     }
     @Test fun sixtyFpsSurvivesSelectionWhileAutoAndKnownHuCapsRemainExplicit() {
-        assertEquals(60, DesktopVideoQuality.chooseFps(FpsSetting.FPS60, 30))
+        assertEquals(30, DesktopVideoQuality.chooseFps(FpsSetting.FPS60, 30))
         assertEquals(60, DesktopVideoQuality.chooseFps(FpsSetting.AUTO, 60))
         assertEquals(30, DesktopVideoQuality.chooseFps(FpsSetting.AUTO, 30))
         assertEquals(30, DesktopVideoQuality.chooseFps(FpsSetting.AUTO, 120))
@@ -87,5 +87,22 @@ class DesktopVideoQualityTest {
         assertEquals(20, DesktopVideoQuality.chooseFps(FpsSetting.FPS60, 60, 20))
         assertTrue(DesktopVideoQuality.frameRateChangeAllowed(60))
         org.junit.Assert.assertFalse(DesktopVideoQuality.frameRateChangeAllowed(61))
+    }
+
+    @Test fun userLimitAlsoAppliesToLaterReceiverFrameRateChanges() {
+        for (setting in FpsSetting.entries) for (huFps in listOf(3, 9, 15, 30, 60)) {
+            val expected = minOf(setting.fixed ?: 60, huFps)
+            assertEquals(expected, DesktopVideoQuality.chooseFps(setting, huFps))
+            assertEquals(expected, DesktopVideoQuality.frameRateChangeTarget(huFps, setting = setting))
+        }
+    }
+
+    @Test fun lostNativeReferenceRetriesAsSoonAsTransportRecoversWithoutAnIdrStorm() {
+        val recovery = DesktopIdrRecovery()
+        assertTrue(recovery.tryRequest(0, 0))
+        for (now in 10L..990L step 10) assertTrue(!recovery.tryRequest(now, 200))
+        assertTrue(recovery.tryRequest(1000, 0)) // legacy throttle would wait until 1500
+        assertTrue(!recovery.tryRequest(1010, 0))
+        assertTrue(recovery.tryRequest(1250, 0))
     }
 }

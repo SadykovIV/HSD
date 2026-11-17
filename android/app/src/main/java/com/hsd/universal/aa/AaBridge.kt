@@ -333,6 +333,7 @@ class AaBridgeCore(
     private var outGotIdr = false
     private var headersOnNextIdr = false
     private val idrThrottle = IdrThrottle()            // запросы IDR при переполнении очереди CarLife
+    private val desktopIdrRecovery = DesktopIdrRecovery()
     private var overflowIdrRequests = 0L
     private var lastStatsIdrRequests = 0L
     private var outputEnabled = false
@@ -617,8 +618,9 @@ class AaBridgeCore(
     // --- события CarLife ---
     @Synchronized
     fun onCarlifeStart() {
-        // Desay G6S (Mazda) шлёт START без PAUSE на каждое нажатие NAVI/MEDIA: звук уже идёт, повторный INIT
-        // посреди трека рвёт его на ГУ (лог 2026-10-11). Звук сбрасываем только на первом START и после PAUSE.
+        // VIDEO START/PAUSE controls pictures only. Music and speech keep their own
+        // INIT/DATA/STOP lifecycle, including while a camera/native screen is visible.
+        val newSession = !carlifeStarted
         val warm = carlifeStarted && !carlifePaused
         // Воздух, возврат после PAUSE: декодер всю паузу ел кадры AA (гейт выкидывал только выход энкодера), его
         // состояние живо. Не ждём IDR от AA (цикл VideoFocus, 0.2-2 с тишины), а сразу берём IDR у энкодера.
@@ -626,16 +628,10 @@ class AaBridgeCore(
         // остальные ГУ (Mazda G6S по воздуху, задний ход) - как было, через IDR от AA.
         val resume = AIR_WARM_RESUME_ENABLED && huVwBt1420 && link.isAir && carlifeStarted && carlifePaused &&
             transcodeEnabled && transcoder != null && gotIdr && active == Source.AA
-        // START после PAUSE - та же живая сессия: отложенный TTS STOP шлём сразу, иначе resetAudio его съест,
-        // ГУ так и держит канал подсказок открытым и глушит музыку до следующей подсказки (h482, ix35 HSAE).
-        if (carlifeStarted && carlifePaused && ttsStopTimer.pending) {
-            log("BRIDGE CarLife START после PAUSE: отложенный TTS STOP шлю сразу", true)
-            stopAudio(CarlifeAudio.CH_TTS)
-        }
         carlifeStarted = true
         carlifePaused = false
-        if (warm) log("BRIDGE CarLife START без PAUSE: звук не трогаю, INIT не повторяю", true)
-        else resetAudio()                      // новый START: MEDIA/TTS init заново на первом пакете
+        if (newSession) resetAudio()
+        else log("BRIDGE CarLife VIDEO START: аудиопотоки и ожидающий TTS STOP сохранены", true)
         if (desktopSurfaceEnabled) {
             startTranscoder()
             if (!warm) meta.onCarlifeStart()
@@ -1503,6 +1499,22 @@ class AaBridgeCore(
             val (peak, rms) = CarlifeAudio.pcm16Stats(pcm)
             log("BRIDGE TTS пакет #$ttsPackets: ${pcm.size} Б, peak=$peak rms=%.1f${if (peak == 0) " (ВСЕ НУЛИ)" else ""}".format(rms), false)
         }
+    }
+
+    @Synchronized
+    fun onCapturedAudioPause() {
+        // The native playback mix remains registered while a call owns Android's output.
+        // End only this media stream, then the next PCM starts a fresh receiver INIT.
+        val dropped = link.dropQueuedMedia()
+        pendingMediaPause = false
+        if (audioInited[CarlifeAudio.CH_MEDIA] == true) pauseMedia("Android call owns playback output; dropped=$dropped")
+    }
+
+    @Synchronized
+    fun onCapturedAudioResume() {
+        // A call boundary is not a user's PLAY and must not undo an unrelated HU source pause.
+        // If the player never paused, no new MediaSession PLAY event will arrive to release it.
+        if (meta.playing) releaseHuPause("Android call ended, phone media is playing")
     }
 
     @Synchronized
@@ -2844,7 +2856,7 @@ class AaBridgeCore(
                 if (desktopSurfaceEnabled && link.videoExpectedSinceNanos != null) {
                     // A sync frame can arrive before the virtual display or CSD is ready.
                     noteFirstFrameWait("random access", data, key)
-                    if (idrThrottle.tryRequest(clockMs())) transcoder?.requestSyncFrame()
+                    requestIdrOnOverflow()
                 }
                 return
             }
@@ -2913,7 +2925,10 @@ class AaBridgeCore(
      */
     private fun requestIdrOnOverflow() {
         val t = transcoder ?: return
-        if (!idrThrottle.tryRequest(clockMs())) return
+        val permitted = if (desktopSurfaceEnabled)
+            desktopIdrRecovery.tryRequest(clockMs(), link.videoStats()?.backlogMs ?: 0L)
+        else idrThrottle.tryRequest(clockMs())
+        if (!permitted) return
         overflowIdrRequests++
         t.requestSyncFrame()
     }
@@ -2933,6 +2948,9 @@ class AaBridgeCore(
         t.setTargetFps(fps)
         return true
     }
+
+    @Synchronized
+    fun takeFrameLatencyMs(): Double = transcoder?.takeFrameLatencyMs() ?: 0.0
 
     /** Sample current policies only after owning the encoder, and ignore an obsolete link's timer. */
     @Synchronized

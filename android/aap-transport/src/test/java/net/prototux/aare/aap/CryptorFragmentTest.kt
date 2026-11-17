@@ -7,6 +7,27 @@ import java.io.ByteArrayOutputStream
 import java.security.cert.CertificateException
 
 class CryptorFragmentTest {
+    @Test fun aReceiverCannotReflectThePhoneIdentityEvenIfAlreadyPinnedAndWithoutEku() {
+        val handset = SelfSignedCertificate.generate("phone identity without EKU")
+        assertNull(handset.certificate.extendedKeyUsage)
+        for (alreadyPinned in listOf(false, true)) {
+            val pins = MemoryPinStore().apply {
+                if (alreadyPinned) add("receiver", fingerprint(handset.certificate))
+            }
+            val phone = Cryptor(handset.certificate, handset.keyPair.private, pins = pins,
+                peerKey = "receiver", trustOnFirstUse = true)
+            val reflected = Cryptor(handset.certificate, handset.keyPair.private, client = true)
+            phone.beginHandshake(); reflected.beginHandshake()
+            var flight = reflected.handshake(byteArrayOf())
+            assertThrows(Exception::class.java) {
+                repeat(12) { flight = reflected.handshake(phone.handshake(flight)) }
+            }
+            assertTrue(phone.peerRefused)
+            assertEquals("head unit presented the phone's own public key", phone.chainRejection?.message)
+            if (!alreadyPinned) assertTrue(pins.get("receiver").isEmpty())
+        }
+    }
+
     @Test fun issuerAndRoleChecksAlsoRunForAnAlreadyPinnedReceiver() {
         val certificate = SelfSignedCertificate.generate("test receiver").certificate
         val known = fingerprint(certificate)

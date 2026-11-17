@@ -16,6 +16,14 @@ class DesktopReadinessPolicyTest {
         assertEquals(DesktopReadinessPolicy.Step.READY, next(ready))
         assertEquals(DesktopReadinessPolicy.Step.READY, next(ready, false))
     }
+    @Test fun independentNativeLifetimeDoesNotReopenAnObsoleteAdbRoute() {
+        val independent = ready.copy(modePending = true, recoveryNeedsVerification = true, adbIndependentHost = true)
+        assertEquals(DesktopReadinessPolicy.Step.READY, next(independent))
+        assertEquals(DesktopReadinessPolicy.Step.READY, next(independent, false))
+        assertEquals(DesktopReadinessPolicy.Step.RECONFIGURATION_REQUIRED, next(independent.copy(audio = false)))
+        assertEquals(DesktopReadinessPolicy.Step.USER_ACTIVATION_REQUIRED, next(independent.copy(grants = false), false))
+        assertNotEquals(DesktopReadinessPolicy.Step.READY, next(independent.copy(host = false)))
+    }
     @Test fun missingHostRepairsHostWithoutReacquiringLivingGrants() {
         assertEquals(DesktopReadinessPolicy.Step.RECOVER_HOST, next(ready.copy(host = false)))
         assertEquals(DesktopReadinessPolicy.Step.RECOVER_HOST, next(ready.copy(host = false), false))

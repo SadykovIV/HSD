@@ -38,7 +38,7 @@ internal object IndependentRecoveryAccess {
 
     private val samsung get() = Build.MANUFACTURER.equals("samsung", true)
 
-    fun offerSetup(context: Context): Boolean = samsung && DexPrefs(context).let {
+    fun offerSetup(context: Context): Boolean = !VdmHostLink.adbIndependent && samsung && DexPrefs(context).let {
         IndependentRecoveryPolicy.requested(Build.VERSION.SDK_INT, it.useDelegated, it.desktopMode, enabled = true)
     }
 
@@ -115,7 +115,7 @@ internal object IndependentRecoveryAccess {
                                 onConnection(adb)
                                 ensureActive()
                                 verify(adb, DexEndpoint("127.0.0.1", record.port), proof)
-                                DesktopUsbDebugging.requireEnabled(context, adb)
+                                DesktopUsbDebugging.observeAuthenticatedChannel(adb)
                                 val live = device(adb)
                                 ensureActive()
                                 check(scope.alive()) { "Истекло время проверки отладки" }
@@ -205,7 +205,7 @@ internal object IndependentRecoveryAccess {
             withProof(context) { proof ->
                 Scope(authenticated, 25_000).use { scope ->
                     verify(authenticated, endpoint, proof)
-                    DesktopUsbDebugging.requireEnabled(context, authenticated)
+                    DesktopUsbDebugging.observeAuthenticatedChannel(authenticated)
                     val before = device(authenticated)
                     val selected = IndependentRecoveryPolicy.select(before)
                     val prior = read(context)?.takeIf { IndependentRecoveryPolicy.current(it, boot(context)) }

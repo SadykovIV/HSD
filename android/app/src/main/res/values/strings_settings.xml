@@ -214,7 +214,6 @@
     <string name="wl_cw_fail">Could not connect: the car is out of range, the password is wrong or the prompt was declined</string>
 
     <!-- My car (CarPreset) -->
-    <string name="car_title">My car</string>
     <string name="car_other_title">My car is not on the list</string>
     <string name="car_citroen_c5_x">Citroen C5 X</string>
     <string name="car_dongfeng_df6_2023">Dongfeng DF6 2023</string>

@@ -25,9 +25,10 @@ import com.hsd.universal.ui.UsbDetachPolicy
 internal object DesktopMusicPlayback {
     private val main = Handler(Looper.getMainLooper())
     private var context: Context? = null
-    private val link = DesktopMusicUsbLink(BridgeHost.GRACE_MS)
+    private val link = DesktopMusicOutputLink(BridgeHost.GRACE_MS)
     private var ready: (() -> Boolean)? = null
     private var audioReady: (() -> Boolean)? = null
+    private var carriesAudio: (() -> Boolean)? = null
     private var autoplayAttempted = false
     private var wiredOutput = false
     private var observingUsb = false
@@ -56,7 +57,7 @@ internal object DesktopMusicPlayback {
     }
 
     fun attach(context: Context, serviceOwner: Any, owner: Any, isUsb: Boolean,
-        ready: () -> Boolean, audioReady: () -> Boolean) = onMain {
+        ready: () -> Boolean, audioReady: () -> Boolean, carriesAudio: () -> Boolean) = onMain {
         if (!isUsb && !allowed(context)) { clear("unsupported link"); return@onMain }
         this.context = context.applicationContext
         wiredOutput = isUsb
@@ -75,6 +76,7 @@ internal object DesktopMusicPlayback {
         link.attach(serviceOwner, owner, SystemClock.elapsedRealtime())
         this.ready = ready
         this.audioReady = audioReady
+        this.carriesAudio = carriesAudio
         autoplayAttempted = false
         main.removeCallbacks(tick)
         tick.run()
@@ -99,15 +101,21 @@ internal object DesktopMusicPlayback {
 
     /** An old session cannot retire a replacement session. Physical detach may be reported later. */
     fun linkClosed(owner: Any) = onMain {
+        if (!wiredOutput && link.owner === owner) link.serviceOwner?.let { service ->
+            outputLost(service, owner, receivingVideo(),
+                runCatching { carriesAudio?.invoke() == true }.getOrDefault(false))
+        }
         if (!link.close(owner, SystemClock.elapsedRealtime())) return@onMain
         ready = null
         audioReady = null
+        carriesAudio = null
         scheduleNext()
     }
 
-    fun usbOutputLost(serviceOwner: Any, owner: Any, hadPicture: Boolean, carriedAudio: Boolean) = onMain {
+    fun outputLost(serviceOwner: Any, owner: Any, hadPicture: Boolean, carriedAudio: Boolean) = onMain {
         val app = context ?: return@onMain
-        if (wiredOutput && link.consumeTransportLoss(serviceOwner, owner, hadPicture, carriedAudio)) pauseCurrentPlayer(app, "USB transport loss")
+        if (link.consumeTransportLoss(serviceOwner, owner, hadPicture, carriedAudio))
+            pauseCurrentPlayer(app, "${if (wiredOutput) "USB" else "wireless"} output loss")
     }
 
     fun physicalDetach(serviceOwner: Any) = onMain {
@@ -212,7 +220,7 @@ internal object DesktopMusicPlayback {
         // A failed reconnect may end its own service before new frames arrive.
         if (policy.hasPending) {
             link.clear()
-            AppLog.i("DESKTOP MUSIC: retaining paused session after USB service ended", false)
+            AppLog.i("DESKTOP MUSIC: retaining paused session after projection service ended", false)
             scheduleNext()
         } else if (wiredOutput && !physicallyDetached) {
             // Android can publish unplug after closing both the accessory fd and its foreground service.
@@ -221,10 +229,23 @@ internal object DesktopMusicPlayback {
                 if (link.serviceOwner === serviceOwner && link.owner == null && !policy.hasPending)
                     clear("USB detach window ended")
             }, BridgeHost.GRACE_MS)
-        } else clear("USB service ended")
+        } else clear("projection service ended")
     }
 
     /** Also called when Stop is pressed after the foreground service has already left its grace. */
+    fun stop(reason: String) = onMain {
+        // Stop is a loss of the proven audio output too. Pause before releasing the capture
+        // route, then discard any automatic-resume claim because this was an explicit stop.
+        val app = context
+        val owner = link.owner
+        val service = link.serviceOwner
+        val audio = runCatching { carriesAudio?.invoke() == true }.getOrDefault(false)
+        if (app != null && owner != null && service != null &&
+            link.consumeTransportLoss(service, owner, receivingVideo(), audio)) pauseCurrentPlayer(app, reason)
+        clear(reason)
+    }
+
+    /** Cancel only an automatic-resume claim during handover or test cleanup. */
     fun cancel(reason: String) = onMain { clear(reason) }
 
     private fun checkPending(systemReady: Boolean, playbackCallback: Boolean = false, event: PlaybackState? = null) {
@@ -244,11 +265,11 @@ internal object DesktopMusicPlayback {
             val hadAcknowledgement = policy.acknowledged
             val resume = policy.takeResume(systemReady, value, selected, otherPlaying, SystemClock.elapsedRealtime())
             if (!hadAcknowledgement && policy.acknowledged)
-                AppLog.i("DESKTOP MUSIC: player acknowledged PAUSE; waiting for USB desktop and audio", false)
+                AppLog.i("DESKTOP MUSIC: player acknowledged PAUSE; waiting for desktop and audio", false)
             if (resume == target.sessionToken) {
                 releaseObserver()
                 runCatching { target.transportControls.play() }
-                    .onSuccess { AppLog.i("DESKTOP MUSIC: sent PLAY to the paused session after USB desktop became ready", false) }
+                    .onSuccess { AppLog.i("DESKTOP MUSIC: sent PLAY to the paused session after desktop became ready", false) }
                     .onFailure { AppLog.i("DESKTOP MUSIC: player rejected PLAY (${it.javaClass.simpleName})", false) }
             } else if (!policy.hasPending) releaseObserver()
             scheduleNext()
@@ -310,7 +331,7 @@ internal object DesktopMusicPlayback {
     private fun clear(reason: String) {
         main.removeCallbacks(tick)
         cancelPending(reason)
-        link.clear(); ready = null; audioReady = null; context = null; wiredOutput = false
+        link.clear(); ready = null; audioReady = null; carriesAudio = null; context = null; wiredOutput = false
         main.removeCallbacks(tick)
     }
     private fun onMain(action: () -> Unit) {

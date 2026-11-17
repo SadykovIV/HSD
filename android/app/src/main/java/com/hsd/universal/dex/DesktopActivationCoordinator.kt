@@ -25,8 +25,8 @@ internal object DesktopActivationCoordinator {
         DelegatedPanelAccess.hasPermission(context), DelegatedPanelAccess.unsupportedThisActivation,
         Build.VERSION.SDK_INT >= 37 && DexPrefs(context).desktopMode != DesktopModePolicy.SAMSUNG_DEX,
         VdmHostLink.isReady, IndependentRecoveryAccess.needsApply(context),
-        IndependentRecoveryAccess.requiresLiveVerification(context), DesktopUsbDebugging.confirmedMissing(context),
-        DesktopAudioAccess.unsupportedThisActivation)
+        IndependentRecoveryAccess.requiresLiveVerification(context),
+        DesktopAudioAccess.unsupportedThisActivation, VdmHostLink.adbIndependent)
 
     fun request(context: Context, needs: DesktopReadinessPolicy.Requirements,
                 explicit: Boolean, allowAcquireGrants: Boolean = true, current: () -> Boolean): Request =
@@ -63,7 +63,7 @@ internal object DesktopActivationCoordinator {
                 repeat(5) {
                     checkActive()
                     val step = next()
-                    if (explicit && !recoveryVerified && IndependentRecoveryAccess.requested(context) &&
+                    if (explicit && !recoveryVerified && !VdmHostLink.adbIndependent && IndependentRecoveryAccess.requested(context) &&
                         step in setOf(DesktopReadinessPolicy.Step.READY, DesktopReadinessPolicy.Step.RECOVER_HOST)) {
                         stage(Stage.CHECKING)
                         recoveryVerified = IndependentRecoveryAccess.verifyReady(context, ::checkActive) { adb ->
@@ -81,8 +81,6 @@ internal object DesktopActivationCoordinator {
                             }
                         }
                         DesktopReadinessPolicy.Step.READY -> return Result.READY
-                        DesktopReadinessPolicy.Step.USB_DEBUGGING_REQUIRED -> throw DexAccessException(
-                            DexAccessStage.PROBE_SHELL, DexAccessReason.USB_DEBUGGING_DISABLED)
                         DesktopReadinessPolicy.Step.USER_ACTIVATION_REQUIRED -> throw DesktopPreparationException("Активируйте ${DesktopTransport.shortName} на телефоне.")
                         DesktopReadinessPolicy.Step.RECONFIGURATION_REQUIRED -> throw DesktopPreparationException(
                             "Изменены разрешения для звука или дисплея. Завершите текущий доступ ${DesktopTransport.shortName} и активируйте приложение снова.")
@@ -93,7 +91,7 @@ internal object DesktopActivationCoordinator {
                                 recovery = repair
                                 if (!repair.ensureReady()) {
                                     repair.failureReason?.let { throw DexAccessException(DexAccessStage.CONNECT, it) }
-                                    throw DesktopPreparationException(repair.failure ?: "Не удалось подготовить рабочий стол. Включите Wi-Fi и повторите активацию.")
+                                    throw DesktopPreparationException(repair.failure ?: "Не удалось восстановить рабочий стол. Проверьте доступный канал отладки и повторите подключение.")
                                 }
                             }
                             recovery = null
@@ -140,7 +138,7 @@ internal object DesktopActivationCoordinator {
                         }
                     }
                 }
-                error("Настройки изменились во время подготовки. Повторите активацию.")
+                error("Настройки изменились во время подготовки. Проверьте выбранные опции и повторите подключение.")
             } finally { recovery = null; if (locked) lock.unlock() }
         }
         private fun requireIdleForModePreparation() {

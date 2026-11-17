@@ -36,10 +36,20 @@ import java.util.concurrent.TimeUnit
 /** Runs production DriveDeck + its real encoder across AAP. Only USB bulk endpoints are substituted. */
 class DriveDeckAapProbe : Instrumentation() {
     private var checkCertificates = false
+    private var checkInstalledIdentity = false
+    private var checkStandaloneIdentity = false
+    private var checkIdentityUpdate = false
+    private var discoveryInteropPort: Int? = null
+    private var externalMusic: String? = null
+    private var embedExternalMusic = false
+    private var checkRenderDpi = false
+    private var restoreRenderPrefs: (() -> Unit)? = null
     private var wirelessReceiver = false
     private var wirelessSsid = "HSD-QA"
     private var wirelessPassword = "hsd-avd-wireless"
     private var usbMusic = false
+    private var carLifeCallAudio = false
+    private var projectionVolumes = false
     private var carPlayRadio: Bundle? = null
     private var carLifeUsbPort: Int? = null
     private var carLifeDesktop = false
@@ -69,14 +79,36 @@ class DriveDeckAapProbe : Instrumentation() {
     private var wifiOffRoute: ProjectionRoute? = null
     private var initialFocus = HeadUnitSimulator.InitialFocus.IMMEDIATE
     private var interruptUsb = false
+    private var checkMusicFocus = false
     private var hevc = false
+    private var strictPhone = false
+    private var projectionControls = false
+    private var selectedDesktopFps = com.hsd.universal.aa.FpsSetting.AUTO
+    private var selectedAvSync = true
+    private var usbDebuggingOff = false
+    private var slowVideoWriter = false
     override fun onCreate(arguments: Bundle?) {
         super.onCreate(arguments)
+        projectionControls = arguments?.getString("protocol") == "projection-controls"
+        selectedDesktopFps = arguments?.getString("desktopFps")?.let(com.hsd.universal.aa.FpsSetting::valueOf) ?: com.hsd.universal.aa.FpsSetting.AUTO
+        selectedAvSync = arguments?.getString("avSync") != "false"
+        usbDebuggingOff = arguments?.getString("usbDebuggingOff") == "true"
+        slowVideoWriter = arguments?.getString("slowVideoWriter") == "true"
         checkCertificates = arguments?.getString("protocol") == "certificates"
+        checkInstalledIdentity = arguments?.getString("protocol") == "installed-identity"
+        checkStandaloneIdentity = arguments?.getString("protocol") == "standalone-identity"
+        checkIdentityUpdate = arguments?.getString("protocol") == "identity-update"
+        if (arguments?.getString("protocol") == "discovery-interop")
+            discoveryInteropPort = arguments.getString("fixturePort")?.toInt() ?: 5883
+        externalMusic = arguments?.getString("externalMusic")
+        embedExternalMusic = arguments?.getString("embedExternalMusic") == "true"
+        checkRenderDpi = arguments?.getString("renderDpi") == "true"
         wirelessReceiver = arguments?.getString("protocol") == "wireless-receiver"
         wirelessSsid = arguments?.getString("ssid") ?: wirelessSsid
         wirelessPassword = arguments?.getString("pass") ?: wirelessPassword
         usbMusic = arguments?.getString("protocol") == "usb-music-pause"
+        carLifeCallAudio = arguments?.getString("protocol") == "carlife-call-audio"
+        projectionVolumes = arguments?.getString("protocol") == "projection-volumes"
         carPlayRadio = arguments?.takeIf { it.getString("protocol") in setOf("carplay-radio-receiver", "carplay-radio-sender") }
         carPlay = arguments?.getString("protocol") == "carplay"
         bonjour = arguments?.getString("protocol") == "carplay-discovery"
@@ -95,6 +127,7 @@ class DriveDeckAapProbe : Instrumentation() {
         checkUsbWait = arguments?.getString("protocol") == "usb-wait"
         networkPolicy = arguments?.getString("networkPolicy")
         hevc = arguments?.getString("codec") == "h265"
+        strictPhone = arguments?.getString("phoneTrust") == "google"
         val name = arguments?.getString("screen")
         layoutProbe = arguments?.getString("layoutDisplay")?.let {
             DriveDeckLayoutProbe(it, arguments.getString("expectedGap")?.toInt())
@@ -114,6 +147,7 @@ class DriveDeckAapProbe : Instrumentation() {
         wifiOffRoute = arguments?.getString("wifiOffRoute")?.let(ProjectionRoute::valueOf)
         arguments?.getString("initialFocus")?.let { initialFocus = HeadUnitSimulator.InitialFocus.valueOf(it) }
         interruptUsb = arguments?.getString("fault") == "usb-write"
+        checkMusicFocus = arguments?.getString("musicFocus") == "true"
         start()
     }
     override fun onStart() {
@@ -122,6 +156,14 @@ class DriveDeckAapProbe : Instrumentation() {
         try {
             check(Build.HARDWARE in listOf("ranchu", "goldfish")) { "Disposable emulator required" }
             val context = targetContext
+            DexPrefs(context).apply { desktopFps = selectedDesktopFps; synchronizeAudioVideo = selectedAvSync }
+            if (projectionControls) {
+                finish(Activity.RESULT_OK, checkProjectionControls(this)); return
+            }
+            discoveryInteropPort?.let { port ->
+                result.putAll(checkAapDiscoveryInterop(context, this.context, port))
+                finish(Activity.RESULT_OK, result); return
+            }
             wifiOffRoute?.let { route ->
                 check(route.usesHeadUnitHotspot)
                 checkProjectionWifi(route)
@@ -189,13 +231,8 @@ class DriveDeckAapProbe : Instrumentation() {
                 result.putString("CarPlay_Bonjour", "Selected the CarPlay receiver among three AirPlay services")
                 finish(Activity.RESULT_OK, result); return
             }
-            if (usbMusic) {
-                UsbMusicPauseProbe(this).run()
-                result.putString("usb_music", "camera kept playing; unplug paused once")
-                finish(Activity.RESULT_OK, result); return
-            }
             carLifeGesturePort?.let { port ->
-                result.putString("gesture", checkCarLifeGestureAudio(port))
+                result.putString("gesture", checkCarLifeGestureAudio(port, selectedAvSync))
                 result.putString("result", "PASS")
                 finish(Activity.RESULT_OK, result)
                 return
@@ -209,19 +246,32 @@ class DriveDeckAapProbe : Instrumentation() {
             if (checkCertificates) {
                 finish(Activity.RESULT_OK, checkReceiverIdentities(context)); return
             }
+            if (checkInstalledIdentity) {
+                finish(Activity.RESULT_OK, checkInstalledPhoneIdentity(context)); return
+            }
+            if (checkStandaloneIdentity) {
+                finish(Activity.RESULT_OK, checkStandalonePhoneIdentity(context)); return
+            }
+            if (checkIdentityUpdate) {
+                finish(Activity.RESULT_OK, checkIdentityUpdates(context)); return
+            }
             if (wirelessReceiver) {
                 result.putAll(WirelessHeadUnitProbe(context, wirelessSsid, wirelessPassword).run()); finish(Activity.RESULT_OK,result);return
             }
             carPlayRadio?.let { args ->
-                val probe = CarPlayRadioProbe(context,args) {
-                    sendStatus(1,Bundle().apply { putString("CarPlay_fixture","listening") })
+                ProjectionResources().use { pairing ->
+                    if (args.getString("emulatorPairing") == "true") emulatorBluetoothPairing(this,
+                        requireNotNull(args.getString("peer")), args.getString("protocol") == "carplay-radio-sender", pairing)
+                    val probe = CarPlayRadioProbe(context,args) {
+                        sendStatus(1,Bundle().apply { putString("CarPlay_fixture","listening") })
+                    }
+                    // Keep the OS pairing dialog in front when the bootstrap starts during bonding.
+                    val activity = if (args.getString("protocol") == "carplay-radio-sender" && args.getString("pairingInProgress") != "true")
+                        startActivitySync(Intent(context,ProjectionSettingsActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    else null
+                    try { result.putAll(probe.run()) }
+                    finally { activity?.let { runOnMainSync(it::finish) } }
                 }
-                // Keep the OS pairing dialog in front when the bootstrap starts during bonding.
-                val activity = if (args.getString("protocol") == "carplay-radio-sender" && args.getString("pairingInProgress") != "true")
-                    startActivitySync(Intent(context,ProjectionSettingsActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                else null
-                try { result.putAll(probe.run()) }
-                finally { activity?.let { runOnMainSync(it::finish) } }
                 finish(Activity.RESULT_OK,result)
                 return
             }
@@ -239,14 +289,41 @@ class DriveDeckAapProbe : Instrumentation() {
             } else ui.adoptShellPermissionIdentity(DelegatedDesktopAccess.ADD_TRUSTED_DISPLAY, DelegatedDesktopAccess.INJECT_EVENTS,
                 DelegatedDesktopAccess.REAL_GET_TASKS, DelegatedDesktopAccess.MEDIA_CONTENT_CONTROL, ShellDisplayIme.PERMISSION,
                 DelegatedDesktopAccess.ADD_ALWAYS_UNLOCKED_DISPLAY, DesktopAudioPolicy.PERMISSION, DesktopAudioPolicy.ROUTING_PERMISSION,
-                "android.permission.DUMP")
+                "android.permission.DUMP", "android.permission.MODIFY_AUDIO_SETTINGS",
+                *(if (Build.VERSION.SDK_INT >= 37) com.hsd.universal.dex.VdmPoolProtocol.permissions else emptyArray()),
+                *(if (usbDebuggingOff) arrayOf("android.permission.WRITE_SECURE_SETTINGS") else emptyArray()))
             val lease = if (shizuku) null else DelegatedDesktopAccess.begin {}
+            var debugging: AutoCloseable? = null
             try {
                 (if (shizuku) null else VdmProbeHost.start(this, ui)).use {
+                    if (usbDebuggingOff) {
+                        val lifetime = com.hsd.universal.dex.VdmHostLink.nativeHostLifetime
+                        debugging = disableUsbDebuggingForProbe(context)
+                        check(DelegatedDesktopAccess.isReady(context) && com.hsd.universal.dex.VdmHostLink.isReady)
+                        check(com.hsd.universal.dex.VdmHostLink.adbIndependent)
+                        check(com.hsd.universal.dex.VdmHostLink.nativeHostLifetime === lifetime)
+                        result.putBoolean("activation_retained_without_adb", true)
+                    }
                     DexPrefs(context).apply {
                         desktopMode = if (carLifeDesktop) DesktopModePolicy.ANDROID_DESKTOP else DesktopModePolicy.DRIVEDECK
                         if (shizuku) useShizuku = true else useDelegated = true
                         usbPlaybackAudio = !shizuku
+                    }
+                    if (usbMusic) {
+                        UsbMusicPauseProbe(this).run()
+                        UsbMusicPauseProbe(this).run(wireless = true)
+                        UsbMusicPauseProbe(this).run(wireless = true, explicitStop = true)
+                        UsbMusicPauseProbe(this).run(wireless = true, serviceDestroyed = true)
+                        result.putString("music_disconnect", "camera and stale link kept playing; USB unplug, Wi-Fi loss, explicit Stop and service destruction each paused once")
+                        finish(Activity.RESULT_OK, result); return
+                    }
+                    if (carLifeCallAudio) {
+                        result.putString("carlife_call_audio", checkCarLifeCallAudio(this, ::fixtureAudio))
+                        finish(Activity.RESULT_OK, result); return
+                    }
+                    if (projectionVolumes) {
+                        result.putString("projection_volumes", checkProjectionVolumes(this))
+                        finish(Activity.RESULT_OK, result); return
                     }
                     if (checkUsbWait) {
                         val actions = com.hsd.universal.ui.Actions
@@ -271,6 +348,20 @@ class DriveDeckAapProbe : Instrumentation() {
                         context.packageManager.getLaunchIntentForPackage(it) != null
                     }
                     val fixtureApps = setOf("com.android.settings", clock)
+                    if (checkRenderDpi) {
+                        val prefs = DexPrefs(context)
+                        val oldDpi = prefs.desktopDensity
+                        val oldCompact = prefs.compactMapSymbols
+                        val oldPackages = prefs.dpiCorrectionPackages
+                        restoreRenderPrefs = {
+                            prefs.desktopDensity = oldDpi; prefs.compactMapSymbols = oldCompact
+                            prefs.dpiCorrectionPackages = oldPackages
+                        }
+                        prefs.desktopDensity = 0
+                        prefs.compactMapSymbols = true
+                        // A custom selection proves this is not a hardcoded Yandex-only path.
+                        prefs.dpiCorrectionPackages = oldPackages + "com.android.settings" - clock
+                    }
                     fun splitReady(display: Int) = tasks(context).let { activities ->
                         val home = if (shizuku) DesktopModePolicy.DRIVEDECK_HOME_CLASS else DesktopModePolicy.driveDeckHome(context)
                         activities.any { it.first == display && it.second == home } &&
@@ -322,6 +413,7 @@ class DriveDeckAapProbe : Instrumentation() {
                         result.putString("DriveDeck_windows", "Split apps, fullscreen app and return to split")
                         return@use
                     }
+                    repeat(if (usbDebuggingOff) 3 else 1) { connectionRound ->
                     val isUsb = testLink == "usb" || oldUsbFrames > 0 || lateUsbVersion
                     if (isUsb) {
                         checkUsbReopen()
@@ -361,7 +453,13 @@ class DriveDeckAapProbe : Instrumentation() {
                     file.outputStream().buffered().use videoTest@{ video ->
                         val rejected = authRefusal
                         val authCase = rejected != null || silentAuth || disconnectDuringTls
-                        val sender = identity.phone("qa-wired")
+                        val sender = if (strictPhone && rejected == -3)
+                            net.prototux.aare.aap.cert.SelfSignedCertificate.generate("Untrusted phone fixture").let {
+                                PhoneIdentity(it.certificate, it.keyPair.private)
+                            } else identity.phone("qa-wired")
+                        val phoneRoot = if (strictPhone) context.resources.openRawResource(R.raw.aa_google_automotive_link).use {
+                            java.security.cert.CertificateFactory.getInstance("X.509").generateCertificate(it) as java.security.cert.X509Certificate
+                        } else null
                         val receiverClock = when (rejected) {
                             -23 -> java.util.Date(sender.certificate.notBefore.time - 1000)
                             -24 -> java.util.Date(sender.certificate.notAfter.time + 1000)
@@ -377,17 +475,25 @@ class DriveDeckAapProbe : Instrumentation() {
                         }
                         val hu = HeadUnitSimulator(car, authorizationStatus = if (silentAuth) null else if (receiverClock != null) 0 else rejected ?: 0,
                             disconnectDuringTls = disconnectDuringTls, encryptAuthorization = encryptAuthorization,
-                            receiverClock = receiverClock, initialFocus = initialFocus, requestPings = !interruptUsb,
+                            receiverClock = receiverClock, trustedPhoneRoot = phoneRoot, initialFocus = initialFocus, requestPings = !interruptUsb,
                             protocolVersion = version, width = test?.panelW ?: 1280, height = test?.panelH ?: 720,
+                            dpi = if (checkRenderDpi) 213 else 160,
                             previousUsbFrames = oldUsbFrames, offeredModes = test?.modes, offeredIndices = test?.indices ?: listOf(0), maxUnacked = if (modern) 1 else 4, modernNoAcks = modern, videoOut = video, videoCodec = codec)
                         val peer = if (authCase) "usb|qa-refusal-${java.util.UUID.randomUUID()}" else "qa-wired"
                         val ready = CountDownLatch(1)
                         val failWrites = java.util.concurrent.atomic.AtomicBoolean()
                         val reopenChecked = CountDownLatch(1)
-                        val transport = if (!interruptUsb) phone else object : Transport by phone {
+                        val stallNextWrite = java.util.concurrent.atomic.AtomicBoolean()
+                        val writeBlocked = CountDownLatch(1)
+                        val releaseWrite = CountDownLatch(1)
+                        val transport = if (!interruptUsb && !slowVideoWriter) phone else object : Transport by phone {
                             override val output = object : java.io.FilterOutputStream(phone.output) {
                                 override fun write(bytes: ByteArray, offset: Int, length: Int) {
                                     if (failWrites.get()) throw java.io.IOException("write failed: EIO (I/O error)")
+                                    if (stallNextWrite.compareAndSet(true, false)) {
+                                        writeBlocked.countDown()
+                                        check(releaseWrite.await(5, TimeUnit.SECONDS)) { "Probe did not release blocked video write" }
+                                    }
                                     out.write(bytes, offset, length)
                                 }
                             }
@@ -425,6 +531,7 @@ class DriveDeckAapProbe : Instrumentation() {
                                     identity.receiverReference(peer) == AaCertificateReference.Match.NO_MATCH)
                                 result.putString("receiver_identity", "Available for per-head-unit selection, trust and actually presented certificate checked")
                                 if (rejected == -3) {
+                                    if (strictPhone) check(hu.phoneAuthorization == -3)
                                     check(detail == context.getString(R.string.aa_auth_unspecified, "-3 (STATUS_AUTHENTICATION_FAILURE)")) { detail }
                                 }
                                 if (receiverClock != null) check(sender.certificate.notBefore.toInstant().toString() in detail &&
@@ -449,6 +556,10 @@ class DriveDeckAapProbe : Instrumentation() {
                             }
                             check(hu.firstVideoFrame.count == 0L) {
                                 "No DriveDeck video · ${hu.error} · ${statuses.joinToString()} · ${DexState.error}"
+                            }
+                            if (strictPhone) {
+                                check(hu.phoneAuthorization == 0)
+                                result.putString("phone_identity", "Google Automotive Link path and TLS key possession verified by receiver")
                             }
                             check(pins.get("qa-wired").contains(fingerprint(hu.huCert.certificate)))
                             check(hu.openedChannels.containsAll(listOf(hu.video, hu.input)))
@@ -484,6 +595,55 @@ class DriveDeckAapProbe : Instrumentation() {
                                 result.putString("startup_audio", "silent capture left the head unit's audio focus alone")
                             }
                             result.putInt("received_video_frames", hu.videoFrames.get())
+                            if (checkRenderDpi) {
+                                val parent = DexState.displayId
+                                val dm = context.getSystemService(android.hardware.display.DisplayManager::class.java)
+                                fun dpi(id: Int) = context.createDisplayContext(checkNotNull(dm.getDisplay(id))).resources.displayMetrics.densityDpi
+                                check(dpi(parent) == 128) { "AA used receiver density instead of desktop density: ${dpi(parent)}" }
+                                fun splitDensityReady() = tasks(context).let { all ->
+                                    fun child(pkg: String, expected: Int, scaled: Boolean) = all.any { task ->
+                                        val d = dm.getDisplay(task.first)
+                                        task.first > 0 && task.first != parent && task.third == pkg && d != null &&
+                                            dpi(task.first) == expected && (d.mode.physicalHeight > 720) == scaled
+                                    }
+                                    child(settings.packageName, 320, true) && child(clock, 128, false)
+                                }
+                                await("selected custom app 320 DPI, unselected clock 128 DPI") { splitDensityReady() }
+                                hu.requestFocusNative(); SystemClock.sleep(500); hu.requestFocusProjected()
+                                await("corrected split windows after camera") { splitDensityReady() }
+                                val overlay = openFullscreen(parent, settings)
+                                await("corrected full-screen custom app") {
+                                    tasks(context).any { task -> task.third == settings.packageName &&
+                                        dm.getDisplay(task.first)?.let { d ->
+                                            // Full-screen correction shares the same finite pixel budget.
+                                            // Preserve dp geometry even when the buffer cannot reach 320 DPI.
+                                            d.name.contains("fullscreen", ignoreCase = true) &&
+                                                dpi(task.first) in 256..320 &&
+                                                kotlin.math.abs(d.mode.physicalWidth * 128.0 / dpi(task.first) - 1280) < 5 &&
+                                                d.mode.physicalWidth.toLong() * d.mode.physicalHeight <= 5_200_000
+                                        } == true }
+                                }
+                                runOnMainSync { checkNotNull(button(overlay.window.decorView, R.string.desktop_drivedeck_home)).performClick() }
+                                await("correction restored after full-screen Home") { overlay.isDestroyed && splitDensityReady() }
+                                result.putString("dpi_correction", "Receiver 213 DPI; desktop 128 DPI; selected custom app 320 DPI in tiles, full-screen >=256 DPI within pixel budget with preserved dp geometry, unselected app 128 DPI; split, camera, fullscreen, return passed")
+                                return@videoTest
+                            }
+                            if (checkMusicFocus) {
+                                check(DesktopAudioAccess.hasPermission(context)) { "This case requires real playback capture" }
+                                val placePlayer: (() -> Unit)? = if (!embedExternalMusic) null else ({
+                                    val parent = DexState.displayId
+                                    val vlc = checkNotNull(context.packageManager.getLaunchIntentForPackage("org.videolan.vlc")?.component)
+                                    openFullscreen(parent, vlc)
+                                    await("VLC inside DriveDeck's full-screen child display") {
+                                        tasks(context).any { task -> task.first > 0 && task.first != parent && task.third == vlc.packageName &&
+                                            context.getSystemService(android.hardware.display.DisplayManager::class.java)
+                                                .getDisplay(task.first)?.name?.contains("fullscreen", ignoreCase = true) == true }
+                                    }
+                                })
+                                result.putAll(externalMusic?.let { checkExternalMusic(this, hu, it, placePlayer) }
+                                    ?: AapMusicFocusProbe(this).run(hu, fixtureAudio()))
+                                return@videoTest
+                            }
                             val display = DexState.displayId
                             fun size(id: Int) = context.getSystemService(android.hardware.display.DisplayManager::class.java)
                                 ?.getDisplay(id)?.mode?.let { it.physicalWidth to it.physicalHeight }
@@ -494,6 +654,17 @@ class DriveDeckAapProbe : Instrumentation() {
                                 result.putInt("start_index", test.index)
                             }
                             await("embedded applications") { splitReady(display) }
+                            selectedDesktopFps.fixed?.let { cap ->
+                                val before = hu.videoFrames.get()
+                                val started = SystemClock.elapsedRealtime()
+                                SystemClock.sleep(4000)
+                                val elapsed = SystemClock.elapsedRealtime() - started
+                                val count = hu.videoFrames.get() - before
+                                check(count >= 4 && count <= cap * elapsed / 1000 + 2) {
+                                    "Encoded output exceeded $cap FPS or stopped: $count frames in ${elapsed}ms"
+                                }
+                                result.putString("measured_frame_limit", "$count encoded frames in ${elapsed}ms; cap=$cap")
+                            }
                             result.putString("DriveDeck_windows", fixtureApps.sorted().joinToString())
                             result.putInt("DriveDeck_display", display)
                             result.putString("AAP_channels", hu.openedChannels.sorted().joinToString())
@@ -516,6 +687,7 @@ class DriveDeckAapProbe : Instrumentation() {
                                     // window reach it before clicking buttons on the previous frame.
                                     val previous = hu.videoFrames.get()
                                     await("fullscreen frame delivery") { hu.videoFrames.get() >= previous + 5 }
+                                    settleInputWindows()
                                     return test?.point(point[0], point[1]) ?: (point[0] to point[1])
                                 }
                                 val homeOverlay = openFullscreen(display, settings)
@@ -533,11 +705,13 @@ class DriveDeckAapProbe : Instrumentation() {
                                     val fixture = com.hsd.universal.qa.BackStackRoot::class.java
                                     val component = android.content.ComponentName(this@DriveDeckAapProbe.context.packageName, fixture.name)
                                     val depth = java.util.concurrent.atomic.AtomicInteger(-1)
+                                    val fixtureDisplay = java.util.concurrent.atomic.AtomicInteger(-1)
                                     val gestures = java.util.concurrent.CopyOnWriteArrayList<Triple<Int, Int, Int>>()
                                     val receiver = object : android.content.BroadcastReceiver() {
                                         override fun onReceive(ctx: Context, event: Intent) {
                                             val id = event.getIntExtra("display", -1)
                                             if (id <= 0 || id == display) return
+                                            if (event.getBooleanExtra("ready", false)) fixtureDisplay.set(id)
                                             if (event.hasExtra("depth")) depth.set(event.getIntExtra("depth", -1))
                                             if (event.hasExtra("touch")) gestures.add(Triple(event.getIntExtra("touch", -1),
                                                 event.getIntExtra("count", -1), event.getIntExtra("changedId", -1)))
@@ -554,8 +728,23 @@ class DriveDeckAapProbe : Instrumentation() {
                                     try {
                                         for (hardware in listOf(false, true)) {
                                             depth.set(-1)
+                                            fixtureDisplay.set(-1)
                                             val fullscreenApp = openFullscreen(display, component)
-                                            await("focused input fixture on a child display") { depth.get() == 3 }
+                                            await("drawn input fixture on a child display") { fixtureDisplay.get() > 0 }
+                                            // Android's untrusted presentation displays require a user touch
+                                            // before granting key focus. Exercise that real input path before
+                                            // asserting Back/gesture behavior; launch alone is not focus.
+                                            val fixtureFrames = hu.videoFrames.get()
+                                            await("fixture frame delivery") { hu.videoFrames.get() >= fixtureFrames + 3 }
+                                            settleInputWindows()
+                                            hu.tap(580, 370)
+                                            await("focused input fixture on a child display") {
+                                                result.putInt("fixture_depth", depth.get())
+                                                result.putString("fixture_touch", gestures.toString())
+                                                depth.get() == 3
+                                            }
+                                            await("completed focus tap") { gestures.lastOrNull()?.first == 1 }
+                                            gestures.clear()
                                             val back = position(fullscreenApp, R.string.set_back)
                                             waitForIdleSync()
                                             if (!hardware) {
@@ -565,6 +754,29 @@ class DriveDeckAapProbe : Instrumentation() {
                                                     hu.touch(action, index, *points)
                                                 fun received(action: Int) = await("app receives action $action; $gestures") {
                                                     gestures.lastOrNull()?.first == action
+                                                }
+                                                if (slowVideoWriter) {
+                                                    val before = hu.receivedVideo.size
+                                                    stallNextWrite.set(true)
+                                                    check(writeBlocked.await(3, TimeUnit.SECONDS))
+                                                    val started = System.nanoTime()
+                                                    try {
+                                                        touch(0, 0, a); received(0)
+                                                        touch(1, 0, a); received(1)
+                                                        val touchMs = (System.nanoTime() - started) / 1_000_000
+                                                        check(touchMs < 500) { "Input waited on video writer: ${touchMs}ms" }
+                                                        check(releaseWrite.count == 1L)
+                                                        // Let queued frames expire while the child app remains responsive.
+                                                        SystemClock.sleep(750)
+                                                        result.putLong("input_during_blocked_video_ms", touchMs)
+                                                    } finally { releaseWrite.countDown() }
+                                                    await("video recovery after stalled USB writer") { hu.receivedVideo.size >= before + 12 }
+                                                    val after = hu.receivedVideo.drop(before)
+                                                    val stale = after.count { (it.receivedNanos / 1000 - it.ptsUs) > 500_000 }
+                                                    check(stale <= 1) { "Writer flushed $stale stale frames after USB recovered" }
+                                                    check(after.drop(1).any { it.key }) { "No independent frame after clearing stale references" }
+                                                    result.putString("slow_writer", "750ms stall; input delivered before release; stale frames=$stale; IDR recovery")
+                                                    gestures.clear()
                                                 }
                                                 hu.touch(4, 0, b)
                                                 hu.touch(null, 0, a); received(0)
@@ -602,10 +814,20 @@ class DriveDeckAapProbe : Instrumentation() {
                                             SystemClock.sleep(120)
                                             press()
                                             await("double Back via hardware=$hardware returning to DriveDeck") {
-                                                (if (hardware) !fullscreenApp.hasWindowFocus() else fullscreenApp.isDestroyed) &&
-                                                    tasks(context).firstOrNull { it.first == display }?.third == DesktopModePolicy.DRIVEDECK_PACKAGE &&
+                                                val parentTasks = tasks(context).filter { it.first == display }
+                                                var hidden = false
+                                                runOnMainSync {
+                                                    hidden = fullscreenApp.isDestroyed ||
+                                                        fullscreenApp.window.decorView.windowVisibility != View.VISIBLE
+                                                }
+                                                result.putString("back_state", "depth=${depth.get()} destroyed=${fullscreenApp.isDestroyed} " +
+                                                    "hidden=$hidden tasks=$parentTasks")
+                                                // RunningTasks is ordered by recency, not display Z order.
+                                                // Observe the actual host window disappearing instead.
+                                                hidden && (hardware || fullscreenApp.isDestroyed) &&
                                                     splitReady(display)
                                             }
+                                            result.remove("back_state")
                                         }
                                     } finally { context.unregisterReceiver(receiver) }
                                     result.putString("DriveDeck_Back", "Single Back in app, double Back to DriveDeck via touch and HU key")
@@ -632,6 +854,20 @@ class DriveDeckAapProbe : Instrumentation() {
                             } else {
                                 check(!DesktopAudioState.running)
                                 result.putString("audio", "external playback; capture unavailable")
+                            }
+                            if (interruptUsb) {
+                                // Descriptor recovery must also be exercised on Android versions
+                                // where this activation cannot grant playback capture. Video alone
+                                // still has an active USB writer and must recover from the same EIO.
+                                check(isUsb && hu.pingsAnswered.get() == 0)
+                                failWrites.set(true)
+                                check(closed.await(10, TimeUnit.SECONDS) && projection.retryUsbOpen)
+                                // canReopenUsb is consulted to retain a delivered audio route.
+                                // With no audio, prove recovery by reopening and receiving video.
+                                check(!DexState.running && statuses.last().contains("EIO"))
+                                checkUsbRecovery(context, sender, pins, peer, hu.huCert)
+                                result.putString("usb_interruption", "AAP 1.4 write EIO during video; new descriptor to the same receiver resumed projection; playback capture unavailable")
+                                return@videoTest
                             }
                             hu.requestFocusNative()
                             check(hu.stoppedVideo.await(5, TimeUnit.SECONDS)) { "No STOP on native focus" }
@@ -661,14 +897,27 @@ class DriveDeckAapProbe : Instrumentation() {
                                 hu.requestPortrait()
                                 await("portrait video after in-session CONFIG") {
                                     hu.codecConfigs.get() > configsBeforeChange && DexState.displayId > 0 &&
-                                        DexState.displayId != display && statuses.any { it.contains("720 × 1280 · H.") }
+                                        size(DexState.displayId) == (720 to 1280) &&
+                                        statuses.any { it.contains("720 × 1280 · H.") }
                                 }
                                 result.putString("AAP_reconfiguration","1280×720 to 720×1280 on the same TLS connection")
                             }
                             hu.sayByeBye()
-                            check(closed.await(18, TimeUnit.SECONDS)) { "DriveDeck failed to release on disconnect" }
+                            if (!closed.await(3, TimeUnit.SECONDS)) {
+                                File(context.cacheDir, "qa-failure-threads.txt").writeText(
+                                    Thread.getAllStackTraces().entries.joinToString("\n\n") { (thread, stack) ->
+                                        "${thread.name} ${thread.state}\n" + stack.joinToString("\n")
+                                    })
+                                check(closed.await(15, TimeUnit.SECONDS)) { "DriveDeck failed to release on disconnect" }
+                            }
                             check(!projection.retryUsbOpen)
                             check(!DexState.running)
+                            if (usbDebuggingOff) {
+                                check(com.hsd.universal.dex.VdmHostLink.adbIndependent) { "Pool retired on ordinary disconnect" }
+                                check(DelegatedDesktopAccess.isReady(context)) { "Activation lost on ordinary disconnect" }
+                                result.putInt("connections_without_adb", connectionRound + 1)
+                                if (connectionRound == 2) recordIdlePool(result)
+                            }
                         } finally {
                             runOnMainSync { projection.stop("Test session finished") }
                             hu.stop()
@@ -676,19 +925,60 @@ class DriveDeckAapProbe : Instrumentation() {
                             if (authCase) identity.forget(peer)
                         }
                     }
+                    }
                 }
             } finally {
+                debugging?.close()
+                restoreRenderPrefs?.invoke()
                 lease?.let(DelegatedDesktopAccess::end)
-                ui.dropShellPermissionIdentity()
+                if (usbDebuggingOff) runCatching { ui.dropShellPermissionIdentity() } else ui.dropShellPermissionIdentity()
             }
             result.putString("backend", if (shizuku) "Shizuku UserService" else "delegated")
+            if (usbDebuggingOff) result.putString("debugging", "Both debugging modes off; same activation and native lifetime; settings restored")
             result.putString("result", "PASS")
             result.putString("projection", statuses.joinToString())
-            finish(Activity.RESULT_OK, result)
+            finishProbe(Activity.RESULT_OK, result)
         } catch (failure: Throwable) {
             result.putString("error", android.util.Log.getStackTraceString(failure).take(4500))
             result.putString("projection", statuses.joinToString())
-            finish(Activity.RESULT_CANCELED, result)
+            finishProbe(Activity.RESULT_CANCELED, result)
+        }
+    }
+    private fun finishProbe(code: Int, result: Bundle) {
+        if (!usbDebuggingOff) { finish(code, result); return }
+        val data = org.json.JSONObject().put("pass", code == Activity.RESULT_OK)
+        @Suppress("DEPRECATION")
+        result.keySet().forEach { key -> data.put(key, result.get(key)) }
+        File(targetContext.filesDir, "qa-adb-off-result.json").writeText(data.toString(2))
+        // am/UiAutomationConnection deliberately died with adbd; the app record is the result.
+        runCatching { finish(code, result) }
+    }
+    private fun recordIdlePool(result: Bundle) {
+        val context = targetContext
+        val displays = context.getSystemService(android.hardware.display.DisplayManager::class.java).displays
+            .filter { it.name in com.hsd.universal.dex.VdmPoolProtocol.names }
+        check(displays.size == 5 && displays.all { it.displayId > 0 })
+        check(tasks(context).none { task -> displays.any { it.displayId == task.first } })
+        val pid = com.hsd.universal.dex.IVdmPoolTokens.Stub.asInterface(
+            checkNotNull(com.hsd.universal.dex.VdmHostLink.nativeHostLifetime)).ownerPid()
+        val memory = context.getSystemService(ActivityManager::class.java).getProcessMemoryInfo(intArrayOf(android.os.Process.myPid(), pid))
+        result.putInt("idle_main_pss_kib", memory[0].totalPss)
+        result.putInt("idle_token_owner_pss_kib", memory[1].totalPss)
+        val cpu = android.os.Process.getElapsedCpuTime()
+        val then = SystemClock.elapsedRealtime()
+        SystemClock.sleep(3000)
+        result.putLong("idle_main_cpu_ms", android.os.Process.getElapsedCpuTime() - cpu)
+        result.putLong("idle_observed_ms", SystemClock.elapsedRealtime() - then)
+        val power = context.getSystemService(android.os.PowerManager::class.java)
+        check(displays.all {
+            com.hsd.universal.dex.VdmPoolApi.call(power, "isInteractive", it.displayId) == false
+        }) { "The idle display group kept the device awake" }
+        result.putString("idle_displays", displays.joinToString { "${it.displayId}:${it.mode.physicalWidth}x${it.mode.physicalHeight}:state=${it.state}" })
+        result.putBoolean("idle_group_asleep", true)
+        for (service in listOf("power", "display")) {
+            File(context.cacheDir, "qa-idle-$service.txt").outputStream().use {
+                com.hsd.universal.dex.VdmHostCore.service(service).dump(it.fd, emptyArray())
+            }
         }
     }
     private fun checkUsbRecovery(context: Context, sender: PhoneIdentity, pins: PinStore, peer: String, receiver: PhoneIdentity) {
@@ -847,7 +1137,24 @@ class DriveDeckAapProbe : Instrumentation() {
     private fun await(stage: String = "video", ok: () -> Boolean) {
         val deadline = SystemClock.elapsedRealtime() + 18_000
         while (!ok() && SystemClock.elapsedRealtime() < deadline) SystemClock.sleep(100)
-        check(ok()) { "Timed out waiting for $stage · ${DexState.error} · ${DesktopAudioState.status(targetContext)}" }
+        if (!ok()) {
+            for (service in listOf("input", "window", "display", "power")) runCatching {
+                File(targetContext.cacheDir, "qa-failure-$service.txt").outputStream().use {
+                    com.hsd.universal.dex.VdmHostCore.service(service).dump(it.fd, emptyArray())
+                }
+            }
+            error("Timed out waiting for $stage · ${DexState.error} · ${DesktopAudioState.status(targetContext)}")
+        }
+    }
+
+    /** Drawing precedes InputDispatcher registration. Match Android's own UI test input barrier. */
+    private fun settleInputWindows() {
+        if (usbDebuggingOff) {
+            val wm = com.hsd.universal.dex.VdmPoolApi.remote("android.view.IWindowManager", "window")
+            com.hsd.universal.dex.VdmPoolApi.call(wm, "syncInputTransactions", true)
+            return
+        }
+        android.app.UiAutomation::class.java.getMethod("syncInputTransactions").invoke(uiAutomation)
     }
 }
 

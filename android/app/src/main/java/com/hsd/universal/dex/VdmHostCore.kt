@@ -26,7 +26,7 @@ import java.util.concurrent.Executor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** All native calls run in their real shell owner. No cross-UID display callback tokens escape. */
+/** Native creation runs in its real shell owner; activation may supply app-owned lifetime tokens. */
 @android.annotation.TargetApi(37)
 class VdmHostCore private constructor(base: Context, private val clientUid: Int, private val fatal: () -> Unit) {
     init {
@@ -41,6 +41,7 @@ class VdmHostCore private constructor(base: Context, private val clientUid: Int,
     private var associationId = -1
     private var active: Session? = null
     private var closed = false
+    private var offeredPoolDevice: Any? = null
     private val retiring = AtomicBoolean()
 
     init {
@@ -69,6 +70,7 @@ class VdmHostCore private constructor(base: Context, private val clientUid: Int,
         synchronized(lock) {
             if (closed) return@boundary
             active?.finishNative() // Failure must not be converted to a successful release ACK.
+            offeredPoolDevice?.let { VdmPoolApi.call(it, "close") }; offeredPoolDevice = null
             active = null
             closed = true
             try { removeOwnAssociation() }
@@ -210,6 +212,33 @@ class VdmHostCore private constructor(base: Context, private val clientUid: Int,
         }
     }
     private data class Slot(val display: VirtualDisplay, val surface: Surface)
+    /** Native creation still runs with the genuine shell attribution and association owner. */
+    fun createAppOwnedPool(tokens: android.os.Bundle): android.os.Bundle = boundary {
+        check(active == null && !closed && offeredPoolDevice == null)
+        check(tokens.getStringArrayList("names") == VdmPoolProtocol.names)
+        val builder = Class.forName("android.companion.virtual.VirtualDeviceParams\$Builder").getConstructor().newInstance()
+        VdmPoolApi.call(builder, "setLockState", 1)
+        VdmPoolApi.call(builder, "setName", VdmHostPolicy.DISPLAY_NAME)
+        val device = checkNotNull(VdmPoolApi.call(VdmPoolApi.remote("android.companion.virtual.IVirtualDeviceManager", "virtualdevice"),
+            "createVirtualDevice", checkNotNull(tokens.getBinder("deviceToken")), context.attributionSource,
+            associationId, VdmPoolApi.call(builder, "build"),
+            VdmPoolApi.iface("android.companion.virtual.IVirtualDeviceActivityListener", checkNotNull(tokens.getBinder("activityListener"))),
+            VdmPoolApi.iface("android.companion.virtual.IVirtualDeviceSoundEffectListener", checkNotNull(tokens.getBinder("soundListener")))))
+        offeredPoolDevice = device
+        val ids = VdmPoolProtocol.names.mapIndexed { index, name ->
+            val flags = VdmHostPolicy.displayFlags(DesktopModePolicy.displayFlags(DesktopModePolicy.DRIVEDECK, 37, true, true))
+            val config = VirtualDisplayConfig.Builder(name, 128, 128, 160).setFlags(flags).build()
+            VdmPoolApi.call(device, "createVirtualDisplay", config,
+                VdmPoolApi.iface("android.hardware.display.IVirtualDisplayCallback", checkNotNull(tokens.getBinder("displayToken$index")))) as Int
+        }.toIntArray()
+        android.os.Bundle().apply { putIntArray("displayIds", ids); putInt("associationId", associationId) }
+    }
+    /** Main accepted its own tokens and actual native metadata. Shell no longer owns their lifetime. */
+    fun detachAppOwnedPool() {
+        check(active == null && offeredPoolDevice != null && !closed)
+        offeredPoolDevice = null; closed = true
+        fileLease.release(); lockFile.close()
+    }
     private fun newDevice(): Any {
         val builderClass = Class.forName("android.companion.virtual.VirtualDeviceParams\$Builder")
         val builder = builderClass.getConstructor().newInstance()

@@ -7,6 +7,17 @@ import org.junit.Test
 import java.util.Random
 
 class FrameGateTest {
+    @Test fun isolatedDesktopUpdateCanRenderAtNextSlotWithoutWaitingForMoreInput() {
+        val gate = FrameGate(15, limitHighFps = true)
+        assertTrue(gate.shouldEmit(0))
+        val arrival = 60_000_000L
+        assertFalse(gate.shouldEmit(arrival))
+        val delay = gate.delayNs(arrival)
+        assertTrue(delay in 1..7_000_000)
+        assertEquals(delay, gate.delayNs(arrival)) // observation must not consume the slot
+        assertTrue(gate.shouldEmit(arrival + delay))
+        assertFalse(gate.shouldEmit(arrival + delay + 1_000_000))
+    }
     /** Сколько кадров пропустит гейт за seconds секунд входа с частотой inFps (джиттер +-jitterMs). */
     private fun passed(gate: FrameGate, inFps: Int, seconds: Int, jitterMs: Int = 0): Int {
         val rnd = Random(42)

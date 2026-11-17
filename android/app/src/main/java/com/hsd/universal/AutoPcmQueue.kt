@@ -7,6 +7,7 @@ import com.hsd.universal.link.ReceiverAudioCalibration
 
 /** Present captured PCM on the same monotonic clock as completed video frames. */
 internal class AutoPcmQueue(private val calibration: ReceiverAudioCalibration,
+                            private val synchronize: Boolean = true,
                             private val emit: (ByteArray, Long) -> Unit) {
     private data class Packet(val buffer: ByteArray, val ptsUs: Long, val dueUs: Long)
     private val thread = HandlerThread("hsd-universal-pcm").apply { start() }
@@ -14,7 +15,7 @@ internal class AutoPcmQueue(private val calibration: ReceiverAudioCalibration,
     private val queue = ArrayDeque<Packet>()
     private val wake = Runnable { drain() }
     private var bytes = 0
-    private var videoLagUs = 0L
+    private var videoLagUs: Long? = null
     private var trim = 0
     private var closed = false
     private var playing = false
@@ -28,14 +29,15 @@ internal class AutoPcmQueue(private val calibration: ReceiverAudioCalibration,
 
     @Synchronized fun videoWritten(ptsUs: Long) {
         val age = System.nanoTime() / 1000 - ptsUs
-        if (age in 0..500_000) videoLagUs = if (videoLagUs == 0L) age else (videoLagUs * 7 + age) / 8
+        // Once playing, moving the audio clock to follow video jitter inserts gaps or bursts.
+        if (synchronize && videoLagUs == null && age in 0..500_000) videoLagUs = age
     }
 
     @Synchronized fun enqueue(pcm: ByteArray, ptsUs: Long): Boolean {
         if (closed) return false
-        val selected = calibration.milliseconds()
+        val selected = if (synchronize) calibration.milliseconds() else 0
         if (trim != selected) { clear(); trim = selected }
-        val due = ptsUs + videoLagUs + selected * 1000L
+        val due = ptsUs + (if (synchronize) videoLagUs ?: 0L else 0L) + selected * 1000L
         val now = System.nanoTime() / 1000
         if (due < now - 150_000 || due > now + 3_000_000 || pcm.size > MAX_BYTES) return false
         while (queue.isNotEmpty() && (bytes + pcm.size > MAX_BYTES || queue.size >= 512)) {

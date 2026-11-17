@@ -2,7 +2,6 @@
 <resources>
     <!-- ui/Actions.kt -->
     <string name="act_open_aa_failed">Can\'t open Android Auto settings: %1$s</string>
-    <string name="act_open">Open</string>
     <string name="act_cancel">Cancel</string>
 
     <!-- ui/LogShare.kt -->
@@ -18,5 +17,4 @@
     <string name="share_size_kib">%1$d KiB</string>
 
     <!-- BridgeService.kt -->
-    <string name="svc_bridge_failed">Bridge failed to start: %1$s</string>
 </resources>

@@ -32,6 +32,7 @@ key.properties
 *.key
 *.pem
 !android/app/src/main/assets/carplay/apple-accessory-ca.pem
+!android/app/src/androidTest/assets/aap-interop/receiver.pem
 /android/app/src/main/assets/aa/
 
 # Only the small, synthetic diagnostic examples belong in source control.

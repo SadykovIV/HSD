@@ -25,7 +25,7 @@ class AaVideoNegotiationTest {
             val layout = AaVideoLayout.of(mode, 0, !native)!!
             val height = if (native) 1440 else 1080
             assertEquals(expectedWidth to height, layout.desktopWidth to layout.desktopHeight)
-            assertEquals(if (native) 218 else 164, layout.density)
+            assertEquals(if (native) 256 else 192, layout.density)
             assertEquals(VideoViewport(128, 0, 2304, 1440), layout.content)
             assertEquals(expectedWidth - 1 to height - 1, layout.touch(2303, 1439, 2304, 1440, expectedWidth, height, false))
         }
@@ -76,7 +76,7 @@ class AaVideoNegotiationTest {
         assertEquals(0 to 0,l.touch(120,80,2200,1320,1024,600,false))
         assertEquals(1023 to 599,l.touch(2199,1319,2200,1320,1024,600,true))
         assertEquals(0 to 0,l.touch(60,40,1280,720,1024,600,false))
-        assertEquals(220,l.density)
+        assertEquals(120,l.density)
         val updated = AaVideoLayout.of(c.setUiConfig(ui.setContentInsets(Insets.getDefaultInstance())).build(),137,false)!!
         assertEquals(updated.visible,updated.content)
         assertEquals(137,updated.density)
@@ -93,5 +93,27 @@ class AaVideoNegotiationTest {
         val legacy = AaVideoLayout.of(config(9).build(),0,true)!!
         assertEquals(2160 to 3840,legacy.mode.width to legacy.mode.height)
         assertEquals(608 to 1080, legacy.desktopWidth to legacy.desktopHeight)
+    }
+
+    @Test fun automaticDesktopAndSelectedAppSizesAreIndependentOfTransportDensity() {
+        for ((wire, margin, w, h) in listOf(
+            listOf(3, 360, 1920, 720), listOf(2, 0, 1280, 720),
+            listOf(6, 0, 720, 1280), listOf(7, 0, 1080, 1920))) {
+            val native = NativeDesktopGeometry(w, h)
+            val expectedDpi = DesktopVideoSelection(DesktopResolution.AUTO, 0).densityFor(native)
+            for (advertised in listOf(0, 160, 213, 320, 640)) {
+                val mode = config(wire).setHeightMargin(margin).setDensity(advertised).build()
+                val layout = AaVideoLayout.of(mode, 0, false)!!
+                assertEquals(w to h, layout.desktopWidth to layout.desktopHeight)
+                assertEquals(expectedDpi, layout.density)
+                // The same child-render contract serves both built-in maps and every user-selected app.
+                for (selected in listOf(true, false)) assertArrayEquals(
+                    com.hsd.universal.shared.DesktopRenderPolicy.geometry(600, 400, expectedDpi, selected),
+                    com.hsd.universal.shared.DesktopRenderPolicy.geometry(600, 400, layout.density, selected))
+                assertEquals(200, AaVideoLayout.of(mode, 200, false)!!.density)
+            }
+        }
+        assertEquals(128, DesktopGeometryPolicy.density(1920, 720))
+        assertEquals(128, DesktopGeometryPolicy.density(720, 1920))
     }
 }

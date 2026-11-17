@@ -4,6 +4,60 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DesktopAudioClockTest {
+    @Test fun mixerCorrectionAndClockShareOneOriginAcrossSilentPrefillAndPlayback() {
+        val clock = DesktopAudioClock(bufferCapacityFrames = 3072)
+        val mixer = PlaybackVolumeMixer(listOf(false))
+        val pcm = ByteArray(3840) { 1 }
+        var now = 1_000_000L
+        var playbackBuffers = 0
+        // A silent remote submix can initially drain faster than realtime.
+        repeat(100) { index ->
+            now += if (index < 20) 5_000 else 20_000
+            val at = clock.read(960, now)
+            clock.correctFutureSamples(mixer.offer(0, pcm, at, now))
+            while (true) {
+                val out = mixer.poll(now, 100, 100) ?: break
+                if (index >= 20) playbackBuffers++
+                assertTrue("delivered PCM cannot have future samples", out.ptsUs + 20_000 <= now)
+                assertTrue("origin correction must not accumulate stale playback", now - out.ptsUs < 100_000)
+            }
+        }
+        val next = clock.read(960, now + 20_000)
+        assertTrue("playback must resume after the initial burst", playbackBuffers >= 75)
+        assertTrue(now + 20_000 - next in 0..100_000)
+    }
+    @Test fun sustainedSlowReadsRecoverInsteadOfLeavingEveryFuturePacketStale() {
+        val clock = DesktopAudioClock(bufferCapacityFrames = 3072)
+        repeat(100) { index ->
+            val wall = 1_000_000 + index * 40_000L
+            val at = clock.read(960, wall, 3072L + index * 1920, wall - 5000)
+            assertTrue("a bounded native ring cannot contain seconds of queued audio", wall - at <= 160_000)
+            assertTrue(at <= wall)
+        }
+    }
+    @Test fun remoteSubmixFrameCounterCannotInventAnOverrunWhileReaderKeepsDraining() {
+        val clock = DesktopAudioClock(bufferCapacityFrames = 3072)
+        val start = clock.read(960, 1_000_000, 3072, 990_000)
+        repeat(100) { index ->
+            val wall = 1_020_000 + index * 20_000L
+            // A loopback HAL can advance its timestamp counter through synthetic silence.
+            // That counter alone is not evidence that unread AudioRecord samples were lost.
+            val hardware = 5056L + index * 1024
+            assertEquals(start + (index + 1L) * 20_000,
+                clock.read(960, wall, hardware, wall - 5000))
+        }
+    }
+    @Test fun driverTimestampJitterDoesNotCutOrDuplicateCapturedSamples() {
+        val clock = DesktopAudioClock(bufferCapacityFrames = 1920)
+        val start = clock.read(960, 1_000_000, 960, 1_000_000)
+        repeat(100) { index ->
+            val frame = (index + 2L) * 960
+            val wall = 1_020_000 + index * 20_000L
+            val jitter = if (index % 2 == 0) -1400 else -400
+            assertEquals(start + (index + 1L) * 20_000,
+                clock.read(960, wall, frame, wall + jitter))
+        }
+    }
     @Test fun boundedRingAlsoRecoversWithoutDriverTimestamps() {
         val clock = DesktopAudioClock(bufferCapacityFrames = 1920)
         clock.read(960, 1_000_000)

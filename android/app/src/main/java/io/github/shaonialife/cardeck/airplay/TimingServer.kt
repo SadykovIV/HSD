@@ -24,11 +24,15 @@ class TimingServer(
     private var running = false
 
     /** 收到的 timesync 请求计数（诊断：车机是否真的来同步媒体时钟）。 */
-    private var syncRequests = 0L
+    @Volatile private var syncRequests = 0L
+    @Volatile private var replies = 0L
+    @Volatile private var sendErrors = 0L
     private var lastSyncLogAt = 0L
 
     /** 非 timesync 包计数（诊断：有没有别的 UDP 报文打到这个端口）。 */
-    private var unexpected = 0L
+    @Volatile private var unexpected = 0L
+
+    fun progressSummary() = "requests=$syncRequests replies=$replies rejected=$unexpected sendErrors=$sendErrors"
 
     val port: Int get() = socket?.localPort ?: 0
 
@@ -62,7 +66,8 @@ class TimingServer(
             val packet = DatagramPacket(buffer, buffer.size)
             try {
                 s.receive(packet)
-            } catch (_: Exception) {
+            } catch (error: Exception) {
+                if (running) log("TIMING receive stopped: ${error.javaClass.simpleName}")
                 return // socket closed
             }
             val request = buffer.copyOfRange(0, packet.length)
@@ -70,7 +75,8 @@ class TimingServer(
             if (response == null) {
                 unexpected++
                 if (unexpected <= 5) {
-                    log("TIMING: 收到非 timesync 报文 ${request.size}B（累计 $unexpected）")
+                    // Only the fixed public protocol header, never the peer's timestamps or address.
+                    log("TIMING rejected ${request.size} B header=" + request.take(4).joinToString("") { "%02x".format(it.toInt() and 255) })
                 }
                 continue
             }
@@ -78,11 +84,14 @@ class TimingServer(
             val now = System.currentTimeMillis()
             if (syncRequests <= 3 || now - lastSyncLogAt >= 30_000L) {
                 lastSyncLogAt = now
-                log("TIMING: timesync 应答 #$syncRequests → ${packet.address.hostAddress}:${packet.port}")
+                log("TIMING request #$syncRequests")
             }
             try {
                 s.send(DatagramPacket(response, response.size, packet.address, packet.port))
-            } catch (_: Exception) {
+                replies++
+            } catch (error: Exception) {
+                sendErrors++
+                if (running && sendErrors <= 3) log("TIMING send failed: ${error.javaClass.simpleName}")
             }
         }
     }

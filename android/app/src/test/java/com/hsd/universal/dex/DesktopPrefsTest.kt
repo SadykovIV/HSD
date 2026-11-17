@@ -74,6 +74,10 @@ class DesktopPrefsTest {
         val context = MemoryPrefs()
         val prefs = DexPrefs(context)
         assertEquals(8, prefs.desktopBitrateMbps)
+        assertTrue(prefs.useSystemScreenTimeout)
+        assertTrue(prefs.synchronizeAudioVideo)
+        prefs.useSystemScreenTimeout = false
+        prefs.synchronizeAudioVideo = false
         assertTrue(prefs.autoMusicPlayback)
         assertFalse(prefs.huNotificationsEnabled)
         assertFalse(prefs.initialSetupCompleted)
@@ -83,6 +87,8 @@ class DesktopPrefsTest {
         prefs.initialSetupCompleted = true
         val restored = DexPrefs(context)
         assertEquals(16, restored.desktopBitrateMbps)
+        assertFalse(restored.useSystemScreenTimeout)
+        assertFalse(restored.synchronizeAudioVideo)
         assertFalse(restored.autoMusicPlayback)
         assertTrue(restored.huNotificationsEnabled)
         assertTrue(restored.initialSetupCompleted)
@@ -143,7 +149,7 @@ class DesktopPrefsTest {
         assertEquals(1440, restored.desktopVideoSelection().initialGeometry().outW)
         assertEquals(810, restored.desktopVideoSelection().initialGeometry().outH)
         assertEquals(if (com.hsd.universal.DesktopTransport.universal) 0 else 128, restored.desktopDensity)
-        assertEquals(FpsSetting.FPS15, restored.desktopFps)
+        assertEquals(FpsSetting.AUTO, restored.desktopFps)
         assertThrows(IllegalArgumentException::class.java) { restored.desktopBitrateMbps = Int.MAX_VALUE }
         assertThrows(IllegalArgumentException::class.java) { restored.setCustomDesktopSize(1441, 810) }
         assertEquals(7, restored.desktopBitrateMbps)
@@ -166,7 +172,7 @@ class DesktopPrefsTest {
         assertEquals(1280, video.initialGeometry().outW)
         assertEquals(720, video.initialGeometry().outH)
         assertEquals(if (com.hsd.universal.DesktopTransport.universal) 0 else 128, prefs.desktopDensity)
-        assertEquals(FpsSetting.FPS15, prefs.desktopFps)
+        assertEquals(FpsSetting.AUTO, prefs.desktopFps)
     }
     @Test fun legacyAdbAndDesktopUseTheSameDpiEvenWhenOldPreferencesDisagree() {
         val context = MemoryPrefs()

@@ -45,7 +45,7 @@ class Cryptor(
 
     private val engine: SSLEngine
     private val pinning: PinningTrustManager? = if (!client && pins != null) {
-        PinningTrustManager(requireNotNull(peerKey) { "peerKey is required with pins" }, pins, trustOnFirstUse)
+        PinningTrustManager(requireNotNull(peerKey) { "peerKey is required with pins" }, pins, trustOnFirstUse, certificate.publicKey)
     } else {
         null
     }

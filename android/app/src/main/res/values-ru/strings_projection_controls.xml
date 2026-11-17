@@ -1,0 +1,12 @@
+<resources>
+    <string name="desktop_fps_limit">Ограничение кадров в секунду</string>
+    <string name="desktop_fps_limit_value">Ограничение FPS: %1$s</string>
+    <string name="desktop_fps_limit_help">Ограничивает реальную частоту видеопотока. Магнитола, соединение или нагрев телефона могут снизить её дополнительно. Применяется при следующем подключении.</string>
+    <string name="desktop_av_sync_enabled">Синхронизировать звук с видео</string>
+    <string name="desktop_av_sync_help">Выравнивает звук по видео в CarLife и Android Auto. Выключите, чтобы убрать дополнительное ожидание синхронизации; звук тогда может опережать картинку. Применяется при следующем подключении.</string>
+    <string name="desktop_av_sync_disabled">Синхронизация звука с видео выключена. Сохранённая поправка задержки будет применяться после её включения.</string>
+    <string name="desktop_system_sleep">Выключение и блокировка по настройкам Android</string>
+    <string name="desktop_system_sleep_help">HSD не удерживает экран телефона включённым: выключением и блокировкой управляет Android. На некоторых версиях Android касания магнитолы также продлевают таймер. Ручное гашение панели остаётся отдельным действием и не блокирует телефон.</string>
+    <string name="usb_background_setup">Откройте HSD, чтобы завершить или восстановить активацию. При готовом доступе USB запускается в фоне.</string>
+    <string name="usb_background_permission">Откройте HSD, чтобы разрешить доступ к USB.</string>
+</resources>

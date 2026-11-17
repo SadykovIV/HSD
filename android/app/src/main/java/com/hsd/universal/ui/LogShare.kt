@@ -112,6 +112,7 @@ object LogShare {
 
     /** Текущий файл журнала как есть. */
     fun shareLog(ctx: Context) {
+        AppLog.flush()
         val f = AppLog.file?.takeIf { it.isFile } ?: logFiles(ctx).firstOrNull()
         if (f == null) {
             Toast.makeText(ctx, ctx.getString(R.string.share_no_log), Toast.LENGTH_SHORT).show()
@@ -159,6 +160,7 @@ object LogShare {
     }
 
     private fun buildZip(ctx: Context): File {
+        AppLog.flush()
         val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
         val dir = reportDir(ctx)
         dir.listFiles()?.forEach { it.delete() }

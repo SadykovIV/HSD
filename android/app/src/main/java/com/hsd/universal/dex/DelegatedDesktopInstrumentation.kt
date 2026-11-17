@@ -116,6 +116,7 @@ class DelegatedDesktopInstrumentation : Instrumentation() {
             if (requestHudApi && CarLifeForegroundGuidance.requestedForActivation(context)) {
                 permissions.add(CarLifeForegroundGuidance.TASK_ASSIST_PERMISSION)
             }
+            if (android.os.Build.VERSION.SDK_INT >= 37) permissions.addAll(VdmPoolProtocol.permissions)
             if (requestAudio) {
                 permissions.add(DesktopAudioPolicy.PERMISSION)
                 permissions.add(DesktopAudioPolicy.ROUTING_PERMISSION)
@@ -213,7 +214,7 @@ class DelegatedDesktopInstrumentation : Instrumentation() {
             VdmHostLink.endActivation()
             lease?.let(DelegatedDesktopAccess::end) // reject new panel leases before cleanup snapshot
             activationIdentity = null
-            DesktopMusicPlayback.cancel("activation ended")
+            DesktopMusicPlayback.stop("activation ended")
             DelegatedPanelAccess.restoreAll()
             ShellPanelClient.close()
             if (lease?.stopping == true || failureReason != null) IndependentRecoveryAccess.restoreOwnedAfterActivation(context)

@@ -20,7 +20,7 @@ object AppLog {
 
     private val ring = ArrayDeque<String>()
     private val tsFmt = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
-    private var out: FileOutputStream? = null
+    private var out: AsyncLogWriter? = null
     var file: File? = null
         private set
 
@@ -33,7 +33,7 @@ object AppLog {
         val stamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
         val f = File(dir, "$TAG-$stamp.log")
         try {
-            out = FileOutputStream(f, true)
+            out = AsyncLogWriter(FileOutputStream(f, true)) { error -> Log.e(TAG, "не записать файл лога", error) }
             file = f
         } catch (e: Exception) {
             Log.e(TAG, "не открыть файл лога $f", e)
@@ -81,11 +81,11 @@ object AppLog {
             if (ring.size == RING) ring.removeFirst()
             ring.addLast(entry)
         }
-        try {
-            out?.write((entry + "\n").toByteArray(Charsets.UTF_8))
-        } catch (_: java.io.IOException) {
-        }
+        out?.append(entry)
     }
+
+    /** Never hold the producer monitor while waiting for storage. */
+    fun flush(timeoutMs: Long = 500): Boolean = synchronized(this) { out }?.flush(timeoutMs) ?: true
 
     /** Audio/unknown packets log headers only; known valid controls retain safe decoded metadata. */
     fun msg(dir: String, chan: Int, outerLen: Int, type: Int, len: Int, decoded: String?, inner: ByteArray, ui: Boolean = true, note: String = "") {

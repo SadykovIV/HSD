@@ -1,0 +1,12 @@
+<resources>
+    <string name="desktop_fps_limit">Frame rate limit</string>
+    <string name="desktop_fps_limit_value">Frame rate limit: %1$s</string>
+    <string name="desktop_fps_limit_help">Limits the actual video frame rate. The head unit, connection or phone temperature may lower it further. Applies on the next connection.</string>
+    <string name="desktop_av_sync_enabled">Synchronize audio with video</string>
+    <string name="desktop_av_sync_help">Aligns audio with video in CarLife and Android Auto. Turn off to remove the additional synchronization delay; sound may then precede the picture. Applies on the next connection.</string>
+    <string name="desktop_av_sync_disabled">Audio/video synchronization is off. The saved delay correction will apply after synchronization is enabled.</string>
+    <string name="desktop_system_sleep">Use Android screen timeout and lock</string>
+    <string name="desktop_system_sleep_help">HSD does not keep the phone screen awake: Android controls screen timeout and locking. On some Android versions, head unit touches also extend this timeout. Manual panel blanking remains a separate action and does not lock the phone.</string>
+    <string name="usb_background_setup">Open HSD to complete or restore activation. USB will start in the background when access is ready.</string>
+    <string name="usb_background_permission">Open HSD to allow USB access.</string>
+</resources>

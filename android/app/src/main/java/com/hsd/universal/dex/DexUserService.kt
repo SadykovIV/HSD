@@ -449,8 +449,14 @@ class DexUserService private constructor(private val context: Context, private v
                     Log.i(TAG, "child display=$id parent=${parent.display?.display?.displayId} size=${width}x$height density=$density")
                     id
                 } catch (error: Throwable) {
+                    Log.w(TAG, "Child display admission failed", error)
                     if (error is NativeDisplayReleaseUnconfirmed) terminateStuckService()
-                    releaseChild(parent, child)
+                    // Stop can revoke the epoch while native create waits for a window
+                    // transition. Retire that whole family before acknowledging this
+                    // failed create; another retiring sibling may own the transition.
+                    if (session === parent && (generation.get() != parent.epoch || !parent.token.isBinderAlive))
+                        releaseCurrent()
+                    else releaseChild(parent, child)
                     throw error
                 }
             }
@@ -830,6 +836,10 @@ class DexUserService private constructor(private val context: Context, private v
         session = null
         var releaseFailure: Throwable? = null
         try {
+            // All consumers remain retained until one native family handoff is ACKed.
+            // Releasing children individually can wait on a sibling's unfinished app
+            // transition during Stop, even though every member is being retired.
+            lease.display?.family?.close()
             for (child in lease.children.values.toList()) releaseChild(lease, child)
             lease.display?.display?.displayId?.let { unregisterInputDisplay(it, lease.token) }
             lease.display?.release()

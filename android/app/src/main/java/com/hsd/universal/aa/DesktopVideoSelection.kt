@@ -37,6 +37,8 @@ object DesktopGeometryPolicy {
     }
     // Retain the previous automatic scale for existing 480p/720p/900p profiles.
     fun density(height: Int): Int = (160.0 * height / 900).roundToInt().coerceIn(120, MAX_DENSITY)
+    /** Rotating the same projection canvas must not change the logical size of apps or map symbols. */
+    fun density(width: Int, height: Int): Int = density(minOf(width, height))
 }
 
 enum class DesktopResolution(val title: String, val width: Int, val height: Int, val aapId: Int = 0) {
@@ -77,7 +79,7 @@ data class NativeDesktopGeometry(override val outW: Int, override val outH: Int)
     override val aaResolution = "${outW}x$outH"
     override val marginW = 0
     override val marginH = 0
-    override val density = DesktopGeometryPolicy.density(outH)
+    override val density = DesktopGeometryPolicy.density(outW, outH)
     override val bitrate = DesktopVideoQuality.BITRATE_CEILING_BPS
     override val label = "Desktop ${outW}x$outH"
     override fun describe(densityOverride: Int): String =
@@ -101,7 +103,7 @@ class DesktopVideoSelection(val resolution: DesktopResolution, val densityOverri
     @Synchronized fun resolve(width: Int, height: Int, automatic: (Int, Int) -> NativeDesktopGeometry?): NativeDesktopGeometry? =
         selected ?: (if (resolution == DesktopResolution.AUTO) automatic(width, height) else initialGeometry())?.also { selected = it }
     // The legacy ADB path uses the AA R720 geometry, whose AA preset density is not our desktop AUTO scale.
-    fun densityFor(mode: VideoGeometry): Int = if (densityOverride == 0) DesktopGeometryPolicy.density(mode.outH) else densityOverride
+    fun densityFor(mode: VideoGeometry): Int = if (densityOverride == 0) DesktopGeometryPolicy.density(mode.outW, mode.outH) else densityOverride
 }
 
 

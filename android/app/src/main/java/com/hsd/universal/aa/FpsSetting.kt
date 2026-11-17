@@ -56,6 +56,15 @@ class FrameGate(initialFps: Int, private val limitHighFps: Boolean = false) {
     /** Период целевой частоты в нс (0 = без ограничения). */
     fun periodNs(): Long = targetFps.let { if (it <= 0) 0L else 1_000_000_000L / it }
 
+    /** Time to the next admissible slot, without consuming it. The GL thread owns this state. */
+    fun delayNs(nowNs: Long): Long {
+        val fps = targetFps
+        if (nextNs == NONE || fps <= 0 || (!limitHighFps && fps >= PASS_ALL_FPS)) return 0
+        val period = 1_000_000_000L / fps
+        val tolerance = if (limitHighFps) minOf(1_000_000L, period / 2) else period / 2
+        return (nextNs - tolerance - nowNs).coerceAtLeast(0)
+    }
+
     /** Новая AA-сессия: первый кадр отдаётся сразу. */
     fun reset() {
         nextNs = NONE

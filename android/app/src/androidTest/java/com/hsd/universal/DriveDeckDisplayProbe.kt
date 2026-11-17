@@ -79,7 +79,16 @@ internal fun checkDriveDeckDisplay(context: Context, width: Int, height: Int, de
             } finally {
                 try {
                     EmbeddedSessionRegistry.deactivate(token)
-                    remote.stop()
+                    val stopping = java.util.concurrent.FutureTask { remote.stop() }
+                    Thread(stopping, "qa-display-stop").start()
+                    try { stopping.get(3, java.util.concurrent.TimeUnit.SECONDS) }
+                    catch (_: java.util.concurrent.TimeoutException) {
+                        context.cacheDir.resolve("qa-failure-threads.txt").writeText(
+                            Thread.getAllStackTraces().entries.joinToString("\n\n") { (thread, stack) ->
+                                "${thread.name} ${thread.state}\n" + stack.joinToString("\n")
+                            })
+                        stopping.get(12, java.util.concurrent.TimeUnit.SECONDS)
+                    }
                     EmbeddedSessionRegistry.producerStopped(token)
                 } finally {
                     reader.setOnImageAvailableListener(null, null)

@@ -28,6 +28,6 @@ internal object VdmRecoveryPolicy {
     fun terminal(reason: DexAccessReason): Boolean = reason in setOf(
         DexAccessReason.AUTHORIZATION_REJECTED, DexAccessReason.PERMISSION_DENIED,
         DexAccessReason.TLS_VERSION_UNSUPPORTED, DexAccessReason.IDENTITY_FAILURE,
-        DexAccessReason.SHELL_REJECTED, DexAccessReason.LOCAL_ADB_CONFIGURATION, DexAccessReason.USB_DEBUGGING_DISABLED,
+        DexAccessReason.SHELL_REJECTED, DexAccessReason.LOCAL_ADB_CONFIGURATION,
     )
 }

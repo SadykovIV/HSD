@@ -16,6 +16,20 @@ public final class BackStackRoot extends Activity {
         super.onCreate(state);
         page = new TextView(this);
         setContentView(page);
+        page.getViewTreeObserver().addOnDrawListener(new android.view.ViewTreeObserver.OnDrawListener() {
+            private boolean reported;
+            @Override public void onDraw() {
+                if (reported) return;
+                reported = true;
+                // onDraw runs before the first buffer is submitted. Wait for that
+                // commit, then let the probe synchronize WindowManager input state.
+                page.getViewTreeObserver().registerFrameCommitCallback(() -> page.post(() -> {
+                    if (!isDestroyed()) sendBroadcast(new Intent(ACTION).setPackage("com.hsd.universal")
+                            .putExtra("display", getWindowManager().getDefaultDisplay().getDisplayId())
+                            .putExtra("ready", true));
+                }));
+            }
+        });
         page.setOnTouchListener((view, event) -> {
             sendBroadcast(new Intent(ACTION).setPackage("com.hsd.universal")
                     .putExtra("display", getWindowManager().getDefaultDisplay().getDisplayId())

@@ -15,6 +15,12 @@ class VdmHostProvider : ContentProvider() {
         val values = requireNotNull(extras)
         val pid = values.getInt(VdmHostPolicy.EXTRA_APP_PID, -1)
         return when (method) {
+            VdmPoolProtocol.TOKENS, VdmPoolProtocol.CREATED -> {
+                check(values.getInt(VdmHostPolicy.EXTRA_BUILD, -1) == com.hsd.universal.BuildConfig.VERSION_CODE)
+                check(values.getInt(VdmHostPolicy.EXTRA_HOST_PID, -1) == Binder.getCallingPid())
+                if (method == VdmPoolProtocol.TOKENS) VdmHostLink.preparePool(checkNotNull(context), arg, pid)
+                else VdmHostLink.acceptPool(arg, pid, values)
+            }
             VdmHostPolicy.METHOD_PREPARE -> VdmHostLink.prepare(arg, pid)
             VdmHostPolicy.METHOD_STATUS -> VdmHostLink.status(arg, pid, values.getString(VdmHostPolicy.EXTRA_NONCE))
             VdmHostPolicy.METHOD_PUBLISH -> {

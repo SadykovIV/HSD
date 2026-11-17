@@ -4,14 +4,6 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DesktopUsbDebuggingPolicyTest {
-    @Test fun onlyWiredSamsungWithIndependentDesktopRequiresUsbDebugging() {
-        for (sdk in listOf(36, 37, 38)) for (wired in listOf(false, true)) {
-            assertFalse(DesktopUsbDebuggingPolicy.required(sdk, false, true, false, wired))
-            assertEquals(sdk >= 37 && wired, DesktopUsbDebuggingPolicy.required(sdk, true, true, false, wired))
-            assertFalse(DesktopUsbDebuggingPolicy.required(sdk, true, false, false, wired))
-            assertFalse(DesktopUsbDebuggingPolicy.required(sdk, true, true, true, wired))
-        }
-    }
     @Test fun filteredSettingIsNotEvidenceThatDebuggingWasDisabled() {
         for (unknown in listOf(null, "", "null", "-1", "unexpected"))
             assertEquals(DesktopUsbDebuggingPolicy.State.UNKNOWN, DesktopUsbDebuggingPolicy.state(unknown, false))
@@ -29,20 +21,5 @@ class DesktopUsbDebuggingPolicyTest {
         assertEquals(DesktopUsbDebuggingPolicy.State.ENABLED, DesktopUsbDebuggingPolicy.verifiedState("1", "none"))
         assertEquals(DesktopUsbDebuggingPolicy.State.ENABLED, DesktopUsbDebuggingPolicy.verifiedState(null, "accessory,adb"))
         assertEquals(DesktopUsbDebuggingPolicy.State.UNKNOWN, DesktopUsbDebuggingPolicy.verifiedState(null, "none"))
-    }
-    @Test fun realSettingChangeInvalidatesEarlierRejection() {
-        val proof = DesktopUsbDebuggingPolicy.Confirmation("0", DesktopUsbDebuggingPolicy.State.DISABLED)
-        assertTrue(proof.stillMissing("0", false))
-        assertFalse(proof.stillMissing("1", false))
-        assertFalse(proof.stillMissing("0", true))
-        assertFalse(proof.stillMissing(null, false))
-        assertFalse(proof.copy(shellState = DesktopUsbDebuggingPolicy.State.ENABLED).stillMissing("0", false))
-    }
-    @Test fun confirmedMissingUsbDebuggingNeverRegrantsOrReportsReady() {
-        val facts = DesktopReadinessPolicy.Facts(true, true, false, false, true, true, false, usbDebuggingMissing = true)
-        val needs = DesktopReadinessPolicy.Requirements(true, false)
-        assertEquals(DesktopReadinessPolicy.Step.USB_DEBUGGING_REQUIRED, DesktopReadinessPolicy.next(facts, needs, true))
-        assertEquals(DesktopReadinessPolicy.Step.USB_DEBUGGING_REQUIRED, DesktopReadinessPolicy.next(facts.copy(grants = false), needs, true))
-        assertEquals(DesktopReadinessPolicy.Step.READY, DesktopReadinessPolicy.next(facts.copy(usbDebuggingMissing = false), needs, true))
     }
 }

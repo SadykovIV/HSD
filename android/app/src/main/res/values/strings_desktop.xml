@@ -213,7 +213,6 @@
     <string name="desktop_enable_dpi_adjustment">"Enable DPI adjustment"</string>
     <string name="desktop_enable_the_activation_channel">"Turn on the %1$s activation notification channel."</string>
     <string name="desktop_enable_the_input_pairing_code_channel">"Turn on the pairing code notification channel."</string>
-    <string name="desktop_enable_usb_debugging">"Enable USB debugging"</string>
     <string name="desktop_enabling_access">"Enabling %1$s access…"</string>
     <string name="desktop_enter_0_to_2000_ms">"Enter 0 to 2000 ms"</string>
     <string name="desktop_enter_a_port_from_1_to_65535">"Enter a port from 1 to 65535"</string>
@@ -281,7 +280,9 @@
     <string name="desktop_how_to_turn_off_the_phone_screen">"How to turn off the phone screen"</string>
     <string name="desktop_how_to_turn_off_the_screen">"Screen-off method"</string>
     <string name="desktop_hsd_certificate">"HSD Certificate"</string>
-    <string name="desktop_hsd_creates_a_certificate_the_first_time_it_connects">"HSD creates a certificate on the first connection. If your head unit requires a certificate from its issuer, select the key it provided in Android."</string>
+    <string name="desktop_hsd_creates_a_certificate_the_first_time_it_connects">Automatic uses a verified certificate included with HSD. Android Auto does not need to be installed. A newer valid certificate from installed Android Auto can also be used. Verified certificates can also be updated automatically over the Internet. A manual selection uses the certificate you selected.</string>
+    <string name="aa_auto_identity_unavailable">No valid automatic Android Auto certificate is available. Connect to the Internet, check certificates for updates and check the phone date. You can also select a certificate under Android Auto certificates.</string>
+    <string name="aa_installed_identity_unavailable">Could not obtain a valid certificate from installed Android Auto. Update Android Auto on this phone and reconnect. You can choose a different certificate under Android Auto certificates.</string>
     <string name="desktop_hsd_sends_the_next_street_name_with_the_turn">"HSD sends the next street name with the turn arrow and distance when the navigation app provides it."</string>
     <string name="desktop_i_m_checking_the_saved_connection_turn_on_wi">"Checking the saved connection. Turn on Wi-Fi and Wireless debugging."</string>
     <string name="desktop_i_m_checking_to_activate_the_independent_screen_activation">"Checking the independent display. Activation will continue automatically."</string>
@@ -323,7 +324,6 @@
     <string name="desktop_looking_for_pairing_dialog">"Looking for pairing dialog…"</string>
     <string name="desktop_looking_for_phone">"Looking for phone…"</string>
     <string name="desktop_main_app_code">"Main app · %1$s (build %2$d)"</string>
-    <string name="desktop_make_phone_discoverable">"Make phone discoverable"</string>
     <string name="desktop_manages">"Controlled by %1$s"</string>
     <string name="desktop_screen_control_phone">"Manages the phone"</string>
     <string name="desktop_managing_the_phone_display">"Phone screen control"</string>
@@ -370,7 +370,6 @@
     <string name="desktop_open_notification_shade">"Open notification shade"</string>
     <string name="desktop_open_on_head_unit">"Open on head unit"</string>
     <string name="desktop_open_on_the_head_unit">"Open on the head unit?"</string>
-    <string name="desktop_open_settings">"Open settings"</string>
     <string name="desktop_open_shizuku">"Open Shizuku"</string>
     <string name="desktop_open_shizuku_authorized_apps_and_allow_then_come_back">"Open Shizuku → Authorized applications, allow %1$s, then return here."</string>
     <string name="desktop_open_the_app_notification_settings_on_your_phone_and">"Open app notification settings on your phone and enable notifications for your navigation app."</string>
@@ -382,7 +381,6 @@
     <string name="desktop_open_the_shizuku_app_on_your_phone_and_start">"Open the Shizuku app on your phone and start the service."</string>
     <string name="desktop_open_this_setting_manually_on_this_phone">"Open this setting manually on this phone."</string>
     <string name="desktop_open_up_on_a_head_unit_and_connect_a">"Open %1$s on the head unit and connect the phone with a USB data cable."</string>
-    <string name="desktop_open_up_on_a_head_unit_plug_in_a">"Open %1$s on the head unit and plug in the USB cable. The desktop starts automatically. This connection works without Wi-Fi or pairing."</string>
     <string name="desktop_open_wi_fi_settings">"Open Wi-Fi settings"</string>
     <string name="desktop_open_wireless_carlife_on_a_head_unit_the_head">"Open wireless CarLife on the head unit. It can use a shared Wi-Fi network, a hotspot, or Bluetooth to negotiate Wi-Fi Direct."</string>
     <string name="desktop_open_wireless_on_your_head_unit">"Open wireless %1$s on your head unit."</string>
@@ -441,7 +439,6 @@
     <string name="desktop_ready_to_connect_automatically">"Ready to connect automatically"</string>
     <string name="desktop_ready_to_set_up">"Ready to set up"</string>
     <string name="desktop_reconfigure_the_pairing">"Reconfigure the pairing"</string>
-    <string name="desktop_reconnect_the_cable_and_tap_connect">"Reconnect the cable and tap Connect."</string>
     <string name="desktop_reconnect_the_usb_cable_or_tap_connect">"Reconnect the USB cable or tap Connect."</string>
     <string name="desktop_reconnecting">"Reconnecting…"</string>
     <string name="desktop_recovery_after_disabling_usb_it_will_enable_adb_network">"For recovery after USB disconnects, %1$s will enable network ADB for previously authorized keys. It is reachable over network interfaces without TLS until you restore standard ADB mode or restart the phone."</string>
@@ -556,7 +553,7 @@
     <string name="desktop_this_phone_s_ip_address">"This phone’s IP address"</string>
     <string name="desktop_this_profile_requires_an_apk_compatible_panel_from_the">"This profile requires a compatible panel APK from the CarBridge developer. The standalone CarBridge Offline v0.43 app does not provide the %1$s panel interface."</string>
     <string name="desktop_this_will_take_a_few_seconds">"This will take a few seconds."</string>
-    <string name="desktop_to_activate_from_your_computer_and_restore_an_independent">"To activate from your computer and restore an independent screen via cable on Android 17."</string>
+    <string name="desktop_to_activate_from_your_computer_and_restore_an_independent">"For initial activation from a computer over USB. Existing access does not depend on this switch. Recovering the display host requires an available authenticated ADB channel, including wireless debugging."</string>
     <string name="desktop_to_change_access_to_the_screen_control_stop_the">"Stop the connection to change screen-control permissions. If screen control is already on, you can adjust its method and timer below."</string>
     <string name="desktop_to_change_the_activation_method_stop_the_connection">"To change the activation method, stop the connection."</string>
     <string name="desktop_to_change_the_profile_stop_the_connection">"To change the profile, stop the connection."</string>
@@ -598,10 +595,8 @@
     <string name="desktop_update_shizuku">"Update Shizuku"</string>
     <string name="desktop_update_to">"Update to"</string>
     <string name="desktop_usb_connection_failed">"USB connection failed"</string>
-    <string name="desktop_usb_debugging">"USB debugging"</string>
     <string name="desktop_usb_debugging_fae9">"USB debugging"</string>
     <string name="desktop_usb_disconnected">"USB disconnected"</string>
-    <string name="desktop_use_for_initial_pairing_when_the_head_unit_searches">"Use for initial pairing when the head unit searches for nearby devices"</string>
     <string name="desktop_use_profile">"Use profile %1$s?"</string>
     <string name="desktop_use_profile_7e5d">"Use profile"</string>
     <string name="desktop_use_this_connection">"Use this connection"</string>
@@ -795,7 +790,6 @@
     <string name="desktop_the_dex_control_channel_has_closed">"The DeX control channel has closed"</string>
     <string name="desktop_the_dex_process_has_concluded">"DeX process ended with status %1$s"</string>
     <string name="desktop_the_firmware_did_not_allow_window_mode_dex">"The firmware did not allow DeX windowing mode. %1$s"</string>
-    <string name="desktop_the_head_unit_closed_the_connection_during_authorization_if">"The head unit closed the connection during authorization. If it requires a phone certificate, select it under \"Android Auto Certificates.\""</string>
     <string name="desktop_the_head_unit_continued_the_previous_usb_session_without">"The head unit resumed an earlier USB session without sending a new VERSION_REQUEST. End projection on the head unit and reconnect."</string>
     <string name="desktop_the_head_unit_offered_an_empty_desktop_area">"The head unit offered an empty desktop area."</string>
     <string name="desktop_the_launch_result_has_not_yet_been_confirmed">"Startup has yet to be confirmed. Open %1$s."</string>
@@ -894,7 +888,6 @@
     <string name="carplay_pair_from_phone_hint">Open pairing on the head unit. Select its name in Android Bluetooth settings, then return to HSD.</string>
     <string name="carplay_stage_identification">head unit identification</string>
     <string name="carplay_stage_certificate">accessory certificate</string>
-    <string name="carplay_stage_serial_or_certificate">accessory certificate or serial number</string>
     <string name="carplay_invalid_accessory_signature">The head unit supplied an invalid iAP2 signature.</string>
     <string name="carplay_stage_signature">accessory signature</string>
     <string name="carplay_stage_credentials">Wi-Fi settings from the head unit</string>
@@ -916,6 +909,6 @@
     <string name="aa_auth_certificate">The head unit rejected the phone certificate (%1$s). Select a certificate it accepts in Android Auto certificates.</string>
     <string name="aa_auth_busy">The head unit is busy (%1$s). End the other projection session and reconnect.</string>
     <string name="aa_auth_rejected">The head unit declined Android Auto authorization (%1$s).</string>
-    <string name="aa_auth_unspecified">The head unit declined Android Auto authorization (%1$s). If it shows a clock warning, compare the date, year and time zone with your phone. If they match, check whether the official Android Auto app connects. In HSD, you can select a phone certificate trusted by this unit under Android Auto certificates.</string>
+    <string name="aa_auth_unspecified">The head unit declined Android Auto authorization (%1$s). This code alone does not mean the clock is wrong. Update HSD and choose Automatic under Android Auto certificates.</string>
     <string name="desktop_encoder_start_failure">Could not start %1$s at %2$d×%3$d, %4$d fps. %5$s</string>
 </resources>

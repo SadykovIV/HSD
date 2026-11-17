@@ -55,6 +55,18 @@ class VdmHostMain private constructor(private val args: VdmHostPolicy.Args) {
         try {
             core = VdmHostCore.create(context, appUid) { terminate() }
             check(appAlive() && appUidFromProc() == appUid)
+            val tokens = publish(VdmPoolProtocol.TOKENS)
+            if (tokens?.getBoolean("enabled") == true) {
+                val offered = try { checkNotNull(core).createAppOwnedPool(tokens) }
+                    catch (_: Exception) { Bundle().apply { putBoolean("failed", true) } }
+                val accepted = publish(VdmPoolProtocol.CREATED, offered)
+                if (accepted?.getBoolean(VdmHostPolicy.EXTRA_READY) == true) {
+                    checkNotNull(core).detachAppOwnedPool(); core = null
+                    println("HSD_VDM_READY"); return
+                }
+                // The app retired the token process, including every partial native create.
+                core?.close(); core = VdmHostCore.create(context, appUid) { terminate() }
+            }
             val reply = publish()
             check(reply?.getBoolean(VdmHostPolicy.EXTRA_READY) == true) { "VDM host handoff was rejected" }
             val client = checkNotNull(reply.getBinder(VdmHostPolicy.EXTRA_CLIENT))
@@ -64,7 +76,7 @@ class VdmHostMain private constructor(private val args: VdmHostPolicy.Args) {
             Looper.loop()
         } finally { runCatching { core?.close() } }
     }
-    private fun publish(): Bundle? {
+    private fun publish(method: String = VdmHostPolicy.METHOD_PUBLISH, offer: Bundle? = null): Bundle? {
         check(appAlive())
         val authority = args.packageName + ".vdmhost"
         val appUser = appUid / 100000
@@ -81,6 +93,7 @@ class VdmHostMain private constructor(private val args: VdmHostPolicy.Args) {
             check(info.packageName == args.packageName && info.applicationInfo.uid == appUid)
             val provider = checkNotNull(holder.javaClass.getField("provider").get(holder))
             val extras = Bundle().apply {
+                if (offer != null) putAll(offer)
                 putInt(VdmHostPolicy.EXTRA_APP_PID, args.appPid)
                 putInt(VdmHostPolicy.EXTRA_HOST_PID, Process.myPid())
                 putInt(VdmHostPolicy.EXTRA_BUILD, BuildConfig.VERSION_CODE)
@@ -89,7 +102,7 @@ class VdmHostMain private constructor(private val args: VdmHostPolicy.Args) {
             val source = AttributionSource.Builder(Process.myUid()).setPackageName(VdmHostPolicy.SHELL_PACKAGE).build()
             return Class.forName("android.content.IContentProvider").getMethod("call", AttributionSource::class.java,
                 String::class.java, String::class.java, String::class.java, Bundle::class.java)
-                .invoke(provider, source, authority, VdmHostPolicy.METHOD_PUBLISH, args.nonce, extras) as Bundle?
+                .invoke(provider, source, authority, method, args.nonce, extras) as Bundle?
         } finally {
             if (acquired) runCatching { api.javaClass.getMethod("removeContentProviderExternalAsUser", String::class.java,
                 IBinder::class.java, Int::class.javaPrimitiveType).invoke(api, authority, externalToken, appUser) }

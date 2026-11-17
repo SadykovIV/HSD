@@ -210,13 +210,24 @@ class GlRelay(
         if (!gate.shouldEmit(SystemClock.elapsedRealtimeNanos())) {
             skipped = true
             if (fresh) gated.incrementAndGet()      // повторные отказы tick-а одного кадра не считаем
+            if (sourceClock != null) {
+                // A single touch can produce just one new buffer. Present it at the next
+                // FPS slot instead of waiting another whole period plus the idle ticker.
+                handler.removeCallbacks(pendingDraw)
+                handler.postDelayed(pendingDraw, (gate.delayNs(SystemClock.elapsedRealtimeNanos()) + 999_999) / 1_000_000)
+            }
             return false
         }
         val sourcePts = sourceClock?.presentationNs(System.nanoTime())
         if (sourceClock != null && sourcePts == null) return false
         skipped = false
+        handler.removeCallbacks(pendingDraw)
         draw(sourcePts)
         return true
+    }
+
+    private val pendingDraw = Runnable {
+        if (!released && haveFrame && skipped) drawGated()
     }
 
     fun stop() {
@@ -226,6 +237,7 @@ class GlRelay(
         handler.post {
             try {
                 handler.removeCallbacks(tick)
+                handler.removeCallbacks(pendingDraw)
                 st?.release()
                 // init() мог упасть до inputSurface: без проверки исключение пропустило бы освобождение EGL ниже
                 if (::inputSurface.isInitialized) inputSurface.release()

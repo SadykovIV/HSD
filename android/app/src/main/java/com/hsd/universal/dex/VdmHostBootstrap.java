@@ -47,7 +47,7 @@ public final class VdmHostBootstrap {
             if (cause instanceof Exception) throw (Exception)cause;
             throw new IllegalStateException("VDM bootstrap unavailable", cause);
         } catch (TimeoutException timeout) {
-            throw new IllegalStateException("Не удалось запустить независимый экран Android 17 за 15 секунд. Повторите активацию при доступной отладке.");
+            throw new IllegalStateException("Не удалось запустить независимый экран Android 17 за 15 секунд. При сохранённых правах повторите подключение с доступной отладкой; новая активация не нужна.");
         } finally { if (!task.isDone()) task.cancel(true); }
     }
 
@@ -85,7 +85,7 @@ public final class VdmHostBootstrap {
             if (error != null && !error.isEmpty()) throw new IllegalStateException("Хост независимого экрана не подтвердил готовность");
             Thread.sleep(100);
         }
-        throw new IllegalStateException("Не удалось запустить независимый экран Android 17. Повторите активацию при доступной отладке.");
+        throw new IllegalStateException("Не удалось запустить независимый экран Android 17. При сохранённых правах повторите подключение с доступной отладкой; новая активация не нужна.");
     }
 
     private static String installedApk() throws Exception {

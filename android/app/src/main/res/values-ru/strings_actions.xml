@@ -2,7 +2,6 @@
 <resources>
     <!-- ui/Actions.kt -->
     <string name="act_open_aa_failed">Не открыть настройки AA: %1$s</string>
-    <string name="act_open">Открыть</string>
     <string name="act_cancel">Отмена</string>
 
     <!-- ui/LogShare.kt -->
@@ -18,5 +17,4 @@
     <string name="share_size_kib">%1$d КиБ</string>
 
     <!-- BridgeService.kt -->
-    <string name="svc_bridge_failed">Мост не стартовал: %1$s</string>
 </resources>

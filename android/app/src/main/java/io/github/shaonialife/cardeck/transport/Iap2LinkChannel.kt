@@ -35,6 +35,8 @@ class Iap2LinkChannel(
 
     val isAlive: Boolean get() = !terminated
 
+    fun progressSummary(): String = synchronized(lock) { engine.progressSummary() }
+
     init {
         engine.onPeerSynchronizationAdopted = { sync ->
             log(

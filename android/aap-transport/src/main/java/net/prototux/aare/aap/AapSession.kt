@@ -16,7 +16,6 @@ import aap_protobuf.service.control.message.NavFocusTypeOuterClass.NavFocusType
 import aap_protobuf.service.control.message.PingRequestOuterClass.PingRequest
 import aap_protobuf.service.control.message.PingResponseOuterClass.PingResponse
 import aap_protobuf.service.control.message.PingConfigurationOuterClass.PingConfiguration
-import aap_protobuf.service.control.message.ServiceDiscoveryRequestOuterClass.ServiceDiscoveryRequest
 import aap_protobuf.service.control.message.ServiceDiscoveryResponseOuterClass.ServiceDiscoveryResponse
 import aap_protobuf.service.control.message.VoiceSessionNotificationOuterClass.VoiceSessionNotification
 import aap_protobuf.service.control.message.VersionResponseOptionsOuterClass.VersionResponseOptions
@@ -33,17 +32,6 @@ import java.util.concurrent.atomic.AtomicLong
 
 /** The phone's TLS identity. */
 class PhoneIdentity(val certificate: X509Certificate, val privateKey: PrivateKey, val chain: List<X509Certificate> = emptyList())
-
-/** What the phone tells the head unit about itself in the service discovery request. */
-class PhoneDescription(
-    val deviceName: String,
-    val label: String,
-    val smallIcon: ByteArray? = null,
-    val mediumIcon: ByteArray? = null,
-    val largeIcon: ByteArray? = null,
-    /** Stable per-install id, so head units remember this phone. */
-    val instanceId: String? = null,
-)
 
 class SessionOptions(
     /** Originate pings by default on wireless. On USB honor an interval supplied by the receiver. */
@@ -101,6 +89,8 @@ class AapSession(
     interface Callbacks {
         fun onWaitingForUsbVersion(session: AapSession) {}
         fun onNegotiationStarted(session: AapSession) {}
+        /** The complete encrypted DISCOVERY request has been written and flushed. */
+        fun onDiscoveryRequestSent(session: AapSession) {}
         /**
          * The head unit listed its services. Return the channels to open; each is opened in turn
          * and receives [ServiceChannel.onOpened] when the head unit accepts it.
@@ -132,6 +122,18 @@ class AapSession(
         private set
     @Volatile var discovery: ServiceDiscoveryResponse? = null
         private set
+    @Volatile var discoveryRequestBytes = 0
+        private set
+    @Volatile var discoveryRequestWritten = false
+        private set
+    @Volatile var discoveryInboundMessages = 0
+        private set
+    @Volatile var discoveryLastMessage: Int? = null
+        private set
+    @Volatile var discoveryRequestSummary = "not queued"
+        private set
+    val discoveryReadProgress: String get() = reader.progress.toString()
+    val negotiatedTls: String get() = "${cryptor.protocol}/${cryptor.cipherSuite}"
     var headUnitVersion: Pair<Int, Int>? = null
         private set
 
@@ -276,6 +278,10 @@ class AapSession(
             while (!closed.get()) {
                 val msg = reader.read(awaitUsbVersion = transport.usbAccessory && state == State.VERSION)
                 lastInboundMs = now()
+                if (state == State.DISCOVERY) {
+                    discoveryInboundMessages++
+                    discoveryLastMessage = msg.id
+                }
                 dispatch(msg)
             }
         } catch (e: Throwable) {
@@ -470,16 +476,16 @@ class AapSession(
         }
         authorized = true
         state = State.DISCOVERY
-        val req = ServiceDiscoveryRequest.newBuilder()
-            .setDeviceName(phone.deviceName)
-            .setLabelText(phone.label)
-        phone.smallIcon?.let { req.smallIcon = com.google.protobuf.ByteString.copyFrom(it) }
-        phone.mediumIcon?.let { req.mediumIcon = com.google.protobuf.ByteString.copyFrom(it) }
-        phone.largeIcon?.let { req.largeIcon = com.google.protobuf.ByteString.copyFrom(it) }
-        if (headUnitAtLeast(1, 6)) phone.instanceId?.let {
-            req.setPhoneInfo(aap_protobuf.shared.PhoneInfoOuterClass.PhoneInfo.newBuilder().setInstanceId(it))
-        }
-        sendControl(ControlMsg.SERVICE_DISCOVERY_REQUEST, req.build())
+        reader.trackProgress = true
+        val req = phone.discoveryRequest(headUnitAtLeast(1, 6))
+        val request = req.toByteArray()
+        discoveryRequestBytes = request.size
+        discoveryRequestSummary = "body=${request.size}B icons=${req.smallIcon.size()}/${req.mediumIcon.size()}/${req.largeIcon.size()}B phoneInfo=${req.hasPhoneInfo()}"
+        sendRaw(0, AapMessage.plaintext(ControlMsg.SERVICE_DISCOVERY_REQUEST, request),
+            onSent = {
+                discoveryRequestWritten = true
+                callbacks.onDiscoveryRequestSent(this)
+            })
         schedule({
             if (state == State.DISCOVERY) fail("no service discovery response", null)
         }, 10, TimeUnit.SECONDS)
@@ -498,6 +504,7 @@ class AapSession(
             return
         }
         discovery = resp
+        reader.trackProgress = false
         log.i("head unit: ${describe(resp)}")
         resp.connectionConfiguration?.pingConfiguration?.let { pc ->
             if (pc.hasIntervalMs() && pc.intervalMs > 0) {

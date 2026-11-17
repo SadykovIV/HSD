@@ -101,6 +101,7 @@ class HeadUnitSimulator(
     private val encryptAuthorization: Boolean = false,
     private val disconnectDuringTls: Boolean = false,
     private val receiverClock: java.util.Date? = null,
+    private val trustedPhoneRoot: java.security.cert.X509Certificate? = null,
     private val protocolVersion: Pair<Int, Int> = if (modernNoAcks) 6 to 1 else 1 to 6,
     val huCert: PhoneIdentity = SelfSignedCertificate.generate("AARE simulated head unit").let {
         PhoneIdentity(it.certificate, it.keyPair.private)
@@ -112,6 +113,8 @@ class HeadUnitSimulator(
     private val writeZeros = !omitZeroFields
     private val cryptor = Cryptor(huCert.certificate, huCert.privateKey, client = true)
     @Volatile private var tlsUp = false
+    @Volatile var phoneAuthorization: Int? = null
+        private set
     private val reader = FrameReader(transport.input) { if (tlsUp) cryptor else null }
     private val writer = FrameWriter(transport.output) { if (tlsUp) cryptor else null }
     private val writeLock = Any()
@@ -123,6 +126,8 @@ class HeadUnitSimulator(
     val discoveryRequest = CountDownLatch(1)
     var phoneRequest: ServiceDiscoveryRequest? = null
     val openedChannels = ConcurrentHashMap.newKeySet<Int>()
+    data class ReceivedVideo(val ptsUs: Long, val receivedNanos: Long, val key: Boolean)
+    val receivedVideo = java.util.concurrent.ConcurrentLinkedQueue<ReceivedVideo>()
     val videoFrames = AtomicInteger()
     val videoBytes = AtomicInteger()
     val codecConfigs = AtomicInteger()
@@ -130,7 +135,9 @@ class HeadUnitSimulator(
     private var videoHeadersPending = false
     val mediaFocusRequests = AtomicInteger()
     val audioChunks = AtomicInteger()
+    val audioStops = AtomicInteger()
     val nonSilentAudioChunks = AtomicInteger()
+    val lastMediaPeak = AtomicInteger()
     /** Set false to simulate a head unit that stops acking audio mid-stream (#82). */
     @Volatile var ackAudio = true
     val pingsAnswered = AtomicInteger()
@@ -223,13 +230,30 @@ class HeadUnitSimulator(
                 val out = cryptor.handshake(m.bodyBytes())
                 if (out.isNotEmpty()) sendPlain(0, ControlMsg.ENCAPSULATED_SSL, out)
                 if (cryptor.handshakeDone && !tlsUp && authorizationStatus != null) {
-                    val status = receiverClock?.let { clock ->
+                    val status = trustedPhoneRoot?.let { root ->
+                        try {
+                            val leaf = cryptor.peerCertificates.first()
+                            leaf.checkValidity(receiverClock ?: java.util.Date())
+                            check(leaf.basicConstraints < 0)
+                            check(leaf.extendedKeyUsage == null || "1.3.6.1.5.5.7.3.1" in leaf.extendedKeyUsage)
+                            val selector = java.security.cert.X509CertSelector().apply { certificate = leaf }
+                            val parameters = java.security.cert.PKIXBuilderParameters(setOf(java.security.cert.TrustAnchor(root, null)), selector).apply {
+                                date = receiverClock ?: java.util.Date()
+                                isRevocationEnabled = false
+                                addCertStore(java.security.cert.CertStore.getInstance("Collection",
+                                    java.security.cert.CollectionCertStoreParameters(cryptor.peerCertificates)))
+                            }
+                            java.security.cert.CertPathBuilder.getInstance("PKIX").build(parameters)
+                            0
+                        } catch (_: Exception) { -3 }
+                    } ?: receiverClock?.let { clock ->
                         try {
                             cryptor.peerCertificates.first().checkValidity(clock)
                             0
                         } catch (_: java.security.cert.CertificateNotYetValidException) { -23 }
                           catch (_: java.security.cert.CertificateExpiredException) { -24 }
                     } ?: authorizationStatus
+                    phoneAuthorization = status
                     val auth = AuthResponse.newBuilder().apply { if (writeZeros || status != 0) setStatus(status) }.build()
                     if (encryptAuthorization) {
                         tlsUp = true
@@ -239,7 +263,19 @@ class HeadUnitSimulator(
                 }
             }
             ControlMsg.SERVICE_DISCOVERY_REQUEST -> {
-                phoneRequest = ServiceDiscoveryRequest.parseFrom(m.bodyBytes())
+                check(m.encrypted && !m.control && m.channel == 0) { "DISCOVERY must be encrypted on channel 0" }
+                val request = ServiceDiscoveryRequest.parseFrom(m.bodyBytes())
+                // Presentation contract seen independently in MStick and Carlinkit's phone-side sender.
+                // The protobuf fields are optional; accepting their absence hid our incomplete request.
+                for ((size, data) in listOf(32 to request.smallIcon, 64 to request.mediumIcon, 128 to request.largeIcon)) {
+                    check(!data.isEmpty) { "DISCOVERY is missing the ${size}px PNG icon" }
+                    val bytes = data.toByteArray()
+                    val bitmap = checkNotNull(android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size))
+                    try { check(bitmap.width == size && bitmap.height == size) { "Invalid DISCOVERY icon dimensions" } }
+                    finally { bitmap.recycle() }
+                }
+                check(request.deviceName.isNotBlank() && request.labelText.isNotBlank())
+                phoneRequest = request
                 send(0, ControlMsg.SERVICE_DISCOVERY_RESPONSE, discoveryResponse())
                 discoveryRequest.countDown()
             }
@@ -274,7 +310,7 @@ class HeadUnitSimulator(
                     .setMaxUnacked(maxUnacked).addAllConfigurationIndices(if (m.channel == video) offeredIndices else listOf(0)).build())
             }
             MediaMsg.START -> if (m.channel == video) videoStart = Start.parseFrom(m.bodyBytes())
-            MediaMsg.STOP -> if (m.channel == video) stoppedVideo.countDown()
+            MediaMsg.STOP -> if (m.channel == video) stoppedVideo.countDown() else audioStops.incrementAndGet()
             MediaMsg.VIDEO_FOCUS_REQUEST -> {
                 focusRequests.incrementAndGet()
                 val r = VideoFocusRequestNotification.parseFrom(m.bodyBytes())
@@ -307,11 +343,23 @@ class HeadUnitSimulator(
                         requestFocusProjected()
                     }
                     videoOut?.write(m.body, m.bodyOffset + 8, m.bodyLength - 8)
+                    var ptsUs = 0L
+                    for (i in 0 until 8) ptsUs = (ptsUs shl 8) or (m.body[m.bodyOffset + i].toLong() and 255)
+                    val types = com.hsd.universal.AnnexB.nalTypes(m.body.copyOfRange(m.bodyOffset + 8, m.bodyOffset + m.bodyLength), videoCodec == MediaCodecType.MEDIA_CODEC_VIDEO_H265)
+                    receivedVideo.add(ReceivedVideo(ptsUs, System.nanoTime(), if (videoCodec == MediaCodecType.MEDIA_CODEC_VIDEO_H265) types.any { it in 16..21 } else 5 in types))
                     videoBytes.addAndGet(m.bodyLength - 8)
                     videoFrames.incrementAndGet()
                     firstVideoFrame.countDown()
                 } else {
                     audioChunks.incrementAndGet()
+                    if (m.channel == mediaAudio) {
+                        var peak = 0
+                        for (i in m.bodyOffset + 8 until m.bodyOffset + m.bodyLength - 1 step 2) {
+                            val value = ((m.body[i].toInt() and 255) or (m.body[i + 1].toInt() shl 8)).toShort().toInt()
+                            peak = maxOf(peak, kotlin.math.abs(value))
+                        }
+                        lastMediaPeak.set(peak)
+                    }
                     if (m.channel == mediaAudio && (m.bodyOffset + 8 until m.bodyOffset + m.bodyLength).any { m.body[it] != 0.toByte() })
                         nonSilentAudioChunks.incrementAndGet()
                 }
@@ -379,6 +427,9 @@ class HeadUnitSimulator(
     }
 
     fun acknowledgeVideo(sessionId: Int) = send(video, MediaMsg.ACK, Ack.newBuilder().setSessionId(sessionId).setAck(1).build())
+
+    fun audioFocus(state: AudioFocusStateType) = send(0, ControlMsg.AUDIO_FOCUS_NOTIFICATION,
+        AudioFocusNotification.newBuilder().setFocusState(state).setUnsolicited(true).build())
 
     fun requestFocusNative() = send(video, MediaMsg.VIDEO_FOCUS_NOTIFICATION,
         VideoFocusNotification.newBuilder().setFocus(VideoFocusMode.VIDEO_FOCUS_NATIVE).setUnsolicited(true).build())

@@ -214,7 +214,6 @@
     <string name="wl_cw_fail">Не подключилась: машина вне зоны, неверный пароль или отказ в запросе</string>
 
     <!-- Мой автомобиль (CarPreset) -->
-    <string name="car_title">Мой автомобиль</string>
     <string name="car_other_title">Моей машины нет в списке</string>
     <string name="car_citroen_c5_x">Citroen C5 X</string>
     <string name="car_dongfeng_df6_2023">Dongfeng DF6 2023</string>

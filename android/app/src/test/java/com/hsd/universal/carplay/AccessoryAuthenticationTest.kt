@@ -67,13 +67,13 @@ class AccessoryAuthenticationTest {
         val root = cert("CN=Emulator Accessory CA", caKeys, true)
         val leaf = cert("CN=IPA_Test", device, false)
         val serial = listOf(Iap2Csm.Param(0, byteArrayOf(1, 2, 3)))
-        for (advertised in listOf(true, false)) {
+        for (validSignature in listOf(true, false)) {
             val sent = mutableListOf<Iap2Csm.Frame>()
             val exchange = AccessoryAuthExchange(AccessoryAuthentication(listOf(root)),
                 { id, body -> sent.add(Iap2Csm.Frame(id, body)) }, "invalid signature")
-            exchange.identified(if (advertised) listOf(0xaa06) else emptyList())
+            exchange.identified()
             assertEquals(listOf(0x1d02, 0xaa00), sent.map { it.messageId })
-            assertArrayEquals(if (advertised) Iap2Csm.param(0, byteArrayOf()) else byteArrayOf(), sent.last().body)
+            assertTrue(sent.last().body.isEmpty())
             exchange.receive(0xaa06, serial)
             exchange.receive(0xaa06, serial)
             assertEquals(listOf(0x1d02, 0xaa00, 0xaa00), sent.map { it.messageId })
@@ -84,7 +84,7 @@ class AccessoryAuthenticationTest {
             exchange.receive(0xaa06, serial)
             assertEquals(0xaa02, sent.last().messageId)
             val signature = Signature.getInstance("NONEwithECDSA").run { initSign(device.private); update(challenge); sign() }
-            if (advertised) {
+            if (validSignature) {
                 exchange.receive(0xaa03, listOf(Iap2Csm.Param(0, signature)))
                 assertEquals(AccessoryAuthExchange.Stage.VERIFIED, exchange.stage)
                 assertEquals(0xaa05, sent.last().messageId)
@@ -94,5 +94,26 @@ class AccessoryAuthenticationTest {
                 assertEquals(0xaa04, sent.last().messageId)
             }
         }
+    }
+
+    @Test fun fullCertificateAuthenticatesWithoutTheSerialCacheOptimization() {
+        val root = cert("CN=Emulator Accessory CA", caKeys, true)
+        val leaf = cert("CN=IPA_FullCertificate", device, false)
+        val sent = mutableListOf<Iap2Csm.Frame>()
+        val exchange = AccessoryAuthExchange(AccessoryAuthentication(listOf(root)),
+            { id, body -> sent.add(Iap2Csm.Frame(id, body)) }, "invalid signature")
+        exchange.identified()
+        // Independent wire bytes reconstructed from Carlinkit's send_request_auth_cert at 0x3f60.
+        assertArrayEquals(byteArrayOf(0x40, 0x40, 0, 6, 0xaa.toByte(), 0),
+            Iap2Csm.encode(sent.last().messageId, sent.last().body))
+        exchange.receive(0xaa01, listOf(Iap2Csm.Param(0, leaf.encoded)))
+        val challenge = Iap2Csm.parseParams(sent.last().body).single().value
+        assertNotEquals(AccessoryAuthExchange.Stage.VERIFIED, exchange.stage)
+        val signature = Signature.getInstance("NONEwithECDSA").run {
+            initSign(device.private); update(challenge); sign()
+        }
+        exchange.receive(0xaa03, listOf(Iap2Csm.Param(0, signature)))
+        assertEquals(AccessoryAuthExchange.Stage.VERIFIED, exchange.stage)
+        assertEquals(listOf(0x1d02, 0xaa00, 0xaa02, 0xaa05), sent.map { it.messageId })
     }
 }

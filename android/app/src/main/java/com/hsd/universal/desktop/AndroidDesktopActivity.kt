@@ -447,9 +447,9 @@ class AndroidDesktopActivity : Activity() {
     }
 
     private fun applyChildInputFocus() {
-        if (!modalFocusDestroyed && Build.VERSION.SDK_INT == Build.VERSION_CODES.TIRAMISU) {
-            // Android 13 has one focused display. Keep the rail touchable without stealing
-            // the child editor's focus, but a real modal must temporarily own keyboard input.
+        if (!modalFocusDestroyed) {
+            // Keep the rail touchable without stealing the child editor's focus. A real
+            // host modal temporarily owns keyboard input, regardless of Android version.
             val flag = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
             val yieldToChild = requestedChildFocus && modalFocusOwners.isEmpty()
             window.setFlags(if (yieldToChild) flag else 0, flag)

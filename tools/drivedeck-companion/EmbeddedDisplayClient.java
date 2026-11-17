@@ -463,14 +463,12 @@ public final class EmbeddedDisplayClient {
             WORK.post(() -> {
                 if (lease.closed || !ticket.isCurrent(lease.parentId) || !selected.equals(lease.selectedPackage)) return;
                 lease.remoteGeometry = null;
-                // The map restore may need to bring its existing task back. Other apps just resize;
-                // navigating within them (including to external activities) must retain their stack.
-                if (DesktopRenderPolicy.isMap(selected)) {
-                    synchronized (LOCK) {
-                        lease.states.remove(selected);
-                        lease.pendingLaunch = selected;
-                        lease.pendingRestore = ticket;
-                    }
+                // Every selected app may have moved to full screen. Only an absent task
+                // is relaunched below; existing navigation stacks remain untouched.
+                synchronized (LOCK) {
+                    lease.states.remove(selected);
+                    lease.pendingLaunch = selected;
+                    lease.pendingRestore = ticket;
                 }
                 requestResize(lease, true);
             });
@@ -631,9 +629,7 @@ public final class EmbeddedDisplayClient {
             try {
                 if (restore != null) {
                     int state = lease.producer.taskState(lease.handle, selected);
-                    // Keep an already foreground Navigator's route/activity intact. An unknown
-                    // placement is not evidence that the user's app should be started again.
-                    if (state < 0 || state == 2 || !restore.isCurrent(lease.parentId) || lease.closed
+                    if (!com.hsd.universal.shared.EmbeddedTaskRestore.shouldLaunch(state) || !restore.isCurrent(lease.parentId) || lease.closed
                             || !selected.equals(lease.selectedPackage)) return;
                 }
                 if (!lease.producer.launch(lease.handle, selected)) message(lease.renderer, "Не удалось открыть приложение в окне");

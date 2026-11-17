@@ -52,6 +52,7 @@ internal class PinningTrustManager(
     private val peerKey: String,
     private val pins: PinStore,
     private val trustOnFirstUse: Boolean,
+    private val phoneKey: java.security.PublicKey? = null,
 ) : X509TrustManager {
     /** Set when the head unit's certificate was refused. */
     @Volatile var refusal: PinRefusal? = null
@@ -74,6 +75,10 @@ internal class PinningTrustManager(
             }
             presentedChain = chain.toList()
             try {
+                // Legacy automotive certificates can omit EKU entirely. A receiver must still
+                // have its own key, even when an older session accidentally pinned our identity.
+                if (phoneKey != null && leaf.publicKey.encoded.contentEquals(phoneKey.encoded))
+                    throw CertificateException("head unit presented the phone's own public key")
                 pins.checkReceiverChain(presentedChain)
             } catch (invalid: CertificateException) {
                 chainRejection = invalid

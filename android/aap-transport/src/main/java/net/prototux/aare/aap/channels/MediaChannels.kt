@@ -223,22 +223,19 @@ class VideoChannel(
     @Volatile var videoExpectedSinceNanos: Long? = 0L
         private set
 
-    private class Pending(val buf: ByteArray, val offset: Int, val length: Int, val ptsUs: Long, val key: Boolean, val recycle: (ByteArray) -> Unit)
-    private val pending = ArrayDeque<Pending>()
+    private val pending = PendingVideoFrames(listener::onKeyFrameNeeded)
     private var outstandingWrites = 0
+    private var writeStartedNanos: Long? = null
     private val lock = Any()
     @Volatile private var codecConfig: ByteArray? = null
-    private var needKeyFrame = true
-    @Volatile var droppedFrames = 0L
-        private set
+    private val needKeyFrame get() = pending.needsKeyFrame
+    val droppedFrames get() = pending.dropped
 
     // How well the head unit keeps up, for the phone's adaptive bitrate.
     /** Frames waiting for room in the ack window. */
-    @Volatile var pendingFrames = 0
-        private set
+    val pendingFrames get() = pending.size
     /** Times the backlog overflowed and was dropped (not the drops while waiting for a key frame). */
-    @Volatile var congestionDrops = 0L
-        private set
+    val congestionDrops get() = pending.congestions
     /** Send to ack of the latest acked frame: transport, head-unit queue and decode. */
     @Volatile var ackLatencyMs = 0L
         private set
@@ -341,10 +338,21 @@ class VideoChannel(
         true
     }
 
-    private fun discardQueuedFrames() {
-        while (pending.isNotEmpty()) pending.removeFirst().let { it.recycle(it.buf) }
-        pendingFrames = 0
-        needKeyFrame = true
+    private fun discardQueuedFrames() = pending.clear()
+
+    data class FlowStats(val queued: Int, val writing: Int, val unacknowledged: Int,
+                         val queueAgeMs: Long, val writeAgeMs: Long, val ackAgeMs: Long,
+                         val lastWriteMs: Long, val lastAckMs: Long, val ackless: Boolean,
+                         val dropped: Long, val expired: Long) {
+        val backlogMs get() = maxOf(queueAgeMs, writeAgeMs, ackAgeMs)
+    }
+
+    fun flowStats(): FlowStats = synchronized(lock) {
+        val now = System.nanoTime()
+        fun age(start: Long?) = start?.let { ((now - it) / 1_000_000).coerceAtLeast(0) } ?: 0L
+        FlowStats(pending.size, outstandingWrites, unacked.get(), pending.oldestAgeMs(now),
+            age(writeStartedNanos), if (ackless) 0 else age(sentAt.peekFirst()),
+            sendLatencyMs, ackLatencyMs, ackless, pending.dropped, pending.expired)
     }
 
     private fun clearPending() {
@@ -385,7 +393,10 @@ class VideoChannel(
             focusMode = mode
             if (projected) {
                 if (videoExpectedSinceNanos == null) videoExpectedSinceNanos = System.nanoTime()
-                if (!started && ready && chosen != null) startStream(startIndex)
+                if (!started && ready && chosen != null) {
+                    sentAt.clear()
+                    startStream(startIndex)
+                }
                 if (previous?.let(::isProjected) != true || previous == mode) {
                     // A repeated projected focus can follow a decoder reset without a native
                     // transition. Reuse START, but send headers and a decodable frame again.
@@ -429,25 +440,7 @@ class VideoChannel(
         synchronized(lock) {
             if (!acceptsVideo) { recycle(buf); return }
             if (!canSend()) noteAttempt()
-            if (needKeyFrame && !keyFrame) {
-                droppedFrames++
-                recycle(buf)
-                return
-            }
-            if (keyFrame) {
-                // A key frame supersedes everything still waiting.
-                while (pending.isNotEmpty()) { pending.removeFirst().let { it.recycle(it.buf) }; droppedFrames++ }
-                needKeyFrame = false
-            } else if (pending.size >= MAX_PENDING) {
-                // The head unit can't keep up: drop the backlog and resync on a key frame.
-                while (pending.isNotEmpty()) { pending.removeFirst().let { it.recycle(it.buf) }; droppedFrames++ }
-                recycle(buf); droppedFrames++
-                congestionDrops++; pendingFrames = 0
-                needKeyFrame = true
-                listener.onKeyFrameNeeded()
-                return
-            }
-            pending.addLast(Pending(buf, offset, length, ptsUs, keyFrame, recycle))
+            pending.offer(PendingVideoFrames.Frame(buf, offset, length, ptsUs, keyFrame, System.nanoTime(), recycle))
             pump()
         }
     }
@@ -468,9 +461,12 @@ class VideoChannel(
     }
 
     private fun pump() {
-        while (acceptsVideo && pending.isNotEmpty() && canSend() && outstandingWrites < MAX_PENDING) {
-            val p = pending.removeFirst()
+        // Only one access unit leaves this queue at a time. Otherwise the session's
+        // separate writer queue hides an additional, irrevocable backlog of reference frames.
+        while (acceptsVideo && pending.size > 0 && canSend() && outstandingWrites == 0) {
             val t = System.nanoTime()
+            val p = pending.poll(t) ?: break
+            writeStartedNanos = t
             outstandingWrites++
             val generation = videoGeneration
             submittedVideo = true
@@ -486,13 +482,13 @@ class VideoChannel(
                         confirmIfReady()
                     }
                     outstandingWrites--
+                    writeStartedNanos = null
                     pump()
                     active
                 }
                 if (current) listener.onFrameWritten(p.key, p.ptsUs, p.length)
             }
         }
-        pendingFrames = pending.size
     }
 
     override fun onClosed() {
@@ -507,9 +503,6 @@ class VideoChannel(
     }
 
     companion object {
-        /** About a quarter second at 30 fps: more than that and we're just adding latency. */
-        const val MAX_PENDING = 8
-
         /** Our projection is on screen, with or without input focus (native, transient native: not). */
         private fun isProjected(mode: VideoFocusMode) =
             mode == VideoFocusMode.VIDEO_FOCUS_PROJECTED || mode == VideoFocusMode.VIDEO_FOCUS_PROJECTED_NO_INPUT_FOCUS

@@ -1,7 +1,7 @@
 package com.hsd.universal.dex
 
-/** Pause once on loss of a proven desktop output, whichever USB signal arrives first. */
-internal class DesktopMusicUsbLink(private val graceMs: Long) {
+/** Pause once on loss of a proven desktop output, whichever transport or physical-detach signal arrives first. */
+internal class DesktopMusicOutputLink(private val graceMs: Long) {
     var serviceOwner: Any? = null
         private set
     var owner: Any? = null

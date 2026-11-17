@@ -19,7 +19,7 @@ import java.util.concurrent.atomic.AtomicInteger
 
 /** Real Android media routing and player. Only the USB cable state is supplied by the fixture. */
 internal class UsbMusicPauseProbe(private val instrumentation: Instrumentation) {
-    fun run() {
+    fun run(wireless: Boolean = false, explicitStop: Boolean = false, serviceDestroyed: Boolean = false) {
         val app = instrumentation.targetContext
         var cable = true
         val context = object : ContextWrapper(app) {
@@ -61,17 +61,32 @@ internal class UsbMusicPauseProbe(private val instrumentation: Instrumentation) 
             track.play()
             session.setPlaybackState(playback(PlaybackState.STATE_PLAYING))
             instrumentation.runOnMainSync {
-                DesktopMusicPlayback.attach(context, service, owner, true, { true }, { true })
-                DesktopMusicPlayback.usbOutputLost(service, owner, true, false)
+                DesktopMusicPlayback.attach(context, service, owner, !wireless, { true }, { true }, { true })
+                DesktopMusicPlayback.outputLost(service, owner, true, false)
+                DesktopMusicPlayback.outputLost(service, Any(), true, true)
                 DesktopMusicPlayback.physicalDetach(service)
             }
             check(!paused.await(350, TimeUnit.MILLISECONDS)) { "Camera switch paused the player" }
             instrumentation.runOnMainSync {
-                cable = false
-                DesktopMusicPlayback.physicalDetach(service)
-                DesktopMusicPlayback.physicalDetach(service)
+                when {
+                    serviceDestroyed -> DesktopMusicPlayback.serviceDestroyed(service, false)
+                    explicitStop -> {
+                        DesktopMusicPlayback.stop("explicit fixture Stop")
+                        DesktopMusicPlayback.stop("duplicate fixture Stop")
+                    }
+                    wireless -> {
+                        DesktopMusicPlayback.outputLost(service, owner, true, true)
+                        DesktopMusicPlayback.outputLost(service, owner, true, true)
+                        DesktopMusicPlayback.linkClosed(owner)
+                    }
+                    else -> {
+                        cable = false
+                        DesktopMusicPlayback.physicalDetach(service)
+                        DesktopMusicPlayback.physicalDetach(service)
+                    }
+                }
             }
-            check(paused.await(2, TimeUnit.SECONDS)) { "Physical unplug did not pause the player" }
+            check(paused.await(2, TimeUnit.SECONDS)) { "Output loss did not pause the player (wireless=$wireless, stop=$explicitStop)" }
             instrumentation.waitForIdleSync()
             check(calls.get() == 1) { "Duplicate PAUSE on unplug" }
         } finally {

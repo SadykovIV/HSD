@@ -2,6 +2,13 @@ AARE Android Auto protocol implementation
 https://github.com/prototux/AARE/tree/5d932aec4cffda124fe0b42dd5e9ed80de4f007f
 GPL-3.0, see AARE-GPL-3.0.txt. Adapted for HSD.
 
+The installed-Android-Auto APK identity reader in AaApkIdentity.kt adapts the
+key-blob format and derivation algorithm documented in AARE's extract_key.py:
+https://github.com/prototux/AARE/blob/main/extract_key.py
+GPL-3.0, prototux and contributors. The Android implementation adds local
+issuer/role/validity/key-pair verification and bounded APK parsing. No phone
+private key from another application is distributed with HSD.
+
 The `aap_protobuf` definitions come from aasdk (https://github.com/opencardev/aasdk, `protobuf/`),
 Copyright (C) 2018 f1x.studio (Michal Szwaj) and the OpenCarDev community, GPL-3.0-or-later.
 Local changes are marked with `// AARE:` comments, except two made across all the files:

@@ -76,15 +76,17 @@ class TransportTest {
     fun streamWritesExactlyWriteSequence() {
         val out = RecordingOut()
         val t = StreamTransport(BlockingIn(), out, TransportCaps.USB_AOA, "test", clock = clock)
-        val written = CountDownLatch(3)
-        t.start({ _, _ -> }, { _, _ -> written.countDown() }, { })
+        val written = java.util.concurrent.LinkedBlockingQueue<Int>()
+        t.start({ _, _ -> }, { chan, _ -> written.offer(chan) }, { })
         val cmd = Wire.cmdInner(Msg.MD_INFO, ByteArray(300) { it.toByte() })
         val video = Wire.dataInner(Msg.VIDEO_DATA, 7, ByteArray(40_000) { (it * 31).toByte() })
         val media = Wire.dataInner(0x00030006, 1, ByteArray(4096))
         t.send(Ch.CMD, cmd)
+        assertEquals(Ch.CMD, written.poll(5, TimeUnit.SECONDS))
         t.send(Ch.VIDEO, video)
+        assertEquals(Ch.VIDEO, written.poll(5, TimeUnit.SECONDS))
         t.send(Ch.MEDIA, media)
-        assertTrue(written.await(5, TimeUnit.SECONDS))
+        assertEquals(Ch.MEDIA, written.poll(5, TimeUnit.SECONDS))
         val expected = Wire.writeSequence(Ch.CMD, cmd) + Wire.writeSequence(Ch.VIDEO, video) + Wire.writeSequence(Ch.MEDIA, media)
         assertEquals("число write()", expected.size, out.calls.size)
         for (i in expected.indices) assertArrayEquals("write #$i", expected[i], out.calls[i])
@@ -92,6 +94,87 @@ class TransportTest {
         assertEquals(0L, t.queuedVideoBytes)
         assertEquals(0, t.queuedVideoFrames)
         t.close()
+    }
+
+    @Test fun audioKeepsItsDeadlineBehindAVideoBurstWithoutSplittingWireMessages() {
+        val now = java.util.concurrent.atomic.AtomicLong(1_000L)
+        val started = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val drained = CountDownLatch(6)
+        val bytes = ByteArrayOutputStream()
+        val sent = Collections.synchronizedList(mutableListOf<Int>())
+        val output = object : OutputStream() {
+            private var messageStart = 0
+            override fun write(value: Int) { bytes.write(value) }
+            override fun write(data: ByteArray, offset: Int, length: Int) { bytes.write(data, offset, length) }
+            override fun flush() {
+                started.countDown(); check(release.await(3, TimeUnit.SECONDS))
+                val channel = Wire.u32(bytes.toByteArray(), messageStart)
+                messageStart = bytes.size()
+                now.addAndGet(if (channel == Ch.VIDEO) 80 else 1)
+            }
+        }
+        val transport = StreamTransport(BlockingIn(), output, TransportCaps.USB_AOA, "burst", clock = { now.get() })
+        val video = Wire.dataInner(Msg.VIDEO_DATA, 1, ByteArray(200_000))
+        val init = Wire.dataInner(Msg.MEDIA_INIT, 0, ByteArray(8))
+        val pcm = Wire.dataInner(0x00030006, 1, ByteArray(3840))
+        try {
+            transport.start({ _, _ -> }, { channel, inner ->
+                sent += if (channel == Ch.VIDEO) 2 else Wire.u32(inner, 8)
+                drained.countDown()
+            }, {})
+            transport.send(Ch.VIDEO, video)
+            assertTrue(started.await(3, TimeUnit.SECONDS))
+            repeat(3) { transport.send(Ch.VIDEO, video) }
+            transport.send(Ch.MEDIA, init)
+            transport.sendTimed(Ch.MEDIA, pcm, 150)
+            now.addAndGet(40)
+            assertEquals(40L, transport.videoQueueAgeMs)
+            release.countDown()
+            assertTrue("Video burst must not expire queued PCM", drained.await(3, TimeUnit.SECONDS))
+            assertEquals(listOf(2, Msg.MEDIA_INIT, 0x00030006, 2, 2, 2), sent)
+            assertEquals(0L, transport.audioExpiredPackets)
+            val decoded = mutableListOf<Pair<Int, ByteArray>>()
+            val raw = bytes.toByteArray()
+            com.hsd.universal.FrameParser().feed(raw, 0, raw.size) { channel, inner -> decoded += channel to inner }
+            assertEquals(6, decoded.size)
+            assertArrayEquals(video, decoded[0].second)
+            assertArrayEquals(init, decoded[1].second)
+            assertArrayEquals(pcm, decoded[2].second)
+            assertEquals(0L, transport.videoQueueAgeMs)
+        } finally { release.countDown(); transport.close() }
+    }
+
+    @Test fun aPictureAwaitingAvSyncDoesNotBlockAudioOrControlAndKeepsVideoOrder() {
+        val now = java.util.concurrent.atomic.AtomicLong(1_000_000L)
+        val waiting = CountDownLatch(1)
+        val target = 1_500_000L
+        val frame = object : VideoWrite {
+            override fun readyInUs(): Long { waiting.countDown(); return (target - now.get()).coerceAtLeast(0) }
+            override fun begin() = true
+            override fun written() {}
+        }
+        val sent = java.util.concurrent.LinkedBlockingQueue<Int>()
+        val t = StreamTransport(BlockingIn(), RecordingOut(), TransportCaps.USB_AOA, "paced", clock = { now.get() / 1000 })
+        try {
+            t.start({ _, _ -> }, { channel, _ -> sent.offer(channel) }, {})
+            t.sendVideoFragment(Wire.dataInner(Msg.VIDEO_DATA, 0, byteArrayOf(1)), frame, true)
+            assertTrue(waiting.await(2, TimeUnit.SECONDS))
+            // A following video message without a scheduling token still cannot overtake it.
+            t.send(Ch.VIDEO, Wire.dataInner(Msg.VIDEO_DATA, 0, byteArrayOf(2)))
+            t.sendTimed(Ch.MEDIA, Wire.dataInner(0x00030006, 0, byteArrayOf(7)), 150)
+            t.send(Ch.CMD, Wire.cmdInner(Msg.MD_INFO, byteArrayOf(3)))
+            assertEquals(Ch.MEDIA, sent.poll(2, TimeUnit.SECONDS))
+            assertEquals(Ch.CMD, sent.poll(2, TimeUnit.SECONDS))
+            assertTrue(sent.isEmpty())
+            now.set(target)
+            // A command wakes the timed take after advancing the virtual clock.
+            t.send(Ch.CMD, Wire.cmdInner(Msg.MD_INFO, byteArrayOf(4)))
+            assertEquals(Ch.CMD, sent.poll(2, TimeUnit.SECONDS))
+            assertEquals(Ch.VIDEO, sent.poll(2, TimeUnit.SECONDS))
+            assertEquals(Ch.VIDEO, sent.poll(2, TimeUnit.SECONDS))
+            assertEquals(0L, t.audioExpiredPackets)
+        } finally { t.close() }
     }
 
     @Test
@@ -295,6 +378,63 @@ class TransportTest {
                 } else assertTrue("The USB queue must discard expired PCM", samples.none { it in 2..65 })
             } finally { release.countDown(); timeline.close(); link.close() }
         }
+    }
+
+    @Test
+    fun wirelessTouchSurvivesSixSecondVideoStallWithoutReplayingOldPictures() {
+        val now = java.util.concurrent.atomic.AtomicLong(1_000)
+        val blocked = java.util.concurrent.atomic.AtomicBoolean()
+        val writing = CountDownLatch(1); val release = CountDownLatch(1)
+        val first = CountDownLatch(1); val recovered = CountDownLatch(1); val touches = CountDownLatch(20)
+        val pictures = java.util.concurrent.CopyOnWriteArrayList<Int>()
+        val actions = java.util.concurrent.CopyOnWriteArrayList<Int>()
+        val input = java.io.PipedInputStream(4096)
+        val peer = java.io.PipedOutputStream(input)
+        val output = object : OutputStream() {
+            override fun write(value: Int) { if (blocked.get()) { writing.countDown(); release.await() } }
+            override fun write(bytes: ByteArray, offset: Int, length: Int) = write(0)
+        }
+        fun socket(rx: InputStream, tx: OutputStream) = object : Socket() {
+            override fun getInputStream() = rx
+            override fun getOutputStream() = tx
+            override fun close() { rx.close(); release.countDown() }
+        }
+        val link = MultiSocketTransport(mapOf(Ch.VIDEO to socket(BlockingIn(), output),
+            Ch.TOUCH to socket(input, ByteArrayOutputStream())), emptyMap(), "wireless stall", {}, now::get)
+        val timeline = DesktopAvTimeline({ now.get() * 1000L }) { _, _, _ -> }
+        fun frame(id: Int, key: Boolean) {
+            val ticket = checkNotNull(timeline.frame(now.get() * 1000L, key, 30))
+            link.sendVideoFragment(Wire.dataInner(Msg.VIDEO_DATA, 0, byteArrayOf(id.toByte())), ticket, true)
+        }
+        try {
+            link.start({ ch, bytes ->
+                assertEquals(Ch.TOUCH, ch)
+                val command = checkNotNull(Wire.parseCmd(bytes))
+                assertEquals(Msg.TOUCH_ACTION, command.type)
+                actions += command.body[1].toInt(); touches.countDown()
+            }, { _, bytes ->
+                val id = bytes.last().toInt(); pictures += id
+                if (id == 1) first.countDown()
+                if (id == 4) recovered.countDown()
+            }, { error("Unexpected channel close: $it") })
+            timeline.reset(true); frame(1, true); assertTrue(first.await(3, TimeUnit.SECONDS))
+            blocked.set(true); frame(2, false); assertTrue(writing.await(3, TimeUnit.SECONDS)); frame(3, false)
+            repeat(20) { tick ->
+                now.addAndGet(300)
+                peer.write(Wire.cmdInner(Msg.TOUCH_ACTION, byteArrayOf(8, (tick % 2).toByte(), 16, 10, 24, 20)))
+                peer.flush()
+            }
+            assertTrue("Touch must reach the dispatcher while video is still blocked", touches.await(3, TimeUnit.SECONDS))
+            assertEquals((0 until 20).map { it % 2 }, actions.toList())
+            assertTrue(link.videoWriteAgeMs >= 6000)
+            release.countDown()
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+            while (link.queuedVideoFrames != 0 && System.nanoTime() < deadline) Thread.sleep(1)
+            assertEquals(0, link.queuedVideoFrames)
+            assertNull(timeline.frame(now.get() * 1000L, false, 30))
+            frame(4, true); assertTrue(recovered.await(3, TimeUnit.SECONDS))
+            assertEquals(listOf(1, 2, 4), pictures.toList())
+        } finally { release.countDown(); link.close(); peer.close(); timeline.close() }
     }
 
     @Test

@@ -15,15 +15,16 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.InterruptedIOException
 import java.io.OutputStream
-import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.DelayQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Один байтовый поток с внешним заголовком [chan u32][len u32]: USB AOA и debug-TCP.
- * Код чтения и записи перенесён из CarLifeSession без изменений поведения: одна FIFO-очередь на все каналы,
- * единственный писатель, заголовок отдельным write и тело кусками <= 16384 (Wire.writeSequence), flush на сообщение.
+ * A single writer completes each wire message atomically. Between messages, audio/control precedes
+ * waiting video. FIFO is preserved within video and across all non-video messages, including audio
+ * INIT/DATA/STOP. The wire framing and USB transfer boundaries are unchanged.
  */
 class StreamTransport(
     private val input: InputStream,
@@ -35,7 +36,7 @@ class StreamTransport(
     private val clock: () -> Long = { SystemClock.elapsedRealtime() },
 ) : CarTransport {
 
-    private val queue = LinkedBlockingQueue<QueuedTransportPacket>()
+    private val queue = DelayQueue<QueuedTransportPacket>()
     private val videoBytes = AtomicLong()
     private val videoFrames = AtomicInteger()
     private val audioExpired = AtomicLong()
@@ -65,6 +66,8 @@ class StreamTransport(
     override val queuedVideoBytes: Long get() = videoBytes.get()
     override val queuedVideoFrames: Int get() = videoFrames.get()
     override val videoWriteAgeMs: Long get() = videoWriteStartedMs.let { if (it < 0) 0L else (clock() - it).coerceAtLeast(0) }
+    override val videoQueueAgeMs: Long get() = maxOf(videoWriteAgeMs,
+        queue.asSequence().filter { it.chan == Ch.VIDEO }.maxOfOrNull { it.congestionAgeMs(clock()) } ?: 0)
     override val drainBytesPerSec: Double get() = drain.bytesPerSec
     override fun queueSize(chan: Int): Int = queue.size
 
@@ -102,7 +105,7 @@ class StreamTransport(
             videoBytes.addAndGet(inner.size.toLong())
             videoFrames.incrementAndGet()
         }
-        AudioQueueAdmission.offer(queue, QueuedTransportPacket(chan, inner, deadlineMs, frame, last), clock(),
+        AudioQueueAdmission.offer(queue, QueuedTransportPacket(chan, inner, deadlineMs, frame, last, clock()), clock(),
             { audioExpired.addAndGet(it) }, { audioOverflow.addAndGet(it) })
     }
 

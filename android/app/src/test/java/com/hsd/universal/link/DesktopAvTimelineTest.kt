@@ -4,7 +4,65 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DesktopAvTimelineTest {
-    @Test fun slowerEncoderCanStartAndReestablishItsBaselineWithoutReplayingStaleFrames() {
+    @Test fun disabledAlignmentDoesNotWaitForVideoOrReceiverTrimButKeepsReferenceProtection() {
+        var now = 1_000_000L
+        val heard = mutableListOf<Int>()
+        val t = DesktopAvTimeline({ now }, { 1500 }, synchronize = false) { _, bytes, ttl ->
+            assertTrue(ttl in 1..150)
+            heard += bytes[0].toInt()
+        }
+        t.reset(true)
+        repeat(100) { tick ->
+            assertTrue(t.pcm(3, byteArrayOf(tick.toByte()), now))
+            now += 10_000
+        }
+        assertEquals((0 until 100).toList(), heard)
+        val key = t.frame(now - 80_000, true, 30)!!
+        assertTrue(key.begin()); key.written()
+        val frame = t.frame(now, false, 30)!!
+        assertEquals(0, frame.readyInUs())
+        now += 240_000
+        assertFalse(frame.begin())
+        assertNull(t.frame(now, false, 30))
+        assertTrue(t.frame(now, true, 30)!!.begin())
+        assertTrue(t.diagnostics().contains("audioTargetMs=0 receiverTrimMs=0"))
+    }
+    @Test fun disablingAudioAlignmentDoesNotRejectHealthyFramesFromASlowerCodec() {
+        var now = 1_000_000L
+        val t = DesktopAvTimeline({ now }, synchronize = false) { _, _, _ -> }
+        t.reset(true)
+        t.frame(now - 320_000, true, 15)!!.apply { assertTrue(begin()); written() }
+        repeat(120) {
+            now += 66_667
+            val frame = t.frame(now - 340_000, false, 15)!!
+            assertEquals(0L, frame.readyInUs())
+            assertTrue(frame.begin()); frame.written()
+        }
+        assertNull(t.frame(now - 501_000, false, 15))
+    }
+    @Test fun aFasterVideoEncoderStaysOnTheContinuousAudioClock() {
+        var now = 1_000_000L
+        val sent = mutableListOf<Long>()
+        val t = DesktopAvTimeline({ now }) { _, _, _ -> sent += now }
+        t.reset(true)
+        t.frame(now - 210_000, true, 30)!!.apply { assertTrue(begin()); written() }
+        val capture = now
+        assertTrue(t.pcm(3, byteArrayOf(1), capture))
+        now += 10_000
+        val early = t.frame(capture, false, 30)!!
+        assertEquals(200_000L, early.readyInUs())
+        now += 199_000
+        t.drainDueAudio()
+        assertTrue(sent.isEmpty())
+        assertEquals(0L, early.congestionAgeMs(199))
+        now += 1_000
+        assertEquals(0L, early.readyInUs())
+        assertTrue(early.begin())
+        early.written(); t.drainDueAudio()
+        assertEquals(listOf(capture + 210_000), sent)
+        assertEquals(0L, early.readyInUs()) // A second fragment must never be paced again.
+    }
+    @Test fun slowerEncoderCanStartButRecoveryCannotAccumulateMorePlayoutDelay() {
         var now = 1_000_000L
         val t = DesktopAvTimeline({ now }) { _, _, _ -> }
         t.reset(true)
@@ -16,8 +74,41 @@ class DesktopAvTimelineTest {
         now += 400_000
         assertNull(t.frame(now - 390_000, false, 30))
         assertNull(t.frame(now - 501_000, true, 30))
+        assertNull(t.frame(now - 400_000, true, 30))
+        written(240_000, true)
+        now += 40_000; written(245_000, false)
+        // A genuinely new projection may establish a different codec baseline.
+        t.reset(true)
         written(400_000, true)
         now += 40_000; written(405_000, false)
+    }
+    @Test fun tenMinutesOfVideoJitterAndCameraTransitionsDoNotInsertAudioGapsOrDrift() {
+        var now = 1_000_000L
+        val times = mutableListOf<Long>()
+        val samples = mutableListOf<Int>()
+        val t = DesktopAvTimeline({ now }) { _, bytes, _ ->
+            times += now
+            samples += java.nio.ByteBuffer.wrap(bytes).int
+        }
+        t.reset(true)
+        t.frame(now - 20_000, true, 30)!!.apply { assertTrue(begin()); written() }
+        repeat(60_000) { tick ->
+            now += 10_000
+            val camera = tick % 1000 in 700..799
+            if (tick % 1000 == 700) t.videoActive(false)
+            if (tick % 1000 == 800) t.videoActive(true)
+            if (!camera && tick % 4 == 0) {
+                val delay = if (tick % 30 < 10) 100_000L else 20_000L
+                t.frame(now - delay, true, 25)!!.apply { assertTrue(begin()); written() }
+            }
+            assertTrue(t.pcm(3, java.nio.ByteBuffer.allocate(4).putInt(tick).array(), now))
+            t.drainDueAudio()
+        }
+        repeat(2) { now += 10_000; t.drainDueAudio() }
+        assertEquals((0 until 60_000).toList(), samples)
+        assertTrue(times.zipWithNext().all { (a, b) -> b - a == 10_000L })
+        assertTrue(t.diagnostics().contains("audioTargetMs=20"))
+        assertTrue(t.diagnostics().contains("stalePcm=0"))
     }
     @Test fun aStalledVideoWriterCannotMuteOrReplayLiveAudio() {
         var now = 1_000_000L

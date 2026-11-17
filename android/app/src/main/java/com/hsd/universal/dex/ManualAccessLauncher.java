@@ -147,7 +147,7 @@ public final class ManualAccessLauncher {
             return false;
         }
         // A known live instrumentation with a delayed heartbeat must not be replaced under an active projection.
-        check(liveRecovery(uid) == null, "Действующий сеанс пока не подтвердил состояние. Повторите активацию после его ответа.");
+        check(liveRecovery(uid) == null, "Действующий сеанс пока не подтвердил состояние. Дождитесь его ответа; новая активация не запущена.");
         if (!options.audio && !options.screen && hudApiRequested(uid)) options = options.withHudApi();
         if (options.audio) System.out.println(ManualAccessPolicy.ANDROID_AUTO
             ? "Запрошена передача музыки и подсказок на магнитолу по выбранному подключению."
@@ -291,7 +291,7 @@ public final class ManualAccessLauncher {
             }
             Thread.sleep(400);
         }
-        throw new IOException("Действующий сеанс не подтвердил восстановление клавиатуры. Повторите активацию.");
+        throw new IOException("Действующий сеанс не подтвердил восстановление клавиатуры. Существующая активация не изменена.");
     }
 
     private static boolean displayAccessReady(JSONObject status) {
@@ -303,7 +303,7 @@ public final class ManualAccessLauncher {
         if (Build.VERSION.SDK_INT < 37 || Boolean.FALSE.equals(status.opt("needsIndependentHost"))) return;
         DisplayHelperRendezvous record = liveRecovery(uid);
         check(record != null && record.matchesHeartbeat(number(status.opt("pid")), number(status.opt("elapsedRealtimeMs")),
-            status.optString("helperSession")), "Не удалось подтвердить владельца независимого экрана. Повторите активацию.");
+            status.optString("helperSession")), "Не удалось подтвердить владельца независимого экрана. Проверьте состояние доступа в приложении.");
         System.out.println("Подготавливаю независимый экран Android 17…");
         VdmHostBootstrap.ensureReady(uid, record.pid, record.token, null);
     }

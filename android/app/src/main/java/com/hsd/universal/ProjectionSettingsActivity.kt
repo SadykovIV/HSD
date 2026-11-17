@@ -152,7 +152,7 @@ internal class ProjectionSettingsActivity : Activity() {
                 val lanGroup = ui.section(content, getString(R.string.desktop_android_auto_over_lan))
                 choice(lanGroup, ProjectionRoute.LAN_SERVER, getString(R.string.desktop_the_head_unit_connects_to_the_phone_on_port))
                 choice(lanGroup, ProjectionRoute.LAN_CLIENT, getString(R.string.desktop_the_phone_connects_to_the_head_unit_s_ip))
-                ui.navigation(ui.section(content), getString(R.string.desktop_android_auto_certificates), identities.defaultAlias ?: getString(R.string.desktop_automatic)) {
+                ui.navigation(ui.section(content), getString(R.string.desktop_android_auto_certificates), phoneCertificateLabel()) {
                     open(Page.CERTIFICATES)
                 }
             }
@@ -234,7 +234,34 @@ internal class ProjectionSettingsActivity : Activity() {
     private fun certificates() {
         val phone = ui.section(content, getString(R.string.desktop_phone_certificate))
         ui.text(phone, getString(R.string.desktop_hsd_creates_a_certificate_the_first_time_it_connects))
-        ui.navigation(phone, getString(R.string.desktop_select_certificate), identities.defaultAlias ?: getString(R.string.desktop_automatic)) { chooseIdentity(null) }
+        ui.navigation(phone, getString(R.string.desktop_select_certificate), phoneCertificateLabel()) { chooseIdentity(null) }
+        ui.toggle(phone, getString(R.string.aa_identity_auto_update), AaIdentityUpdates.enabled(this)) {
+            AaIdentityUpdates.enable(this, it)
+        }
+        ui.text(phone, getString(R.string.aa_identity_update_description))
+        val checkStatus = ui.text(phone, "")
+        fun showStatus() {
+            val time = AaIdentityUpdates.lastCheck(this)
+            checkStatus.text = if (time == 0L) getString(R.string.aa_identity_not_checked)
+                else getString(if (AaIdentityUpdates.lastSucceeded(this)) R.string.aa_identity_check_ok else R.string.aa_identity_check_failed,
+                    DateFormat.getDateTimeInstance().format(Date(time)))
+        }
+        showStatus()
+        val app = applicationContext
+        val button = ui.button(phone, getString(R.string.aa_identity_check_now)) {}
+        button.setOnClickListener {
+            button.isEnabled = false
+            checkStatus.setText(R.string.aa_identity_checking)
+            Thread({
+                val ok = AaIdentityUpdates.refresh(app, force = true, waitForRunning = true)
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed && page == Page.CERTIFICATES) {
+                        button.isEnabled = true
+                        if (ok) showStatus() else checkStatus.setText(R.string.aa_identity_update_unavailable)
+                    }
+                }
+            }, "HSD-AA-identity-manual").start()
+        }
         val receivers = ui.section(content, getString(R.string.desktop_head_unit_3d48))
         val ids = identities.receiverIds()
         if (ids.isEmpty()) ui.text(receivers, getString(R.string.desktop_after_the_first_connection_the_radio_will_appear_here))
@@ -243,6 +270,12 @@ internal class ProjectionSettingsActivity : Activity() {
             receiver = id
             open(Page.RECEIVER)
         }
+    }
+
+    private fun phoneCertificateLabel() = when (val alias = identities.defaultAlias) {
+        null -> getString(R.string.desktop_automatic)
+        "" -> getString(R.string.desktop_hsd_certificate)
+        else -> alias
     }
 
     private fun receiverOptions() {
@@ -294,7 +327,7 @@ internal class ProjectionSettingsActivity : Activity() {
 
     private fun chooseIdentity(id: String?) {
         val alias = if (id == null) identities.defaultAlias else identities.assignedAlias(id)
-        val labels = if (id == null) arrayOf(getString(R.string.desktop_automatic), getString(R.string.desktop_select_from_android_storage))
+        val labels = if (id == null) arrayOf(getString(R.string.desktop_automatic), getString(R.string.desktop_hsd_certificate), getString(R.string.desktop_select_from_android_storage))
             else arrayOf(getString(R.string.desktop_general_settings), getString(R.string.desktop_hsd_certificate), getString(R.string.desktop_select_from_android_storage))
         fun select(value: String?) {
             if (id == null) identities.selectDefault(value) else identities.select(id, value)

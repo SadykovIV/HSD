@@ -22,8 +22,7 @@ enum class DexAccessReason {
     INVALID_HOST, INVALID_PORT, INVALID_CODE, REFUSED, TIMEOUT, NETWORK_UNREACHABLE,
     PERMISSION_DENIED, TLS_HANDSHAKE, TLS_PROTOCOL, TLS_PROVIDER, PAIR_REJECTED,
     CONNECTION_CLOSED, IDENTITY_FAILURE, SHELL_REJECTED, IO_FAILURE, INTERNAL,
-    AUTHORIZATION_REJECTED, TLS_VERSION_UNSUPPORTED, LOCAL_ADB_CONFIGURATION, LOCAL_ADB_RESTORE_REQUIRED,
-    USB_DEBUGGING_DISABLED
+    AUTHORIZATION_REJECTED, TLS_VERSION_UNSUPPORTED, LOCAL_ADB_CONFIGURATION, LOCAL_ADB_RESTORE_REQUIRED
 }
 
 /** Deliberately omits the raw cause: library errors can carry pairing material. */
@@ -53,8 +52,8 @@ internal object DexAccessDiagnostics {
         DexAccessReason.TIMEOUT -> "истекло время ожидания. Проверьте актуальный порт, IP и включённую беспроводную отладку"
         DexAccessReason.NETWORK_UNREACHABLE -> "адрес телефона сейчас недоступен. Проверьте подключение к Wi-Fi и IP"
         DexAccessReason.PERMISSION_DENIED -> "Android не разрешил сетевое подключение. Разрешите доступ к локальной сети, если система его запрашивает"
-        DexAccessReason.TLS_HANDSHAKE -> "телефон не завершил защищённое подключение. Повторите активацию; если ошибка сохраняется, отправьте журнал"
-        DexAccessReason.TLS_PROTOCOL -> "сбой защищённого обмена с отладкой. Повторите активацию; если ошибка сохраняется, отправьте журнал из настроек"
+        DexAccessReason.TLS_HANDSHAKE -> "телефон не завершил защищённое подключение. Повторите подключение; если ошибка сохраняется, отправьте журнал"
+        DexAccessReason.TLS_PROTOCOL -> "сбой защищённого обмена с отладкой. Повторите подключение; если ошибка сохраняется, отправьте журнал из настроек"
         DexAccessReason.AUTHORIZATION_REJECTED -> if (pairing)
             "телефон отклонил сопряжение. Откройте новое окно с кодом и повторите"
             else "телефон отклонил сохранённое сопряжение. Выберите «Сопрячь заново» и введите новый код; удалять данные приложения не нужно"
@@ -67,7 +66,6 @@ internal object DexAccessDiagnostics {
         DexAccessReason.IO_FAILURE -> "ошибка обмена с телефоном. Сохраните журнал с этапом сбоя"
         DexAccessReason.LOCAL_ADB_CONFIGURATION -> "не удалось включить восстановление без Wi-Fi. Требуется собственное сопряжение ${DesktopTransport.shortName} и обычная конфигурация отладки; существующая настройка другого приложения не заменяется. Отправьте журнал или выключите эту опцию и повторите активацию"
         DexAccessReason.LOCAL_ADB_RESTORE_REQUIRED -> "обычный режим отладки не подтверждён. Включите Wi-Fi и выберите «Активация → Исправить настройку активации». Если отладка недоступна, выполните на компьютере adb usb"
-        DexAccessReason.USB_DEBUGGING_DISABLED -> DesktopUsbDebugging.MISSING
         DexAccessReason.INTERNAL -> "внутренняя ошибка подготовки подключения. Сохраните журнал"
         }
     }

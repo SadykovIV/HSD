@@ -1173,6 +1173,36 @@ class AaBridgeAudioTest {
     }
 
     @Test
+    fun capturedCallBoundaryDropsQueuedMediaAndReinitializesWithoutPlayerCommands() {
+        val peer = FakePeer().also { core.peer = it }
+        core.onCarlifeStart()
+        core.onAudioData(AapMessages.CH_AUDIO_MEDIA, pcm(100), 1)
+        val keys = peer.keys.toList()
+        core.onCapturedAudioPause()
+        core.onCapturedAudioPause()
+        core.onCapturedAudioResume()
+        core.onAudioData(AapMessages.CH_AUDIO_MEDIA, pcm(100), 2)
+        assertEquals(listOf(0x30001, 0x30006, 0x30003, 0x30001, 0x30006), link.audio.map { it.type })
+        assertEquals(listOf(3 to 1, 3 to 0, 3 to 1), link.modules.toList())
+        assertEquals(2, link.mediaDrops)
+        assertEquals(keys, peer.keys.toList())
+    }
+
+    @Test
+    fun endOfCallDoesNotUndoAnUnrelatedHeadUnitSourcePause() {
+        core.onCarlifeStart()
+        core.onAudioData(AapMessages.CH_AUDIO_MEDIA, pcm(100), 1)
+        core.onCarlifeMusicControl(0)
+        core.onCapturedAudioPause()
+        core.onCapturedAudioResume()
+        core.onAudioData(AapMessages.CH_AUDIO_MEDIA, pcm(100), 2)
+        assertEquals(listOf(0x30001, 0x30006, 0x30003), link.audio.map { it.type })
+        core.onMediaStatus(AaMediaStatus(2, "fixture", 0, null, null, null))
+        core.onAudioData(AapMessages.CH_AUDIO_MEDIA, pcm(100), 3)
+        assertEquals(listOf(0x30001, 0x30006), link.audio.takeLast(2).map { it.type })
+    }
+
+    @Test
     fun aaSessionEndStopsOpenStreams() {
         core.onCarlifeStart()
         core.onAudioData(AapMessages.CH_AUDIO_MEDIA, pcm(100), 1)
@@ -1182,25 +1212,27 @@ class AaBridgeAudioTest {
     }
 
     @Test
-    fun carlifeStartAfterPauseResetsInit() {
+    fun videoPauseAndResumePreserveMusicWithoutAnotherInit() {
         core.onCarlifeStart()
         core.onAudioData(AapMessages.CH_AUDIO_MEDIA, pcm(100), 1)
         core.onCarlifePause()
-        core.onCarlifeStart()
         core.onAudioData(AapMessages.CH_AUDIO_MEDIA, pcm(100), 2)
-        assertEquals(listOf(0x30001, 0x30006, 0x30001, 0x30006), link.audio.map { it.type })
+        core.onCarlifeStart()
+        core.onAudioData(AapMessages.CH_AUDIO_MEDIA, pcm(100), 3)
+        assertEquals(listOf(0x30001, 0x30006, 0x30006, 0x30006), link.audio.map { it.type })
+        assertEquals(listOf(3 to 1), link.modules.toList())
     }
 
     @Test
-    fun carlifeStartAfterPauseFlushesPendingTtsStop() {
-        // h482: подсказка кончилась на экране ГУ, START пришёл раньше 1500 мс - TTS_STOP терялся, музыка глушилась
+    fun videoResumeKeepsPendingTtsStopUntilItsOwnDeadline() {
+        // Returning to video must neither lose the speech STOP nor truncate its existing tail.
         core.onCarlifeStart()
         core.onCarlifePause()
         core.onAudioData(AapMessages.CH_AUDIO_SPEECH, pcm(100), 1)
         core.onAudioStop(AapMessages.CH_AUDIO_SPEECH)
         timers.advance(800)
         core.onCarlifeStart()
-        assertEquals(4 to 0x40002, link.audio.last().let { it.chan to it.type })
+        assertEquals(0, link.audio.count { it.type == 0x40002 })
         timers.advance(1500)
         assertEquals(1, link.audio.count { it.type == 0x40002 })
     }

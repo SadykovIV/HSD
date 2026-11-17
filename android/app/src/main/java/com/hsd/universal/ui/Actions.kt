@@ -284,7 +284,7 @@ object Actions {
 
     @Synchronized fun stopBridge(ctx: Context, userInitiated: Boolean = true) {
         if (userInitiated) {
-            com.hsd.universal.dex.DesktopMusicPlayback.cancel("explicit Stop")
+            com.hsd.universal.dex.DesktopMusicPlayback.stop("explicit Stop")
             observeUsbConnection(ctx)
             autoConnect.stop()
             detachedIdle.explicitConnect() // Keep explicit Stop distinct from passive detached idle.

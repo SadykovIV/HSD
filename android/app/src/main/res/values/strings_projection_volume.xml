@@ -1,0 +1,8 @@
+<resources>
+    <string name="projection_music_volume">Music volume</string>
+    <string name="projection_navigation_volume">Navigation and spoken guidance</string>
+    <string name="projection_volume_value">%1$s: %2$d%%</string>
+    <string name="projection_volume_help">Changes apply immediately to audio sent by HSD over Android Auto, CarLife and CarPlay. Direct Bluetooth audio uses the phone and head unit volume controls.</string>
+    <string name="projection_navigation_apps">Additional navigation audio apps</string>
+    <string name="projection_navigation_apps_help">Navigation audio is recognized automatically. If an app sends directions as music, select it here: its media audio will use the guidance volume after reconnecting. Other apps remain at the music volume.</string>
+</resources>

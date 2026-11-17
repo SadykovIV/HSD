@@ -112,6 +112,7 @@ internal class CarPlayProjection(
     }
 
     override fun audioRate() = air?.audio?.rate
+    override fun audioOutputAvailable() = !closing.get() && !first.get() && air?.audio != null
 
     override fun freshVideo() = !closing.get() && delivery.isFlowing(SystemClock.elapsedRealtime())
 
@@ -174,7 +175,13 @@ internal class CarPlayProjection(
         desktop?.setPhoneScreenOff(off)
     }
 
-    private fun linkEnded(error: Exception) = end("CarPlay · " + (error.message ?: error.javaClass.simpleName), error.carPlayLinkInterrupted())
+    private fun linkEnded(error: Exception) {
+        if (!closing.get()) {
+            AppLog.e("CarPlay channel failed", error)
+            AppLog.detail("CarPlay failure origin: " + error.stackTrace.take(8).joinToString(" ← "))
+        }
+        end("CarPlay · " + (error.message ?: error.javaClass.simpleName), error.carPlayLinkInterrupted())
+    }
     override fun stop(message: String) = end(message, false)
 
     private fun end(message: String, interrupted: Boolean) {

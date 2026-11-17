@@ -37,12 +37,12 @@ class Receiver:
         payload = wire.protobuf(**values)
         self.connection.sendall(wire.Packet(message >> 16, message, payload).encode())
 
-    def next(self, predicate):
-        deadline = time.monotonic() + 10
+    def next(self, predicate, timeout=10):
+        deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if not self.pending:
                 self.connection.settimeout(max(.01, deadline - time.monotonic()))
-                data = self.connection.recv(65536)
+                data = self.connection.recv(32768)
                 if not data:
                     raise EOFError("HSD closed the test connection")
                 self.pending.extend(self.frames.feed(data))
@@ -73,15 +73,19 @@ class Receiver:
 
 
 def gesture_audio(receiver):
+    # The Android fixture bounds physical write completion to 4 MB/s. Large pictures
+    # periodically exceed that rate. Verify bounded arrival jitter, not just packet count.
     receiver.send(wire.VIDEO_INIT, f1=1280, f2=720, f3=25, f4=2)
     receiver.send(wire.VIDEO_START)
     samples = []
+    arrivals = []
     video_frames = 0
 
     def observe(packet):
         nonlocal video_frames
         if packet.message == MEDIA_DATA:
             samples.append(int.from_bytes(packet.payload[:2], "little"))
+            arrivals.append(time.monotonic())
         if packet.message == wire.VIDEO_DATA:
             video_frames += 1
         return bool(samples)
@@ -89,10 +93,10 @@ def gesture_audio(receiver):
     receiver.next(observe)
     def last_sample(packet):
         observe(packet)
-        return samples[-1] == 399
+        return samples[-1] == 1999
 
     with ThreadPoolExecutor(max_workers=1) as worker:
-        drained = worker.submit(receiver.next, last_sample)
+        drained = worker.submit(receiver.next, last_sample, 30)
         receiver.touch(0, 300)
         receiver.touch(0, 300)  # A physical Honda reports one contact twice before its first MOVE.
         for i in range(120):
@@ -108,10 +112,21 @@ def gesture_audio(receiver):
                 time.sleep(.006)
             receiver.touch(262, 300, 800)
         receiver.touch(1, 300)
-        drained.result(timeout=8)
-    assert samples == list(range(400)), "Missing, repeated or reordered 10 ms audio samples"
+        receiver.send(wire.VIDEO_PAUSE)
+        time.sleep(.4)
+        receiver.send(wire.VIDEO_START)
+        drained.result(timeout=25)
+    assert samples == list(range(2000)), (f"Missing, repeated or reordered 10 ms PCM: count={len(samples)}, "
+        f"first mismatches={[(i,value) for i,value in enumerate(samples) if i!=value][:12]}, "
+        f"missing={sorted(set(range(2000))-set(samples))[:20]}")
     assert video_frames >= 85, video_frames
-    print(f"Received 400 consecutive PCM packets and {video_frames} video frames")
+    lateness = max(at - arrivals[0] - i * .01 for i, at in enumerate(arrivals))
+    gap = max(b-a for a,b in zip(arrivals,arrivals[1:]))
+    assert lateness < .150, f"A 150 ms receiver buffer underflowed: {lateness:.3f}s lateness"
+    assert gap < .150, f"PCM arrival gap {gap:.3f}s"
+    print(f"Received 2000 consecutive PCM packets and {video_frames} video frames; "
+          f"max PCM lateness={lateness*1000:.1f} ms, arrival gap={gap*1000:.1f} ms; "
+          "4 MB/s bulk writes, 240 KB video bursts, gestures and camera transition")
 
 
 def camera_hud(receiver):
@@ -260,7 +275,7 @@ def recover_picture(receiver, reason):
     raise AssertionError(f"{reason}: could not initialize a new decoder after receiving {keys} IDR(s)")
 
 
-def run(adb, protocol, check):
+def run(adb, protocol, check, arguments=()):
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         listener.listen(1)
@@ -270,15 +285,26 @@ def run(adb, protocol, check):
         subprocess.run([*adb, "reverse", address, address], check=True, capture_output=True)
         try:
             command = [*adb, "shell", "am", "instrument", "--no-hidden-api-checks", "-w", "-r", "-e", "protocol", protocol,
-                       "-e", "fixturePort", port, PACKAGE + ".test/" + PACKAGE + ".DriveDeckAapProbe"]
+                       "-e", "fixturePort", port, *arguments, PACKAGE + ".test/" + PACKAGE + ".DriveDeckAapProbe"]
             with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True) as proc:
                 try:
                     connection, _ = listener.accept()
                     with connection:
-                        check(Receiver(connection))
+                        try:
+                            check(Receiver(connection))
+                        except Exception as error:
+                            connection.close()
+                            try:
+                                output = proc.communicate(timeout=20)[0]
+                            except subprocess.TimeoutExpired:
+                                output = "Instrumentation did not finish after receiver failure"
+                            raise RuntimeError(f"{error}\n{output}") from error
                     output = proc.communicate(timeout=20)[0]
                     if proc.returncode or "INSTRUMENTATION_RESULT: result=PASS" not in output:
                         raise RuntimeError(output)
+                    for line in output.splitlines():
+                        if line.startswith("INSTRUMENTATION_RESULT: gesture="):
+                            print("Android sender: " + line.split("gesture=", 1)[1], flush=True)
                 finally:
                     if proc.poll() is None:
                         proc.terminate()
@@ -293,10 +319,11 @@ if __name__ == "__main__":
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--screen-off", action="store_true", help="Check decoded desktop frames while an unlocked emulator sleeps (requires ffmpeg)")
     mode.add_argument("--decoder-restart", action="store_true", help="Reset the DriveDeck receiver decoder while the phone display is off (requires ffmpeg)")
+    parser.add_argument("--no-av-sync", action="store_true", help="Exercise continuous PCM with additional A/V alignment disabled")
     args = parser.parse_args()
     target = [args.adb, "-s", args.serial]
     if args.screen_off or args.decoder_restart:
         check_screen_off(target, args.decoder_restart)
     else:
-        run(target, "carlife-gesture-audio", gesture_audio)
+        run(target, "carlife-gesture-audio", gesture_audio, ["-e", "avSync", "false"] if args.no_av_sync else ())
         run(target, "carlife-hud", camera_hud)

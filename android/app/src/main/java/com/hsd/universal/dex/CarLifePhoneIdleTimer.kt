@@ -67,7 +67,7 @@ internal class CarLifePhoneIdleTimer(
         nextProbe = 0
     }
 
-    private fun eligible(): Boolean = prefs.phoneIdleMode == PhoneIdleMode.PANEL && prefs.useDelegated &&
+    private fun eligible(): Boolean = !prefs.useSystemScreenTimeout && prefs.phoneIdleMode == PhoneIdleMode.PANEL && prefs.useDelegated &&
         prefs.desktopPanelControl && DelegatedDesktopAccess.isReady(context) && DelegatedPanelAccess.hasPermission(context) &&
         sessionReady() && power.isInteractive && !keyguard.isKeyguardLocked && !keyguard.isDeviceLocked &&
         timeout in 1..Int.MAX_VALUE.toLong()
@@ -91,7 +91,7 @@ internal class CarLifePhoneIdleTimer(
             // The request is asynchronous: "busy" can last several seconds before the
             // panel lease acquires its own wake lock. Keep the unlocked USB session awake
             // throughout the handoff, recovery and clock retries.
-            guard.acquire(5_000)
+            if (clockFailures == 0) guard.acquire(5_000)
             if (DexState.phoneScreenOff || DexState.phoneScreenBusy) {
                 armedAt = now
                 nextProbe = now + timeout
@@ -119,6 +119,9 @@ internal class CarLifePhoneIdleTimer(
                 if (selectedTimeout != prefs.phoneIdleTimeout) { refresh(); return@post }
                 val now = SystemClock.uptimeMillis()
                 if (activity == null) {
+                    // A missing physical-activity clock must not turn a panel timer into an
+                    // indefinite screen wake lock. Android resumes its own idle/keyguard policy.
+                    releaseGuard()
                     if (clockFailures == 0) AppLog.i("DESKTOP PANEL TIMER: activity clock unavailable; will retry", false)
                     nextProbe = now + minOf(30_000L, 2_000L shl clockFailures.coerceAtMost(4))
                     clockFailures = (clockFailures + 1).coerceAtMost(4)

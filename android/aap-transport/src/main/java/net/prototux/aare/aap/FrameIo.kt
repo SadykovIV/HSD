@@ -1,7 +1,7 @@
 package net.prototux.aare.aap
 
 import java.io.ByteArrayOutputStream
-import java.io.DataInputStream
+import java.io.EOFException
 import java.io.InputStream
 import java.io.OutputStream
 
@@ -12,7 +12,8 @@ import java.io.OutputStream
  * channel. Encrypted payloads are decrypted frame by frame, in arrival order, as TLS requires.
  */
 class FrameReader(input: InputStream, private val cryptor: () -> Cryptor?) {
-    private val input = DataInputStream(input.buffered(64 * 1024))
+    private val input = input.buffered(64 * 1024)
+    private val header = ByteArray(4)
     private class Partial(val declaredTotal: Int, val buf: ByteArrayOutputStream, val encrypted: Boolean)
 
     private val partial = HashMap<Int, Partial>()
@@ -21,6 +22,32 @@ class FrameReader(input: InputStream, private val cryptor: () -> Cryptor?) {
     private var buffered = 0L
     private var payload = ByteArray(Frame.MAX_PAYLOAD + 1024)
 
+    /** Only enabled for negotiation: normal media traffic creates no progress snapshots. */
+    var trackProgress = false
+    @Volatile var progress = ReadProgress()
+        private set
+
+    data class ReadProgress(
+        val bytes: Long = 0, val frames: Int = 0, val stage: String = "idle",
+        val received: Int = 0, val expected: Int = 0,
+        val channel: Int? = null, val flags: Int? = null, val payloadSize: Int? = null,
+        val tlsType: Int? = null,
+    ) {
+        override fun toString() = "rxBytes=$bytes frames=$frames reading=$stage:$received/$expected " +
+            "lastHeader=$channel/${flags?.let { "0x${it.toString(16)}" }}/$payloadSize tlsType=$tlsType"
+    }
+
+    private fun readFully(bytes: ByteArray, length: Int, stage: String) {
+        var received = 0
+        if (trackProgress) progress = progress.copy(stage = stage, received = 0, expected = length)
+        while (received < length) {
+            val count = input.read(bytes, received, length - received)
+            if (count < 0) throw EOFException("AAP ended while reading $stage ($received/$length)")
+            received += count
+            if (trackProgress) progress = progress.copy(bytes = progress.bytes + count, received = received)
+        }
+    }
+
     @Volatile var oldUsbFrames = 0
         private set
     private var oldUsbBytes = 0
@@ -28,12 +55,20 @@ class FrameReader(input: InputStream, private val cryptor: () -> Cryptor?) {
     /** Blocks until a complete message is available. Throws on end of stream or a framing error. */
     fun read(awaitUsbVersion: Boolean = false): AapMessage {
         while (true) {
-            val channel = input.readUnsignedByte()
-            val flags = input.readUnsignedByte()
-            val size = input.readUnsignedShort()
-            val declaredTotal = if (Frame.hasTotalSize(flags)) input.readInt() else 0
+            readFully(header, 4, "header")
+            val channel = header[0].toInt() and 0xff
+            val flags = header[1].toInt() and 0xff
+            val size = ((header[2].toInt() and 0xff) shl 8) or (header[3].toInt() and 0xff)
+            if (trackProgress) progress = progress.copy(channel = channel, flags = flags, payloadSize = size, tlsType = null)
+            val declaredTotal = if (Frame.hasTotalSize(flags)) {
+                readFully(header, 4, "total-size")
+                ((header[0].toInt() and 0xff) shl 24) or ((header[1].toInt() and 0xff) shl 16) or
+                    ((header[2].toInt() and 0xff) shl 8) or (header[3].toInt() and 0xff)
+            } else 0
             if (payload.size < size) payload = ByteArray(size)
-            input.readFully(payload, 0, size)
+            readFully(payload, size, "payload")
+            if (trackProgress) progress = progress.copy(frames = progress.frames + 1, stage = "decode",
+                tlsType = if (Frame.isEncrypted(flags) && size > 0) payload[0].toInt() and 0xff else null)
 
             val first = Frame.isFirst(flags)
             // On a reopened USB pipe either ciphertext or the tail of an old fragmented message

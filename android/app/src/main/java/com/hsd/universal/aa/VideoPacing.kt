@@ -105,3 +105,10 @@ class IdrThrottle(private val minIntervalMs: Long = MIN_INTERVAL_MS) {
         private const val NEVER = Long.MIN_VALUE
     }
 }
+
+/** Retry a lost native reference promptly after the transport drains, not while it is blocked. */
+internal class DesktopIdrRecovery {
+    private val requests = IdrThrottle(250)
+    fun tryRequest(nowMs: Long, backlogMs: Long): Boolean =
+        backlogMs < 100 && requests.tryRequest(nowMs)
+}

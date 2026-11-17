@@ -1,0 +1,148 @@
+{
+  "version": "0.8.2",
+  "versionCode": 104,
+  "basedOn": "0.8.2-rc8",
+  "productionChangesSinceRc8": [
+    "versionName",
+    "versionCode"
+  ],
+  "assets": [
+    {
+      "name": "HSD-0.8.2.apk",
+      "bytes": 25200860,
+      "sha256": "5fb5ca7c73ddc429f16343d85af25277579faec163f7013a907a97049f123244"
+    },
+    {
+      "name": "DriveDeck-HSD-0.7.0-code357.apk",
+      "bytes": 815876,
+      "sha256": "9c8d4bc10d229e348bf925542b71e840d618ac48aaab29453aa769ad5a48e638"
+    }
+  ],
+  "units": {
+    "app": {
+      "tests": 1539,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "aap-transport": {
+      "tests": 41,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "lint": {
+    "errors": 0,
+    "warnings": 156
+  },
+  "finalApkEmulators": {
+    "api36": {
+      "upgrade": {
+        "pass": true,
+        "from": "HSD-0.8.1.apk"
+      },
+      "projection-controls": {
+        "pass": true,
+        "seconds": 5.31
+      },
+      "standalone-identity": {
+        "pass": true,
+        "seconds": 0.88
+      },
+      "projection-volumes": {
+        "pass": true,
+        "seconds": 10.14
+      },
+      "aa-slow-writer": {
+        "pass": true,
+        "seconds": 20.67,
+        "decode": true,
+        "frames": 179
+      },
+      "carplay-media": {
+        "pass": true,
+        "seconds": 32.37
+      }
+    },
+    "api37": {
+      "upgrade": {
+        "pass": true,
+        "from": "HSD-0.8.2-rc8.apk"
+      },
+      "projection-controls": {
+        "pass": true,
+        "seconds": 8.74
+      },
+      "standalone-identity": {
+        "pass": true,
+        "seconds": 1.6
+      },
+      "projection-volumes": {
+        "pass": true,
+        "seconds": 14.4
+      },
+      "aa-slow-writer": {
+        "pass": true,
+        "seconds": 31.33,
+        "decode": true,
+        "frames": 245
+      },
+      "carplay-media": {
+        "pass": true,
+        "seconds": 31.57
+      },
+      "aa-usb-debug-off": {
+        "pass": true,
+        "seconds": 86.19,
+        "decode": true,
+        "frames": 208
+      }
+    }
+  },
+  "finalApkScenariosPassed": 13,
+  "priorRc8Matrix": [
+    {
+      "android": "10",
+      "passed": 3,
+      "failed": 2
+    },
+    {
+      "android": "11",
+      "passed": 6,
+      "failed": 0
+    },
+    {
+      "android": "12",
+      "passed": 6,
+      "failed": 0
+    },
+    {
+      "android": "13",
+      "passed": 10,
+      "failed": 0
+    },
+    {
+      "android": "14",
+      "passed": 10,
+      "failed": 0
+    },
+    {
+      "android": "15",
+      "passed": 10,
+      "failed": 0
+    },
+    {
+      "android": "16",
+      "passed": 12,
+      "failed": 0
+    },
+    {
+      "android": "17",
+      "passed": 14,
+      "failed": 0
+    }
+  ],
+  "priorMatrixVersion": "0.8.2-rc8 (103)",
+  "initialHarnessIssue": "The upgrade fixture attempted run-as on the non-debuggable official companion; corrected emulator setup without changing either APK."
+}

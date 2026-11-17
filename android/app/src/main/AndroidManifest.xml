@@ -12,6 +12,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <!-- Local wireless ADB pairing/connect and the CarLife transport. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
@@ -106,6 +107,8 @@
         android:enableOnBackInvokedCallback="false"
         android:theme="@style/Theme.HSD.Dex">
 
+        <service android:name=".AaIdentityUpdateJob" android:permission="android.permission.BIND_JOB_SERVICE" android:exported="true" />
+
         <activity android:name=".dex.PhonePanelWakeActivity" android:exported="false"
             android:excludeFromRecents="true" android:taskAffinity="${applicationId}.phonepanel"
             android:resizeableActivity="false" android:hardwareAccelerated="true"
@@ -121,11 +124,15 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+        </activity>
+
+        <activity android:name=".dex.UsbAttachActivity" android:exported="true"
+            android:theme="@android:style/Theme.NoDisplay" android:excludeFromRecents="true"
+            android:noHistory="true" android:taskAffinity="">
             <intent-filter>
                 <action android:name="android.hardware.usb.action.USB_ACCESSORY_ATTACHED" />
             </intent-filter>
-            <meta-data
-                android:name="android.hardware.usb.action.USB_ACCESSORY_ATTACHED"
+            <meta-data android:name="android.hardware.usb.action.USB_ACCESSORY_ATTACHED"
                 android:resource="@xml/accessory_filter" />
         </activity>
 
@@ -138,7 +145,7 @@
             <meta-data android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
                 android:resource="@xml/usb_debug_device" />
         </activity>
-        <activity-alias android:name=".UsbActivity" android:targetActivity=".dex.DexSetupActivity" android:exported="true" />
+        <activity-alias android:name=".UsbActivity" android:targetActivity=".dex.UsbAttachActivity" android:exported="true" />
 
         <activity android:name=".MainActivity" android:exported="false" />
         <activity android:name=".dex.DesktopWizardActivationActivity" android:exported="false" android:resizeableActivity="true"
@@ -238,5 +245,7 @@
             android:name=".dex.DelegatedDesktopService"
             android:exported="false"
             android:process=":delegated" />
+        <service android:name=".dex.VdmPoolTokensService"
+            android:exported="false" android:process=":vdm_tokens" />
     </application>
 </manifest>

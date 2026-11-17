@@ -59,10 +59,10 @@ class DriveDeckFullscreenActivity : Activity() {
         parentProof = EmbeddedSessionRegistry.captureParent(parentId)
         if (parentProof == null || config() == null) { finish(); return }
         setShowWhenLocked(true)
-        if (Build.VERSION.SDK_INT == Build.VERSION_CODES.TIRAMISU) {
-            // A touchable host can otherwise take focus from the Android 13 child between DOWN and UP.
-            window.addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
-        }
+        // This window only renders the child and handles touch controls. The child owns
+        // key/IME focus; focusing this overlay can cancel a forwarded Back or gesture.
+        // Hardware Back is routed through FullscreenHardwareBack independently of focus.
+        window.addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         val root = FrameLayout(this).apply {
             layoutDirection = View.LAYOUT_DIRECTION_LTR

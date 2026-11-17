@@ -92,6 +92,8 @@ class AaTranscoder(
     private val winIn = AtomicLong()
     private val winDecoded = AtomicLong()
     private val winOut = AtomicLong()
+    private val peakFrameLatencyUs = AtomicLong()
+    override fun takeFrameLatencyMs() = peakFrameLatencyUs.getAndSet(0) / 1000.0
     private val winDrop = AtomicLong()
     private val winDecLatUs = AtomicLong()
     private val winEncLatUs = AtomicLong()
@@ -144,12 +146,13 @@ class AaTranscoder(
                     requested.setInteger(MediaFormat.KEY_COLOR_RANGE, MediaFormat.COLOR_RANGE_LIMITED)
                 }
                 c.configure(requested, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+                val pacing = if (directSurface) "paced-GL" else "repeat100ms"
                 encoderNote = when (level) {
-                    BAIDU_WITH_LEVEL -> "baidu: baseline+level256+VBR+repeat100ms"
-                    BAIDU_NO_LEVEL -> "baidu: baseline+VBR+repeat100ms, без level"
-                    0 -> "baseline+CBR+noB+repeat100ms+realtime"
-                    1 -> "baseline+CBR+noB+repeat100ms"
-                    else -> "минимальный формат+repeat100ms"
+                    BAIDU_WITH_LEVEL -> "baidu: baseline+level256+VBR+$pacing"
+                    BAIDU_NO_LEVEL -> "baidu: baseline+VBR+$pacing, без level"
+                    0 -> "baseline+CBR+noB+$pacing+realtime"
+                    1 -> "baseline+CBR+noB+$pacing"
+                    else -> "минимальный формат+$pacing"
                 }
                 configured = true
                 break
@@ -273,7 +276,9 @@ class AaTranscoder(
             f.setInteger(MediaFormat.KEY_LATENCY, 0)
         // как у Baidu (Recorder.java:1364, MediaFormatUtils.java:48): на статичном экране кадр повторяется раз в 100 мс
         val repeat = Regex("""repeat=(\d+)""").find(tuning)?.groupValues?.get(1)?.toLong() ?: REPEAT_AFTER_US
-        f.setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, repeat)
+        // Desktop GL already redraws idle content through the same frame-rate gate.
+        // Codec-side repetition would add unpaced frames between those GL submissions.
+        if (!directSurface) f.setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, repeat)
         if (level == BAIDU_WITH_LEVEL || level == BAIDU_NO_LEVEL) {
             f.setInteger(MediaFormat.KEY_PROFILE, MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline)
             f.setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_VBR)
@@ -567,25 +572,27 @@ class AaTranscoder(
                     })
                 }
                 if (idx >= 0) {
-                    val buf = c.getOutputBuffer(idx)
-                    if (buf != null && info.size > 0) {
-                        val arr = ByteArray(info.size)
-                        buf.position(info.offset)
-                        buf.limit(info.offset + info.size)
-                        buf.get(arr)
-                        val data = units.frame(arr, info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0)
-                        if (data != null) {
-                            val lat = System.nanoTime() - info.presentationTimeUs * 1000
-                            if (lat in 0..2_000_000_000L) {
-                                winEncLatUs.addAndGet(lat / 1000)
-                                winEncLatN.incrementAndGet()
-                            }
-                            winOut.incrementAndGet()
-                            totalOut.incrementAndGet()
-                            out.onEncoderFrameAt(data, info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0, info.presentationTimeUs)
+                    // Copy once, then return the codec's buffer before parsing or delivering
+                    // data. Protocol callbacks must never retain scarce encoder output buffers.
+                    val arr = try {
+                        c.getOutputBuffer(idx)?.takeIf { info.size > 0 }?.let { buf ->
+                            buf.position(info.offset)
+                            buf.limit(info.offset + info.size)
+                            ByteArray(info.size).also(buf::get)
                         }
+                    } finally { c.releaseOutputBuffer(idx, false) }
+                    val data = arr?.let { units.frame(it, info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) }
+                    if (data != null) {
+                        val lat = System.nanoTime() - info.presentationTimeUs * 1000
+                        if (lat in 0..30_000_000_000L) {
+                            winEncLatUs.addAndGet(lat / 1000)
+                            winEncLatN.incrementAndGet()
+                            peakFrameLatencyUs.accumulateAndGet(lat / 1000, ::maxOf)
+                        }
+                        winOut.incrementAndGet()
+                        totalOut.incrementAndGet()
+                        out.onEncoderFrameAt(data, info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0, info.presentationTimeUs)
                     }
-                    c.releaseOutputBuffer(idx, false)
                 }
             }
         } catch (e: Exception) {

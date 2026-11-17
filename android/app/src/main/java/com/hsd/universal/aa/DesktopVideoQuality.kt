@@ -9,16 +9,16 @@ object DesktopVideoQuality {
 
     /** Desktop AUTO accepts an actual 60 Hz HU request; legacy Android Auto keeps its own policy. */
     fun chooseFps(setting: FpsSetting, requested: Int, huMaxFps: Int? = null): Int {
-        val selected = setting.fixed ?: requested.takeIf { it in 1..MAX_FPS } ?: 30
+        val selected = minOf(setting.fixed ?: MAX_FPS, requested.takeIf { it in 1..MAX_FPS } ?: 30)
         return huMaxFps?.let { minOf(selected, it) } ?: selected
     }
 
     fun frameRateChangeAllowed(fps: Int): Boolean = fps in 3..MAX_FPS
 
     /** A receiver's explicit low-rate request is a ceiling, not AA's minimum keepalive rate. */
-    fun frameRateChangeTarget(requested: Int, huMaxFps: Int? = null): Int {
+    fun frameRateChangeTarget(requested: Int, huMaxFps: Int? = null, setting: FpsSetting = FpsSetting.AUTO): Int {
         require(frameRateChangeAllowed(requested))
-        return huMaxFps?.let { minOf(requested, it) } ?: requested
+        return chooseFps(setting, requested, huMaxFps)
     }
 
     /** A receiver-specific encoder target is another upper bound, never a user-setting override. */

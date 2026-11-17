@@ -201,6 +201,29 @@ def configure_tile(body):
 
 renderer.write_text(method(renderer.read_text(), "public static y(Lru/drivedeck/launcher/E2;IILjava/lang/String;)Z", configure_tile))
 
+# Returning from full screen can leave any selected app's tile empty. The upstream
+# resume ticket, geometry ACK and live task query already guard the launch. Apply
+# that path to every app, and preserve any task still present (including external
+# activities), rather than treating two package names as the restoration policy.
+restore = launcher / "r2.1.smali"
+restore.write_text(once(restore.read_text(), """    sget-object v3, Lc/a;->a:Ljava/util/Set;
+
+    invoke-interface {v3, v2}, Ljava/util/Set;->contains(Ljava/lang/Object;)Z
+
+    move-result v3
+
+    if-eqz v3, :cond_1
+
+""", ""))
+restore_launch = launcher / "o2.1.smali"
+restore_launch.write_text(once(restore_launch.read_text(), """    if-ltz v1, :cond_7
+
+    const/4 v4, 0x2
+
+    if-eq v1, v4, :cond_7""", """    invoke-static {v1}, Lcom/hsd/universal/shared/EmbeddedTaskRestore;->shouldLaunch(I)Z
+    move-result v1
+    if-eqz v1, :cond_7"""))
+
 bind = launcher / "x1.1.smali"
 source = bind.read_text()
 start = source.index('    const-string v3, "com.headswap.desk"')

@@ -46,6 +46,10 @@ class DexPrefs @JvmOverloads constructor(private val context: Context, private v
                 ?: prefs.contains("phone_idle_timeout"))
         set(value) { prefs.edit().putBoolean("phone_idle_timer_enabled", value).apply() }
     internal val phoneIdleMode: PhoneIdleMode get() = if (phoneTimerEnabled) phoneScreenMode else PhoneIdleMode.DISABLED
+    /** Normal Android sleep/keyguard is the default. Panel blanking remains an explicit action. */
+    var useSystemScreenTimeout: Boolean
+        get() = prefs.getBoolean("system_screen_timeout", true)
+        set(value) { prefs.edit().putBoolean("system_screen_timeout", value).apply() }
     internal var phoneIdleTimeout: PhoneIdleTimeout
         get() = PhoneIdleTimeout.restore(prefs.getString("phone_idle_timeout", null))
         set(value) { prefs.edit().putString("phone_idle_timeout", value.name).apply() }
@@ -177,9 +181,22 @@ class DexPrefs @JvmOverloads constructor(private val context: Context, private v
         set(value) { prefs.edit().putBoolean("compact_map_symbols", value).apply() }
     /** Desktop frame rate is stored independently of the Android Auto preference. */
     var desktopFps: FpsSetting
-        get() = prefs.getString("desktop_fps", null).let { name -> FpsSetting.entries.firstOrNull { it.name == name } ?: FpsSetting.FPS15 }
+        get() = prefs.getString("desktop_fps", null).let { name -> FpsSetting.entries.firstOrNull { it.name == name } ?: FpsSetting.AUTO }
         set(value) { prefs.edit().putString("desktop_fps", value.name).apply() }
-    /** A transport budget, not a forced frame rate. Existing FPS values remain readable for migration. */
+    /** Additional sender-side A/V alignment; protocol timestamps are always retained. */
+    var synchronizeAudioVideo: Boolean
+        get() = prefs.getBoolean("synchronize_audio_video", true)
+        set(value) { prefs.edit().putBoolean("synchronize_audio_video", value).apply() }
+    var musicVolume: Int
+        get() = prefs.getInt("music_volume", 100).coerceIn(0, 100)
+        set(value) { require(value in 0..100); prefs.edit().putInt("music_volume", value).apply() }
+    var navigationVolume: Int
+        get() = prefs.getInt("navigation_volume", 100).coerceIn(0, 100)
+        set(value) { require(value in 0..100); prefs.edit().putInt("navigation_volume", value).apply() }
+    var navigationAudioApps: Set<String>
+        get() = prefs.getStringSet("navigation_audio_apps", emptySet()).orEmpty().toSet()
+        set(value) { prefs.edit().putStringSet("navigation_audio_apps", value.toSet()).apply() }
+    /** A transport budget, independent of the frame-rate ceiling. */
     var desktopBitrateMbps: Int
         get() = prefs.getInt("desktop_bitrate_mbps", 8).coerceIn(1, 20)
         set(value) { require(value in 1..20); prefs.edit().putInt("desktop_bitrate_mbps", value).apply() }

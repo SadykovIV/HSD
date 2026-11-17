@@ -69,6 +69,7 @@ class SessionConfig(
     val desktopBitrateBps: Int = DesktopVideoQuality.BITRATE_CEILING_BPS,
     val receiverAudio: com.hsd.universal.link.ReceiverAudioCalibration? = null,
     val desktopAvc: ((Int, Int, Int) -> DesktopEncoderSupport.Encoding?)? = null,
+    val synchronizeAudioVideo: Boolean = true,
 )
 
 /**
@@ -177,7 +178,7 @@ class CarLifeSession(
     private val desktopFrameRate = com.hsd.universal.aa.DesktopFrameRatePolicy()
     private val mediaClock = com.hsd.universal.aa.DesktopMediaClock(System.currentTimeMillis(), System.nanoTime() / 1000)
     private val desktopAv = com.hsd.universal.link.DesktopAvTimeline({ System.nanoTime() / 1000 },
-        { cfg.receiverAudio?.milliseconds() ?: 0 }, transport::sendTimed)
+        { cfg.receiverAudio?.milliseconds() ?: 0 }, cfg.synchronizeAudioVideo, transport::sendTimed)
     private var videoInited = false
     private var source: VideoSource? = null
     @Volatile private var csd: ByteArray? = null
@@ -634,7 +635,7 @@ class CarLifeSession(
             Msg.VIDEO_ENCODER_START -> onVideoStart()
             Msg.VIDEO_ENCODER_PAUSE -> {
                 paused = true
-                desktopAv.reset(false)
+                desktopAv.videoActive(false)
                 desktopVideoDelivery.pause()
                 if (pauseHeartbeatHu) { // первый heartbeat сразу; Desay по USB - как раньше, через 2 с
                     lastVideoTx = 0L
@@ -707,7 +708,7 @@ class CarLifeSession(
             return
         }
         val wanted = if (cfg.desktopVideo != null) fps else maxOf(fps, Handshake.MIN_APPLIED_FPS)
-        val applied = if (cfg.desktopVideo != null) DesktopVideoQuality.frameRateChangeTarget(fps, huMaxFps())
+        val applied = if (cfg.desktopVideo != null) DesktopVideoQuality.frameRateChangeTarget(fps, huMaxFps(), cfg.fpsSetting)
             else Handshake.capFps(wanted, huMaxFps())
         val old = targetFps
         targetFps = applied
@@ -748,7 +749,7 @@ class CarLifeSession(
     }
 
     private fun chooseVideoFps(requested: Int): Int = if (cfg.desktopVideo != null)
-        DesktopVideoQuality.chooseFps(FpsSetting.AUTO, requested, huMaxFps())
+        DesktopVideoQuality.chooseFps(cfg.fpsSetting, requested, huMaxFps())
         else Handshake.chooseFps(cfg.fpsSetting, requested, huMaxFps())
 
     @Synchronized private fun onVideoInit(m: CmdMsg) {
@@ -779,7 +780,7 @@ class CarLifeSession(
         pendingH = h
         pendingFps = fps
         targetFps = if (mobis && cfg.desktopVideo == null) AaBridgeCore.MOBIS_FPS
-            else if (cfg.desktopVideo != null) DesktopVideoQuality.chooseFps(FpsSetting.AUTO, fps, huMaxFps()) else fps
+            else if (cfg.desktopVideo != null) DesktopVideoQuality.chooseFps(cfg.fpsSetting, fps, huMaxFps()) else fps
         desktopFrameRate.reset(targetFps)
         if (mobis) AppLog.i("видео: Mobis CCNC, INIT_DONE fps=$fps, энкодер $targetFps fps, потолок ${AaBridgeCore.MOBIS_BITRATE / 1000} кбит/с VBR")
         videoInited = true
@@ -877,7 +878,7 @@ class CarLifeSession(
 
     /** START: гейт AA сбрасывается, заглушка (если активна) стартует с SPS+PPS+IDR. */
     @Synchronized private fun onVideoStart() {
-        if (!carlifeStarted || paused) desktopAv.reset(true)
+        if (!carlifeStarted || paused) desktopAv.videoActive(true)
         paused = false
         desktopVideoDelivery.start(SystemClock.elapsedRealtime())
         if (pendingW <= 0) {
@@ -1040,11 +1041,13 @@ class CarLifeSession(
 
     /**
      * Видео-очередь переполнена: уже стоящих кадров больше 30 или их байт больше ~500 мс слива (пока слив не измерен - 512 КБ).
+     * Для рабочего стола также ограничиваем фактическое ожидание 150 мс: оценка по байтам не видит остановившийся транспорт.
      * Проверяется до добавления нового кадра: в пустую очередь IDR принимается всегда. Отказ = вызывающий выбрасывает кадр
      * и ждёт IDR (мост: outGotIdr=false; заглушка: csdPending=true), P после потерянного кадра слать нельзя.
      */
     private fun videoOverflow(): Boolean {
-        val over = VideoQueueLimit.overflow(transport.queuedVideoFrames, transport.queuedVideoBytes, transport.drainBytesPerSec)
+        val over = VideoQueueLimit.overflow(transport.queuedVideoFrames, transport.queuedVideoBytes, transport.drainBytesPerSec) ||
+            (cfg.desktopVideo != null && transport.videoQueueAgeMs >= 150)
         if (over) {
             lastOverflowMs = SystemClock.elapsedRealtime()
             overflows++
@@ -1055,7 +1058,7 @@ class CarLifeSession(
     override fun videoStats(): LinkVideoStats {
         val bytes = transport.queuedVideoBytes
         val rate = transport.drainBytesPerSec
-        return LinkVideoStats(rate, maxOf(transport.videoWriteAgeMs, VideoQueueLimit.backlogMs(bytes, rate)), transport.queuedVideoFrames, bytes)
+        return LinkVideoStats(rate, maxOf(transport.videoQueueAgeMs, VideoQueueLimit.backlogMs(bytes, rate)), transport.queuedVideoFrames, bytes)
     }
 
     /**
@@ -1086,16 +1089,17 @@ class CarLifeSession(
             val rate = transport.drainBytesPerSec
             val qf = transport.queuedVideoFrames
             if (qf > maxQueueFrames) maxQueueFrames = qf
-            val real = maxOf(transport.videoWriteAgeMs, VideoQueueLimit.backlogMs(transport.queuedVideoBytes, rate))
+            val real = maxOf(transport.videoQueueAgeMs, VideoQueueLimit.backlogMs(transport.queuedVideoBytes, rate))
             val sinceOverflow = lastOverflowMs.let { if (it == NEVER_MS) -1L else now - it }
             applyHuCeilings()
             val old = bitratePolicy.current
             val backlog = VideoQueueLimit.policyBacklogMs(real, sinceOverflow)
             if (cfg.desktopVideo != null && encodingSurface) {
-                desktopFrameRate.update(now, backlog, thermalThrottle.capFps(targetFps), sinceOverflow in 0..200)
+                val frameAgeMs = bridge.takeFrameLatencyMs()
+                desktopFrameRate.update(now, maxOf(backlog, frameAgeMs), thermalThrottle.capFps(targetFps), sinceOverflow in 0..200)
                     ?.let { fps ->
                         applyEncoderFps()
-                        AppLog.i("DESKTOP VIDEO: dynamic fps=$fps max=$targetFps backlog=${backlog.toInt()}ms", false)
+                        AppLog.i("DESKTOP VIDEO: dynamic fps=$fps max=$targetFps backlog=${backlog.toInt()}ms encoder=${frameAgeMs.toInt()}ms", false)
                     }
             }
             val bps = bitratePolicy.update(now, backlog, rate) ?: return
@@ -1659,7 +1663,7 @@ class CarLifeSession(
         }
         if (now - lastStatsAt >= 5000 && (vFrames > 0 || vBeats > 0)) {
             if (cfg.desktopVideo != null) AppLog.i("DESKTOP AV: videoWriteMs=${transport.videoWriteAgeMs} " +
-                "videoPendingBytes=${transport.queuedVideoBytes} expiredAudio=${transport.audioExpiredPackets} " +
+                "videoQueueAgeMs=${transport.videoQueueAgeMs} videoPendingBytes=${transport.queuedVideoBytes} expiredAudio=${transport.audioExpiredPackets} " +
                 "overflowAudio=${transport.audioOverflowPackets} ${desktopAv.diagnostics()}", false)
             AppLog.i("видео: отправлено кадров=$vFrames (ключевых=$vKeys) байт=$vBytes heartbeat=$vBeats сброшено=$vDropped очередь=${transport.queueSize(Ch.VIDEO)} (+${vFrames - lastStatsFrames} за ${(now - lastStatsAt) / 1000}с)")
             lastStatsAt = now

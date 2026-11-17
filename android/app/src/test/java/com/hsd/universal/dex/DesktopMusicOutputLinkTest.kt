@@ -3,11 +3,11 @@ package com.hsd.universal.dex
 import org.junit.Assert.*
 import org.junit.Test
 
-class DesktopMusicUsbLinkTest {
+class DesktopMusicOutputLinkTest {
     private val service = Any()
     private val first = Any()
     private val retry = Any()
-    private val gate = DesktopMusicUsbLink(8_000)
+    private val gate = DesktopMusicOutputLink(8_000)
 
     @Test fun failedActiveOutputPausesBeforeSamsungDetachAndDoesNotRepeatAfterARetry() {
         gate.attach(service, first, 0)

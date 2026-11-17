@@ -38,8 +38,14 @@ if profile.symbols is None:
     # Native renderer and its typed Binder client are supplied by the author's HeadSwap APK.
     host_sources = [base/'HostedDisplay.java', base/'HSDHost.java', base/'ProjectionSettings.java',
                     base/'shared/com/hsd/universal/shared/ProjectionHost.java',
-                    base/'shared/com/hsd/universal/shared/DesktopRenderPolicy.java']
+                    base/'shared/com/hsd/universal/shared/DesktopRenderPolicy.java',
+                    base/'shared/com/hsd/universal/shared/EmbeddedTaskRestore.java']
     run(javac, '--release', '8', '-classpath', android, '-d', classes, *host_sources)
+    profile_tests=work/'profile-tests'
+    profile_tests.mkdir(exist_ok=True)
+    run(javac, '--release', '8', '-d', profile_tests,
+        base/'shared/com/hsd/universal/shared/EmbeddedTaskRestore.java', base/'tests/EmbeddedTaskRestoreTest.java')
+    run(java, '-cp', profile_tests, 'ru.drivedeck.hsd.EmbeddedTaskRestoreTest')
 else:
     generate_symbols(profile, decoded, generated/'ru/drivedeck/hsd/CompanionSymbols.java')
     host_aidl = base/'aidl'
@@ -48,7 +54,7 @@ else:
     profile_tests.mkdir(exist_ok=True)
     shared_sources=sorted((base/'shared').rglob('*.java'))
     run(javac,'--release','8','-d',profile_tests,*shared_sources,base/'EmbeddedRenderProfile.java',base/'EmbeddedRetryGate.java',base/'EmbeddedSurfaceRelease.java',base/'EmbeddedTouchPacket.java',base/'EmbeddedResumeGate.java',base/'EmbeddedTextureHandoff.java',*sorted((base/'tests').glob('*.java')))
-    for test in ('EmbeddedRenderProfileTest','EmbeddedRetryGateTest','EmbeddedSurfaceReleaseTest','EmbeddedTouchPacketTest','EmbeddedResumeGateTest','EmbeddedTextureHandoffTest','MotionDispatchBufferTest'):
+    for test in ('EmbeddedRenderProfileTest','EmbeddedRetryGateTest','EmbeddedSurfaceReleaseTest','EmbeddedTouchPacketTest','EmbeddedResumeGateTest','EmbeddedTextureHandoffTest','MotionDispatchBufferTest','EmbeddedTaskRestoreTest'):
         run(java,'-cp',profile_tests,'ru.drivedeck.hsd.'+test)
     run(javac,'--release','8','-classpath',android,'-d',classes,*shared_sources,*sorted(base.glob('*.java')),*sorted(generated.rglob('*.java')))
 run(java,'-cp',bt/'lib/d8.jar','com.android.tools.r8.D8','--lib',android,'--min-api','26','--output',dex,*sorted(classes.rglob('*.class')))

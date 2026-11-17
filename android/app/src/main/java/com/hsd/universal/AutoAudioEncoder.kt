@@ -25,6 +25,9 @@ internal class AutoAudioEncoder(private val prefix: Int = 10) : Closeable {
         var pos = offset
         var deadline = System.nanoTime() + 100_000_000L
         while (pos < pcm.size) {
+            // Return output buffers before waiting for input: some codecs share a bounded pool.
+            // Progress at either end resets the stall deadline; encoding/network work is not a stall.
+            if (drain(codec, hz, adts, write)) deadline = System.nanoTime() + 100_000_000L
             val index = codec.dequeueInputBuffer(2000)
             if (index >= 0) {
                 val input = checkNotNull(codec.getInputBuffer(index))
@@ -34,7 +37,7 @@ internal class AutoAudioEncoder(private val prefix: Int = 10) : Closeable {
                 pos += length
                 deadline = System.nanoTime() + 100_000_000L
             }
-            drain(codec, hz, adts, write)
+            if (drain(codec, hz, adts, write)) deadline = System.nanoTime() + 100_000_000L
             check(pos == pcm.size || System.nanoTime() < deadline) { "AAC encoder did not accept PCM" }
         }
     }
@@ -60,11 +63,15 @@ internal class AutoAudioEncoder(private val prefix: Int = 10) : Closeable {
         } catch (e: Exception) { close(); throw e }
     }
 
-    private fun drain(codec: MediaCodec, hz: Int, adts: Boolean, write: (ByteArray, Long) -> Unit) {
+    private fun drain(codec: MediaCodec, hz: Int, adts: Boolean, write: (ByteArray, Long) -> Unit): Boolean {
+        var progressed = false
         while (true) {
             val index = codec.dequeueOutputBuffer(info, 0)
             if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) continue
             if (index < 0) break
+            progressed = true
+            var encoded: ByteArray? = null
+            val pts = info.presentationTimeUs
             try {
                 if (info.size > 0 && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
                     val start = prefix + if (adts) 7 else 0
@@ -85,12 +92,15 @@ internal class AutoAudioEncoder(private val prefix: Int = 10) : Closeable {
                         position(info.offset)
                         get(packet, start, info.size)
                     }
-                    write(packet, info.presentationTimeUs)
+                    encoded = packet
                 }
             } finally {
                 codec.releaseOutputBuffer(index, false)
             }
+            // Only our copy crosses into the transport; never retain a codec buffer during I/O.
+            encoded?.let { write(it, pts) }
         }
+        return progressed
     }
 
     @Synchronized

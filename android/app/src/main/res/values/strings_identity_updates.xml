@@ -1,0 +1,10 @@
+<resources>
+    <string name="aa_identity_auto_update">Update Android Auto certificates automatically</string>
+    <string name="aa_identity_update_description">Checks the public Mgears feed daily when Internet is available. Only a verified certificate and matching key are saved. Updates apply to the next connection; offline certificates remain available.</string>
+    <string name="aa_identity_not_checked">No update check yet.</string>
+    <string name="aa_identity_check_ok">Last successful check: %1$s</string>
+    <string name="aa_identity_check_failed">Last unsuccessful check: %1$s. Saved certificates retained.</string>
+    <string name="aa_identity_check_now">Check certificates now</string>
+    <string name="aa_identity_checking">Checking certificates…</string>
+    <string name="aa_identity_update_unavailable">Could not check for updates. Internet may be unavailable or the package could not be verified. Saved certificates retained.</string>
+</resources>

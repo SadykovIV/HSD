@@ -174,6 +174,12 @@ class Iap2LinkEngine(
 
     val isDead: Boolean get() = state == State.DEAD
 
+    /** Payload-free diagnostics: distinguishes an unsent request from an acknowledged, unanswered one. */
+    fun progressSummary(): String =
+        "link=$state session=${controlSessionId()} queued=${sendBacklog.size} " +
+            "unacked=${unacknowledged.map { it.sequence }} tx=$sentSequence " +
+            "ack=${lastSentAcknowledged ?: "none"} rx=$lastReceivedInOrder buffered=${receive.size}"
+
     /** 本引擎是否发起过 SYN（start=发起方；enterNegotiating/startResponder=响应方）。 */
     private var originatedSyn = false
 

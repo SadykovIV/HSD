@@ -40,7 +40,8 @@ class NotificationFullscreenActivity : Activity() {
         mode = EmbeddedSessionRegistry.parentMode(parentId) ?: run { finish(); return }
         if (mode != DesktopModePolicy.ANDROID_DESKTOP && mode != DesktopModePolicy.DRIVEDECK) { finish(); return }
         setShowWhenLocked(true)
-        if (Build.VERSION.SDK_INT == 33) window.addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
+        // Touch controls belong to this host; key/IME focus belongs to the child app.
+        window.addFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         val root = FrameLayout(this).apply { setBackgroundColor(Color.BLACK) }
         pane = DesktopAppPane(this, onOpened = {}, onHome = ::home,

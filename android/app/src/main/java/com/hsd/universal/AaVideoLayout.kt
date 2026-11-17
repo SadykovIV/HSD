@@ -61,8 +61,10 @@ internal data class AaVideoLayout(
             val desktopW = even(w)
             val desktopH = even(h)
             if (!DesktopGeometryPolicy.acceptsProjection(desktopW, desktopH)) return null
-            val automatic = if (config.density > 0) (config.density * scale).roundToInt()
-                else DesktopGeometryPolicy.density(minOf(desktopW, desktopH))
+            // The receiver's density describes its native AA UI. A projected Android desktop
+            // uses HSD's logical scale, just like CarLife/CarPlay. In particular a 1080p
+            // coded frame with a 720px content area must not inflate all app/map symbols.
+            val automatic = DesktopGeometryPolicy.density(desktopW, desktopH)
             val dpi = if (overrideDpi > 0) overrideDpi else automatic.coerceIn(96, 640)
             val fps = if (config.hasFrameRate() && config.frameRate.number == 1) 60 else 30
             return AaVideoLayout(mode, fps, visible, content, desktopW, desktopH, dpi)

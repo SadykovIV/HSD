@@ -10,6 +10,63 @@ import java.security.cert.X509Certificate
 import java.time.Instant
 import java.util.UUID
 
+/** The signed app must negotiate a trusted identity with the AA package entirely absent. */
+internal fun checkStandalonePhoneIdentity(context: Context): Bundle {
+    check(runCatching { context.packageManager.getPackageInfo("com.google.android.projection.gearhead", 0) }
+        .exceptionOrNull() is android.content.pm.PackageManager.NameNotFoundException)
+    val identity = ProjectionIdentity(context).phone("qa-standalone")
+    val references = AaCertificateReference.from(context)
+    check(references.trustedPhoneChain(listOf(identity.certificate) + identity.chain, Instant.now()) != null)
+    AaApkIdentity.verifyKey(identity)
+    val bundle = context.assets.open("projection/phone.p12").use { AutomaticAaIdentity.readStore(it, references, Instant.now()) }
+    check(fingerprint(identity.certificate) == fingerprint(bundle.certificate))
+    return Bundle().apply {
+        putString("standalone_identity", "PASS: AA package absent; bundled issuer, TLS role and key possession verified")
+        putString("certificate_expires", identity.certificate.notAfter.toInstant().toString())
+    }
+}
+
+/** Automatic selection, persistent cache and an explicit override against the installed APK. */
+internal fun checkInstalledPhoneIdentity(base: Context): Bundle {
+    val run = UUID.randomUUID().toString()
+    val storage = File(base.cacheDir, run).apply { mkdirs() }
+    val isolated = object : ContextWrapper(base) {
+        override fun getNoBackupFilesDir(): File = storage
+        override fun getSharedPreferences(name: String, mode: Int) = base.getSharedPreferences("$run-$name", mode)
+    }
+    try {
+        val identities = ProjectionIdentity(isolated)
+        val first = identities.phone("qa")
+        val references = AaCertificateReference.from(isolated)
+        check(references.trustedPhoneChain(listOf(first.certificate) + first.chain, Instant.now()) != null)
+        val description = ProjectionDescription.create(isolated)
+        val cache = File(storage, "aa-installed.identity")
+        check(cache.isFile)
+        val bytes = cache.readBytes()
+        val second = ProjectionIdentity(isolated).phone("another-head-unit")
+        check(fingerprint(first.certificate) == fingerprint(second.certificate))
+        check(cache.readBytes().contentEquals(bytes)) // Successful reuse must not rewrite PKCS12.
+        check(ProjectionDescription.create(isolated).instanceId == description.instanceId)
+        cache.writeBytes(byteArrayOf(1, 2, 3))
+        check(fingerprint(identities.phone("qa").certificate) == fingerprint(first.certificate))
+        check(cache.length() > 3)
+        identities.selectDefault("")
+        val generated = identities.phone("qa")
+        check(fingerprint(generated.certificate) != fingerprint(first.certificate))
+        check(ProjectionDescription.create(isolated).instanceId == description.instanceId)
+        identities.authenticated("qa")
+        identities.selectDefault(null)
+        check(fingerprint(identities.phone("qa").certificate) == fingerprint(first.certificate))
+        val expired = ProjectionIdentity(isolated, java.time.Clock.fixed(
+            first.certificate.notAfter.toInstant().plusSeconds(1), java.time.ZoneOffset.UTC))
+        check(runCatching { expired.phone("qa") }.isFailure) // Never silently substitute a self-signed key.
+        return Bundle().apply { putString("installed_identity", "PASS: trusted installed APK, persisted cache, corrupt cache recovery, explicit selection, stable instance ID, expired identity refused") }
+    } finally {
+        for (name in listOf("usb-receivers", "projection-route", "aa-receiver-details")) base.deleteSharedPreferences("$run-$name")
+        storage.deleteRecursively()
+    }
+}
+
 /** Exercises real Android PKCS12, SharedPreferences and upgrade data without touching the user's keys. */
 internal fun checkReceiverIdentities(base: Context): Bundle {
     val run = UUID.randomUUID().toString()
@@ -26,6 +83,9 @@ internal fun checkReceiverIdentities(base: Context): Bundle {
         isolated.getSharedPreferences("usb-receivers", Context.MODE_PRIVATE).edit()
             .putStringSet(legacy, setOf(old)).commit()
         val first = ProjectionIdentity(isolated)
+        // This branch exercises the generated identity explicitly, independently of an
+        // installed Android Auto package. Automatic selection is checked by the TLS probe.
+        first.selectDefault("")
         check(first.receiverIds() == listOf(legacy) && first.get(legacy) == setOf(old))
         val id = "lan|192.0.2.2"
         val bluetooth = "bt|00:11:22:33:44:55"
@@ -87,7 +147,7 @@ internal fun checkReceiverIdentities(base: Context): Bundle {
         check(fingerprint(second.phone(bluetooth).certificate) == identity)
         second.select(bluetooth, null)
         check(second.assignedAlias(bluetooth) == null && second.defaultAlias == "test-selected-by-user")
-        second.selectDefault(null)
+        second.selectDefault("")
         second.forget(id)
         check(id !in second.receiverIds() && second.get(legacy) == setOf(old) &&
             second.receiverReference(id) == null && second.observedFingerprint(id) == null)

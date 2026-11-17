@@ -27,6 +27,7 @@ object DiagRunner {
     }
 
     private fun analyze(ctx: Context): LogDiag.Result {
+        AppLog.flush()
         val rules = ctx.assets.open(RULES_ASSET).use { LogDiag.parseRules(it.readBytes().toString(Charsets.UTF_8)) }
         val logs = LogShare.logFiles(ctx).take(MAX_LOGS).reversed().map { it.name to readTail(it) }
         val ver = try {

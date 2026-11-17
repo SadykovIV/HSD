@@ -20,7 +20,6 @@ import io.github.shaonialife.cardeck.transport.StreamDuplexStream
 import java.io.DataInputStream
 import java.net.Inet4Address
 import java.net.InetSocketAddress
-import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.security.KeyFactory
 import java.security.MessageDigest
@@ -101,12 +100,7 @@ internal class CarPlayRadioProbe(private val context: Context, private val args:
                 UUID.fromString("00000000-deca-fade-deca-deafdecacaff"),
             )
         if (listen != null) life.own(listen::close)
-        val addr =
-            NetworkInterface.getByName("wlan0")
-                .inetAddresses
-                .toList()
-                .filterIsInstance<Inet4Address>()
-                .single()
+        val addr = receiverWifiAddress()
         val ip =
             ServerSocket(0, 1, addr).also {
                 life.own(it::close)
@@ -129,6 +123,7 @@ internal class CarPlayRadioProbe(private val context: Context, private val args:
         val request = if (wifiConfigOnly) 0x5702 else 0x4300
         val response = if (wifiConfigOnly) 0x5703 else 0x4301
         val sparse = args.getString("capabilities") == "incomplete"
+        val reported = args.getString("capabilities")
         val serialFirst = args.getString("certificate") == "serial"
         val expectedDeviceUpdates = setOf(0x4e09, 0x4e0a, 0x4e0b, 0x4e0c, 0x4e0d, 0x4e0e)
         val deviceUpdates = mutableSetOf<Int>()
@@ -147,11 +142,19 @@ internal class CarPlayRadioProbe(private val context: Context, private val args:
                     val sends = mutableListOf<Int>()
                     if (!sparse) sends.add(response)
                     if (serialFirst) sends.add(0xaa06)
-                    send(0x1d01, Iap2Csm.u16List(6, sends.toIntArray()) +
-                        Iap2Csm.u16List(7, expectedDeviceUpdates.toIntArray()))
+                    val declaredSends = when (reported) {
+                        "reported-first" -> intArrayOf(0xaa06, 0x5703)
+                        "reported-reconnect" -> intArrayOf(0x5000, 0x5002, 0x5003, 0x4c00, 0x4c02,
+                            0x4c03, 0x4c05, 0x4c07, 0x4c08, 0x6800, 0x6802, 0x6803)
+                        else -> sends.toIntArray()
+                    }
+                    val declaredReceives = if (reported == "reported-reconnect")
+                        intArrayOf(0x4e09, 0x4e0a, 0x4e0b, 0x4e0c, 0x4e0e, 0x5001, 0x4c01, 0x4c04, 0x6801, 0x4e0d)
+                        else expectedDeviceUpdates.toIntArray() + if (reported == "reported-first") intArrayOf(0x5702) else intArrayOf()
+                    send(0x1d01, Iap2Csm.u16List(6, declaredSends) + Iap2Csm.u16List(7, declaredReceives))
                 }
                 0xaa00 -> if (serialFirst && !serialSent) {
-                    check(Iap2Csm.parseParams(frame.body).single() == Iap2Csm.Param(0, byteArrayOf()))
+                    check(frame.body.isEmpty())
                     serialSent = true
                     repeat(2) { send(0xaa06, Iap2Csm.param(0, byteArrayOf(1, 2, 3))) }
                 } else {
@@ -222,6 +225,23 @@ internal class CarPlayRadioProbe(private val context: Context, private val args:
             }
         }
         error("Receiver did not complete Bluetooth bootstrap")
+    }
+
+    @Suppress("DEPRECATION")
+    private fun receiverWifiAddress(): Inet4Address {
+        val connectivity = context.getSystemService(ConnectivityManager::class.java)
+        val deadline = SystemClock.elapsedRealtime() + 30_000
+        while (SystemClock.elapsedRealtime() < deadline) {
+            for (network in connectivity.allNetworks) {
+                if (connectivity.getNetworkCapabilities(network)
+                        ?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) != true) continue
+                val address = connectivity.getLinkProperties(network)?.linkAddresses
+                    ?.map { it.address }?.filterIsInstance<Inet4Address>()?.firstOrNull()
+                if (address != null) return address
+            }
+            Thread.sleep(50)
+        }
+        error("Receiver fixture needs an assigned Wi-Fi IPv4 address before accepting iAP2")
     }
 
     @Suppress("DEPRECATION")

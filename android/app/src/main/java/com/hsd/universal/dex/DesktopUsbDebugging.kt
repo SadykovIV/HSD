@@ -2,31 +2,12 @@ package com.hsd.universal.dex
 
 import android.content.Context
 import android.content.IntentFilter
-import android.os.Build
 import android.provider.Settings
 import com.flyfishxu.kadb.Kadb
 import com.hsd.universal.AppLog
-import com.hsd.universal.DesktopTransport
-import com.hsd.universal.ProjectionRoute
-import com.hsd.universal.link.car.CarLifeConnectionMode
-import com.hsd.universal.link.car.WirelessPrefs
 
 /** Observes settings only. Enabling debugging always remains an explicit action in Android Settings. */
 internal object DesktopUsbDebugging {
-    const val INSTRUCTION = "В параметрах разработчика включите «Отладку по USB» и оставьте её включённой. " +
-        "Она нужна для восстановления рабочего стола при подключении кабеля. «Беспроводная отладка» — отдельная настройка для активации по Wi-Fi."
-    const val MISSING = "Выключена «Отладка по USB». $INSTRUCTION Сопряжение и уже выданные права сохранены; удалять приложение и вводить новый код не нужно."
-
-    @Volatile private var confirmation: DesktopUsbDebuggingPolicy.Confirmation? = null
-
-    fun required(context: Context): Boolean {
-        val prefs = DexPrefs(context)
-        val wired = if (DesktopTransport.universal) ProjectionRoute.selected(context).wired
-            else WirelessPrefs(context).mode != CarLifeConnectionMode.WIFI
-        return DesktopUsbDebuggingPolicy.required(Build.VERSION.SDK_INT, Build.MANUFACTURER.equals("samsung", true),
-            prefs.useDelegated, prefs.desktopMode == DesktopModePolicy.SAMSUNG_DEX, wired)
-    }
-
     private fun appSetting(context: Context): String? = runCatching {
         Settings.Global.getString(context.contentResolver, Settings.Global.ADB_ENABLED)
     }.getOrNull()
@@ -40,21 +21,15 @@ internal object DesktopUsbDebugging {
     fun state(context: Context): DesktopUsbDebuggingPolicy.State =
         DesktopUsbDebuggingPolicy.state(appSetting(context), usbAdb(context))
 
-    fun confirmedMissing(context: Context): Boolean = required(context) &&
-        confirmation?.stillMissing(appSetting(context), usbAdb(context)) == true
-
-    /** Call only after verifying shell UID and this installation's private proof. */
-    fun requireEnabled(context: Context, adb: Kadb) {
-        if (!required(context)) return
-        fun read(command: String): String? = adb.shell(command).let { result ->
+    /** Call after verifying shell UID and this installation's proof. The proven channel,
+     * not USB_ADB_ENABLED or a manufacturer name, decides whether bootstrap can proceed. */
+    fun observeAuthenticatedChannel(adb: Kadb) {
+        fun read(command: String): String? = runCatching { adb.shell(command).let { result ->
             result.output.trim().takeIf { result.exitCode == 0 && it.length <= 256 }
-        }
+        } }.getOrNull()
         val setting = read("settings get global adb_enabled")
         val functions = read("getprop sys.usb.config")
         val current = DesktopUsbDebuggingPolicy.verifiedState(setting, functions)
-        confirmation = DesktopUsbDebuggingPolicy.Confirmation(appSetting(context), current)
-        AppLog.i("Desktop USB debugging preflight: state=$current", false)
-        if (current == DesktopUsbDebuggingPolicy.State.DISABLED)
-            throw DexAccessException(DexAccessStage.PROBE_SHELL, DexAccessReason.USB_DEBUGGING_DISABLED)
+        AppLog.i("Desktop ADB channel authenticated: USB debugging=$current (transport diagnostic)", false)
     }
 }

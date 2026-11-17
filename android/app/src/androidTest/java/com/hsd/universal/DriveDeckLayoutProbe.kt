@@ -73,9 +73,18 @@ internal class DriveDeckLayoutProbe(spec: String, private val expectedGap: Int?)
             return checkNotNull(found)
         }
         fun click(node: AccessibilityNodeInfo) {
+            // Layout/accessibility can precede InputDispatcher's surface transaction.
+            // Resolve coordinates only after Android's own UI input barrier.
+            UiAutomation::class.java.getMethod("syncInputTransactions").invoke(ui)
+            check(node.refresh()) { "Touch target disappeared before input" }
             var target: AccessibilityNodeInfo? = node
             while (target != null && !target.isClickable) target = target.parent
-            check(target?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true) { "Could not tap ${node.text}" }
+            val rectangle = Rect()
+            checkNotNull(target) { "No clickable parent for ${node.text}" }.getBoundsInScreen(rectangle)
+            val x = rectangle.centerX().toFloat(); val y = rectangle.centerY().toFloat()
+            check(x >= 0 && x < width && y >= 0 && y < height) { "Touch target outside projection: $rectangle" }
+            remote.injectTouchPoints(MotionEvent.ACTION_DOWN, 0, intArrayOf(0), floatArrayOf(x), floatArrayOf(y))
+            remote.injectTouchPoints(MotionEvent.ACTION_UP, 0, intArrayOf(0), floatArrayOf(x), floatArrayOf(y))
         }
         fun show(extra: String) {
             context.startActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
@@ -134,12 +143,12 @@ internal class DriveDeckLayoutProbe(spec: String, private val expectedGap: Int?)
                     val root = it.root
                     root?.packageName == context.packageName &&
                         find(root, setOf(context.getString(R.string.set_back))) != null &&
-                        find(root, setOf(context.getString(R.string.desktop_drivedeck_menu)))?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true
+                        find(root, setOf(context.getString(R.string.desktop_drivedeck_menu)))?.let { node -> click(node); true } == true
                 }
             }
             element(label)
             poll("Menu opened without returning to DriveDeck") { host.isDestroyed }
-            return "Spacing switch and divider, real picker launch, visible Back and Menu, returned to app list on display $display"
+            return "Injected touchscreen: spacing switch and divider, picker launch, fullscreen Menu, returned to app list on display $display"
         } finally {
             info.flags = originalFlags
             ui.serviceInfo = info

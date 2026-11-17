@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- Full-color artwork must never be passed through the monochrome icon helper. -->
-<bitmap xmlns:android="http://schemas.android.com/apk/res/android"
-    android:src="@drawable/hsd_brand" android:gravity="fill"
-    android:filter="true" android:dither="true" />

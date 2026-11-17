@@ -17,7 +17,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
-import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.DelayQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
@@ -333,7 +333,7 @@ class MultiSocketTransport internal constructor(
     @Volatile override var outputEndpointLost = false
         private set
 
-    private val queues = sockets.keys.associateWith { LinkedBlockingQueue<QueuedTransportPacket>() }
+    private val queues = sockets.keys.associateWith { DelayQueue<QueuedTransportPacket>() }
     private val audioExpired = AtomicLong()
     private val audioOverflow = AtomicLong()
     override val audioOverflowPackets: Long get() = audioOverflow.get()
@@ -361,6 +361,8 @@ class MultiSocketTransport internal constructor(
     override val queuedVideoBytes: Long get() = videoBytes.get()
     override val queuedVideoFrames: Int get() = videoFrames.get()
     override val videoWriteAgeMs: Long get() = videoWriteStartedMs.let { if (it < 0) 0L else (clock() - it).coerceAtLeast(0) }
+    override val videoQueueAgeMs: Long get() = maxOf(videoWriteAgeMs,
+        queues[Ch.VIDEO]?.peek()?.congestionAgeMs(clock()) ?: 0)
     override val drainBytesPerSec: Double get() = drain.bytesPerSec
     override fun queueSize(chan: Int): Int = queues[chan]?.size ?: 0
 
@@ -404,7 +406,7 @@ class MultiSocketTransport internal constructor(
             videoBytes.addAndGet(inner.size.toLong())
             videoFrames.incrementAndGet()
         }
-        AudioQueueAdmission.offer(q, QueuedTransportPacket(chan, inner, deadlineMs, frame, last), clock(),
+        AudioQueueAdmission.offer(q, QueuedTransportPacket(chan, inner, deadlineMs, frame, last, clock()), clock(),
             { audioExpired.addAndGet(it) }, { audioOverflow.addAndGet(it) })
     }
 
@@ -449,7 +451,22 @@ class MultiSocketTransport internal constructor(
                     onHeartbeat(chan)
                     continue
                 }
-                synchronized(dispatchLock) { sink(chan, inner) }
+                // Input diagnostics downstream start after dispatch. Include this boundary
+                // too, so a slow command holding the shared protocol lock cannot look like
+                // lost Wi-Fi touch packets while the video writer is still moving.
+                val receivedNs = System.nanoTime()
+                var beganNs = receivedNs
+                try {
+                    synchronized(dispatchLock) {
+                        beganNs = System.nanoTime()
+                        sink(chan, inner)
+                    }
+                } finally {
+                    val finishedNs = System.nanoTime()
+                    if (finishedNs - receivedNs >= 100_000_000L) WLog.ev(WLog.TCP, "slow-dispatch",
+                        "chan" to Ch.name(chan), "waitMs" to (beganNs - receivedNs) / 1_000_000,
+                        "workMs" to (finishedNs - beganNs) / 1_000_000)
+                }
             }
         } catch (e: BadInnerHeader) {
             AppLog.e("tcp6 ${Ch.name(chan)}: плохой заголовок inner: ${e.message}")

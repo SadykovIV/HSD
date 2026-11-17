@@ -228,9 +228,8 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
                 val bluetooth = getSystemService(BluetoothManager::class.java)?.adapter ?: error(service.getString(R.string.desktop_bluetooth_unavailable))
                 val peer = "bt|$address"
                 val phone = identity.phone(peer)
-                val description = phone.projectionDescription()
                 val options = WirelessConnector.Options(bootstrap = WirelessBootstrap.Options(
-                    instanceId = description.instanceId, deviceName = description.deviceName))
+                    instanceId = ProjectionDescription.instanceId(this), deviceName = android.os.Build.MODEL))
                 val attempt = WirelessConnector(this, protocolLog, options).Attempt(bluetooth.getRemoteDevice(address))
                 lifetime.own(attempt::abort)
                 AutoConnection(attempt.run(), peer, phone)

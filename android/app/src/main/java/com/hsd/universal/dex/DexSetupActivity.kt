@@ -112,7 +112,7 @@ open class DexSetupActivity : Activity() {
     private var idleModeHelp = ""
     private val phoneIdle by lazy {
         PhoneScreenIdleController(this,
-            isEnabled = { when (prefs.phoneIdleMode) {
+            isEnabled = { !prefs.useSystemScreenTimeout && when (prefs.phoneIdleMode) {
                 PhoneIdleMode.CURTAIN -> prefs.desktopPanelControl
                 PhoneIdleMode.PANEL -> !CarLifePhoneIdleTimer.ownsPhysicalTimer && prefs.desktopPanelControl &&
                     (prefs.useShizuku || prefs.useDelegated && DelegatedPanelAccess.hasPermission(this))
@@ -172,6 +172,8 @@ open class DexSetupActivity : Activity() {
     private lateinit var densityChoice: Button
     private lateinit var resolutionChoice: Button
     private lateinit var fpsChoice: Button
+    private lateinit var bitrateChoice: Button
+    private lateinit var avSyncChoice: DesktopSetupViews.Toggle
     private var videoTuningHelp = ""
     private lateinit var usbAudioChoice: DesktopSetupViews.Toggle
     private var usbAudioHelp = ""
@@ -410,9 +412,13 @@ open class DexSetupActivity : Activity() {
     @android.annotation.SuppressLint("UnspecifiedRegisterReceiverFlag")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Android may retain this component as the USB default from a previous HSD build.
+        if (intent.action == UsbManager.ACTION_USB_ACCESSORY_ATTACHED) {
+            try { UsbAttachActivity.connect(this, intent) } finally { finish() }
+            return
+        }
         AppLog.init(this)
-        if (savedInstanceState == null && intent.action == UsbManager.ACTION_USB_ACCESSORY_ATTACHED)
-            Actions.observeUsbConnection(this)
+        com.hsd.universal.AaIdentityUpdates.maybeCheck(this)
         prefs = DexPrefs(this)
         launchInitialSetup = savedInstanceState == null && prefs.initialSetupAutoPending &&
             !prefs.initialSetupCompleted && !intent.getBooleanExtra(EXTRA_SHOW_ACTIVATION, false) &&
@@ -449,6 +455,10 @@ open class DexSetupActivity : Activity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        if (intent.action == UsbManager.ACTION_USB_ACCESSORY_ATTACHED) {
+            try { UsbAttachActivity.connect(this, intent) } finally { finish() }
+            return
+        }
         setIntent(intent)
         if (intent.getBooleanExtra(EXTRA_SHOW_ACTIVATION, false)) {
             setupRequested = true
@@ -456,11 +466,11 @@ open class DexSetupActivity : Activity() {
         }
         if (intent.getBooleanExtra(EXTRA_SHOW_PERMISSIONS, false)) openPermissionSettings()
         if (intent.getBooleanExtra(EXTRA_COMPUTER_ACTIVATION, false)) showComputerActivationHelp()
-        if (intent.action == UsbManager.ACTION_USB_ACCESSORY_ATTACHED && visible) usbAttached()
     }
 
     override fun onStart() {
         super.onStart()
+        if (!::prefs.isInitialized) return
         registerReceiver(profilePackageChange, IntentFilter().apply {
             addAction(Intent.ACTION_PACKAGE_ADDED)
             addAction(Intent.ACTION_PACKAGE_CHANGED)
@@ -494,6 +504,7 @@ open class DexSetupActivity : Activity() {
     }
 
     override fun onStop() {
+        if (!::prefs.isInitialized) { super.onStop(); return }
         unregisterReceiver(profilePackageChange)
         visible = false
         activationStopPending = false
@@ -506,6 +517,7 @@ open class DexSetupActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        if (!::prefs.isInitialized) return
         selectedPanel = DesktopComponents.selected(this)
         renderInstalledVersions()
         if (wizardStep) wizardProfileAvailable = DesktopOnboardingActivity.profileAvailable(this, prefs)
@@ -517,7 +529,7 @@ open class DexSetupActivity : Activity() {
     }
 
     override fun onPause() {
-        phoneIdle.onStop()
+        if (::prefs.isInitialized) phoneIdle.onStop()
         super.onPause()
     }
 
@@ -532,6 +544,7 @@ open class DexSetupActivity : Activity() {
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
+        if (!::prefs.isInitialized) { super.onSaveInstanceState(outState); return }
         val settingsOpen = settingsPage.visibility == View.VISIBLE
         outState.putBoolean("settings_open", settingsOpen)
         settingsNavigator.save(outState)
@@ -825,6 +838,18 @@ open class DexSetupActivity : Activity() {
         }
         fpsChoice = ui.button(imageSettings, "") {
             if (!accessChoiceLocked()) {
+                val choices = com.hsd.universal.aa.FpsSetting.entries
+                AlertDialog.Builder(this).setTitle(R.string.desktop_fps_limit)
+                    .setSingleChoiceItems(choices.map { getString(it.titleRes) }.toTypedArray(), choices.indexOf(prefs.desktopFps)) { dialog, index ->
+                        if (!accessChoiceLocked()) prefs.desktopFps = choices[index]
+                        dialog.dismiss()
+                        renderAccessControls()
+                    }.setNegativeButton(R.string.mock_cancel, null).show()
+            }
+        }
+        ui.help(fpsChoice, getString(R.string.desktop_fps_limit)) { getString(R.string.desktop_fps_limit_help) }
+        bitrateChoice = ui.button(imageSettings, "") {
+            if (!accessChoiceLocked()) {
                 val values = (listOf(1, 2, 4, 6, 8, 12, 16, 20) + prefs.desktopBitrateMbps).distinct().sorted()
                 AlertDialog.Builder(this).setTitle(getString(R.string.desktop_video_bitrate))
                     .setSingleChoiceItems((values.map { getString(R.string.desktop_mbit_s, it) } + getString(R.string.desktop_custom_bitrate)).toTypedArray(),
@@ -842,7 +867,7 @@ open class DexSetupActivity : Activity() {
         ui.help(densityChoice, getString(R.string.desktop_head_unit_interface_size)) {
             getString(R.string.desktop_the_dpi_you_select_sets_the_size_of_the, densityHelp)
         }
-        ui.help(fpsChoice, getString(R.string.desktop_video_bitrate)) { videoTuningHelp }
+        ui.help(bitrateChoice, getString(R.string.desktop_video_bitrate)) { videoTuningHelp }
         dpiAppsButton = ui.button(imageSettings, getString(R.string.desktop_adjust_app_dpi)) {
             startActivity(Intent(this, DpiCorrectionActivity::class.java))
         }
@@ -876,6 +901,11 @@ open class DexSetupActivity : Activity() {
         }
         ui.help(usbAudioChoice.row, getString(R.string.desktop_send_audio_over_usb, projectionName)) { usbAudioHelp }
         usbAudioStatus = ui.text(audioSettings, "", 13f)
+        ProjectionAudioSettings.add(this, ui, audioSettings, prefs)
+        avSyncChoice = ui.toggle(audioSettings, getString(R.string.desktop_av_sync_enabled), prefs.synchronizeAudioVideo) { checked ->
+            if (!applyingAccessChoice && !accessChoiceLocked()) prefs.synchronizeAudioVideo = checked
+        }
+        ui.help(avSyncChoice.row, getString(R.string.desktop_av_sync_enabled)) { getString(R.string.desktop_av_sync_help) }
         ui.button(audioSettings, getString(R.string.desktop_audio_sync)) { showReceiverAudioTiming() }
         autoMusicChoice = ui.toggle(audioSettings, getString(R.string.desktop_resume_music_automatically_on_connection), prefs.autoMusicPlayback) {
             prefs.autoMusicPlayback = it
@@ -884,6 +914,12 @@ open class DexSetupActivity : Activity() {
             getString(R.string.desktop_access_mode_the_music_continues_after_the_image_and, DesktopTransport.shortName)
         }
         phoneSettings = settingsNavigator.subpage("phone-display", getString(R.string.desktop_phone_screen_control), "")
+        val systemSleepChoice = ui.toggle(phoneSettings, getString(R.string.desktop_system_sleep), prefs.useSystemScreenTimeout) { checked ->
+            prefs.useSystemScreenTimeout = checked
+            phoneIdle.refresh()
+            renderPhoneScreenControl()
+        }
+        ui.help(systemSleepChoice.row, getString(R.string.desktop_system_sleep)) { getString(R.string.desktop_system_sleep_help) }
         ui.text(phoneSettings, getString(R.string.desktop_when_the_control_is_turned_off_the_phone_controls, DesktopTransport.shortName, projectionName))
         panelControlChoice = ui.toggle(phoneSettings, getString(R.string.desktop_managing_the_phone_display), prefs.desktopPanelControl) { checked ->
             if (!applyingAccessChoice && !accessChoiceLocked()) {
@@ -957,8 +993,13 @@ open class DexSetupActivity : Activity() {
     }
 
     private fun showReceiverAudioTiming() {
-        val selected = ReceiverAudioCalibration.selected(this)
         val dialog = AlertDialog.Builder(this).setTitle(getString(R.string.desktop_audio_sync))
+        if (!prefs.synchronizeAudioVideo) {
+            dialog.setMessage(getString(R.string.desktop_av_sync_disabled))
+                .setPositiveButton(getString(R.string.apps_warn_ok), null).show()
+            return
+        }
+        val selected = ReceiverAudioCalibration.selected(this)
         if (selected == null) {
             dialog.setMessage(getString(R.string.desktop_synchronization_works_automatically_here_you_can_make_an_adjustment, projectionName))
                 .setPositiveButton(getString(R.string.apps_warn_ok), null).show()
@@ -1010,9 +1051,6 @@ open class DexSetupActivity : Activity() {
         val notificationBlock = PhonePairingService.notificationBlock(this, needsCode = true)
         noticesHint.updateText(getString(R.string.desktop_temporarily_disabled))
         val missing = mutableListOf<String>()
-        val usbRequired = DesktopUsbDebugging.required(this)
-        val usbState = DesktopUsbDebugging.state(this)
-        if (usbRequired && usbState == DesktopUsbDebuggingPolicy.State.DISABLED) missing += getString(R.string.desktop_usb_debugging)
         if (!DesktopAccess.isReady(this)) missing += getString(R.string.desktop_activation_3a21)
         if (clusterPrefs.metaNavi && !listener) missing += getString(R.string.desktop_notification)
         if (notificationBlock != null) missing += when (notificationBlock) {
@@ -1384,13 +1422,6 @@ open class DexSetupActivity : Activity() {
             return
         }
         if (!canStartPhoneActivation()) return
-        if (DesktopUsbDebugging.confirmedMissing(this)) {
-            AlertDialog.Builder(this).setTitle(getString(R.string.desktop_enable_usb_debugging))
-                .setMessage(DesktopUsbDebugging.MISSING)
-                .setNegativeButton(getString(R.string.upd_later), null)
-                .setPositiveButton(getString(R.string.desktop_open_settings)) { _, _ -> openDebugSettings() }.show()
-            return
-        }
         if (DesktopActivationCoordinator.currentStep(this) == DesktopReadinessPolicy.Step.RECONFIGURATION_REQUIRED) {
             showState(getString(R.string.desktop_we_need_to_update_access), getString(R.string.desktop_selected_features_need_additional_permissions_complete_the_current_access, DesktopTransport.shortName))
             return
@@ -1681,8 +1712,7 @@ open class DexSetupActivity : Activity() {
             attemptFailed = !setupReady && PhonePairingService.snapshot.phase == PhonePairingService.Phase.FAILED,
             recoveryRequested = IndependentRecoveryAccess.requested(this),
             recoveryNeedsApply = facts?.modePending == true,
-            recoveryNeedsVerification = facts?.recoveryNeedsVerification == true,
-            usbDebuggingMissing = facts?.usbDebuggingMissing == true)
+            recoveryNeedsVerification = facts?.recoveryNeedsVerification == true)
     }
 
     private fun activationSummary(status: DesktopActivationUiPolicy.Status): String = when (status.state) {
@@ -1694,7 +1724,6 @@ open class DexSetupActivity : Activity() {
         DesktopActivationUiPolicy.State.CONNECTED -> getString(R.string.desktop_desktop_connected)
         DesktopActivationUiPolicy.State.READY, DesktopActivationUiPolicy.State.ACCESS_ACTIVE -> getString(R.string.desktop_access_is_active)
         DesktopActivationUiPolicy.State.FAILED -> getString(R.string.desktop_activation_incomplete)
-        DesktopActivationUiPolicy.State.USB_DEBUGGING_REQUIRED -> getString(R.string.desktop_enable_usb_debugging)
     }
 
     private fun recoveryExplanation(status: DesktopActivationUiPolicy.Status): String = when (status.recovery) {
@@ -1713,7 +1742,6 @@ open class DexSetupActivity : Activity() {
         DesktopActivationUiPolicy.State.ACCESS_ACTIVE -> listOf(getString(R.string.desktop_application_permissions_and_desktop_are_available), recoveryExplanation(status)).filter(String::isNotBlank).joinToString("\n")
         DesktopActivationUiPolicy.State.READY -> getString(R.string.desktop_connect_re_activation_will_be_required_after_restarting_the, projectionName)
         DesktopActivationUiPolicy.State.FAILED -> PhonePairingService.snapshot.message
-        DesktopActivationUiPolicy.State.USB_DEBUGGING_REQUIRED -> DesktopUsbDebugging.MISSING
     }
 
     private fun renderAccessControls() {
@@ -1783,9 +1811,12 @@ open class DexSetupActivity : Activity() {
         dpiAppsButton.isEnabled = desktop
         resolutionChoice.isEnabled = enabled && desktop
         fpsChoice.isEnabled = enabled && desktop
+        bitrateChoice.isEnabled = enabled && desktop
+        avSyncChoice.setEnabled(enabled && desktop)
         resolutionChoice.updateText(getString(R.string.desktop_resolution, prefs.desktopResolutionLabel))
         densityChoice.updateText(getString(R.string.desktop_interface_size, if (prefs.desktopDensity == 0) getString(R.string.desktop_auto) else "${prefs.desktopDensity} DPI"))
-        fpsChoice.updateText(getString(R.string.desktop_video_bitrate_mbit_s, prefs.desktopBitrateMbps))
+        fpsChoice.updateText(getString(R.string.desktop_fps_limit_value, getString(prefs.desktopFps.titleRes)))
+        bitrateChoice.updateText(getString(R.string.desktop_video_bitrate_mbit_s, prefs.desktopBitrateMbps))
         videoTuningHelp = if (desktop)
             getString(R.string.desktop_the_frame_rate_adjusts_to_the_image_the_capabilities)
             else getString(R.string.desktop_in_backup_adb_mode_dex_automatic_fps_and_selected)
@@ -1865,7 +1896,6 @@ open class DexSetupActivity : Activity() {
         phoneActivationButton.updateText(when {
             phoneReplyAttempt != null -> getString(R.string.desktop_confirm_code)
             activationStopPending || PhonePairingService.active || phoneLaunchCommitted -> getString(R.string.desktop_activating)
-            DesktopUsbDebugging.confirmedMissing(this) -> getString(R.string.desktop_open_debugging_settings)
             baseReady -> getString(R.string.desktop_reactivate)
             else -> getString(R.string.desktop_activate)
         })
@@ -1875,8 +1905,6 @@ open class DexSetupActivity : Activity() {
         cancelPhoneActivationButton.visibility = if (PhonePairingService.active && attempt.phase != PhonePairingService.Phase.DISPATCHED) View.VISIBLE else View.GONE
         phoneActivationHint.updateText(when {
             PhonePairingService.active -> attempt.message
-            DesktopUsbDebugging.required(this) && DesktopUsbDebugging.state(this) != DesktopUsbDebuggingPolicy.State.ENABLED ->
-                DesktopUsbDebugging.INSTRUCTION
             canRetryFailedProjection() -> getString(R.string.desktop_re_activation_will_stop_the_failed_connection_and_re)
             BridgeService.alive || DexState.running -> getString(R.string.desktop_to_re_activate_first_stop_the_connection_on_the)
             baseReady -> getString(R.string.desktop_first_valid_access_is_checked_and_if_it_s)
@@ -1936,6 +1964,7 @@ open class DexSetupActivity : Activity() {
             (prefs.desktopPanelControl || DexState.phoneScreenOff)
         val visibility = if (available) View.VISIBLE else View.GONE
         val mode = prefs.phoneScreenMode
+        idleTimeoutChoice.isEnabled = !prefs.useSystemScreenTimeout
         val canBlankPanel = available && prefs.desktopPanelControl && (prefs.useShizuku || prefs.useDelegated && DelegatedPanelAccess.isAvailable(this))
         idleModeChoice.updateText(getString(R.string.desktop_deactivation_method, getString(mode.labelRes)))
         idleTimeoutChoice.updateText(getString(R.string.desktop_extinguish_through, if (prefs.phoneTimerEnabled) getString(prefs.phoneIdleTimeout.labelRes) else getString(R.string.desktop_no_timer)))
@@ -2304,8 +2333,7 @@ open class DexSetupActivity : Activity() {
             DexAccessReason.INVALID_HOST, DexAccessReason.NETWORK_UNREACHABLE -> getString(R.string.desktop_connect_to_wi_fi_and_enable_wireless_debugging_then)
             DexAccessReason.IDENTITY_FAILURE -> getString(R.string.desktop_couldn_t_open_the_saved_key_send_the_log)
             DexAccessReason.AUTHORIZATION_REJECTED, DexAccessReason.TLS_VERSION_UNSUPPORTED, DexAccessReason.TLS_PROTOCOL,
-            DexAccessReason.LOCAL_ADB_CONFIGURATION, DexAccessReason.LOCAL_ADB_RESTORE_REQUIRED,
-            DexAccessReason.USB_DEBUGGING_DISABLED -> problem?.message.orEmpty()
+            DexAccessReason.LOCAL_ADB_CONFIGURATION, DexAccessReason.LOCAL_ADB_RESTORE_REQUIRED -> problem?.message.orEmpty()
             DexAccessReason.PAIR_REJECTED -> getString(R.string.desktop_open_a_new_pairing_window_and_enter_fresh_code)
             else -> if (pairing) getString(R.string.desktop_open_a_new_window_with_the_code_in_the) else getString(R.string.desktop_check_that_wireless_debugging_is_enabled_and_click_connect)
         }

@@ -20,6 +20,10 @@ internal fun logHidDescriptor(descriptor: ByteArray) {
         descriptor.take(512).joinToString("") { "%02x".format(it.toInt() and 255) }, false)
 }
 
+/** Plist encoders can represent uint16 ports as either unsigned or signed 16-bit integers. */
+internal fun airPlayPort(value: Any?): Int = (value as? Number)?.toLong()
+    ?.takeIf { it in -32768L..65535L }?.toInt()?.and(0xffff) ?: 0
+
 internal class CarPlayAirSession(
     private val context: Context,
     private val ep: CarPlayEndpoint,
@@ -27,7 +31,6 @@ internal class CarPlayAirSession(
     private val event: (Map<*, *>) -> Unit,
     private val failed: (Exception) -> Unit,
 ) {
-    private var eventSender: AirPlayWire? = null
     private val networkAccess = ProjectionNetworkAccess(context)
     private var eventIap: CarPlayIapChannel? = null
     lateinit var video: CarPlayVideo
@@ -107,9 +110,17 @@ internal class CarPlayAirSession(
         val control = AirPlayWire(controlSocket, "RTSP (control)")
         val keys = pair(control)
         control.cipher = ControlCipher(keys.phoneReadKey, keys.phoneWriteKey)
-        val time = TimingServer(socketFactory = ::udp)
+        controlSocket.soTimeout = 0
+        control.startResponseReader { error -> if (!life.isClosed) failed(error) }
+        val time = TimingServer(log = { AppLog.i("CarPlay $it", false) }, socketFactory = ::udp)
         check(time.start())
         life.own(time::stop)
+        val eventRequests = java.util.concurrent.atomic.AtomicInteger()
+        val eventReplies = java.util.concurrent.atomic.AtomicInteger()
+        life.own {
+            AppLog.i("CarPlay channels: timing ${time.progressSummary()}; " +
+                "events requests=${eventRequests.get()} replies=${eventReplies.get()}", false)
+        }
         fun dict(method: String, path: String, body: Map<String, Any?>? = null): Map<*, *> {
             val result = control.request(method, path, body?.let { BinaryPlist.encode(it) } ?: byteArrayOf())
             return if (result.isEmpty()) emptyMap<Any, Any>()
@@ -132,8 +143,7 @@ internal class CarPlayAirSession(
                     "statsCollectionEnabled" to false,
                 ),
             )
-        val keepPort = (setup["keepAlivePort"] as? Number)?.toLong()?.takeIf { it in -32768L..65535L }
-            ?.toInt()?.and(0xffff) ?: 0
+        val keepPort = airPlayPort(setup["keepAlivePort"])
         // The receiver starts its idle watchdog during setup. Keep its UDP channel independent
         // of RTSP response times and blocked writes to the screen stream.
         val udpSent = java.util.concurrent.atomic.AtomicInteger()
@@ -174,8 +184,9 @@ internal class CarPlayAirSession(
                 }
                 .toMap()
         hid.values.forEach { logHidDescriptor(it) }
-        val eventPort = (setup["eventPort"] as? Number)?.toInt()
-        if (eventPort != null && eventPort > 0) {
+        val eventPort = airPlayPort(setup["eventPort"])
+        AppLog.i("CarPlay channels: eventPort=$eventPort timingPort=${time.port}", false)
+        if (eventPort > 0) {
             val s = tcp(eventPort)
             s.soTimeout = 0
             fun derive(label: String) =
@@ -190,15 +201,21 @@ internal class CarPlayAirSession(
                     derive("Events-Write-Encryption-Key"),
                     derive("Events-Read-Encryption-Key"),
                 )
-            eventSender = listener
             thread(name = "CarPlay events", isDaemon = true) {
                 try {
                     while (!s.isClosed) {
                         val m = listener.read()
                         if (m.line.startsWith("RTSP/") || m.line.startsWith("HTTP/")) continue
+                        val count = eventRequests.incrementAndGet()
                         listener.respond(m)
+                        eventReplies.incrementAndGet()
                         if (m.line.contains(" /command ") && m.data.isNotEmpty()) {
                             val cmd = BinaryPlist.parse(m.data) as? Map<*, *>
+                            if (count <= 12) {
+                                val kind = (cmd?.get("type") as? String)?.take(64)
+                                    ?.replace(Regex("[^A-Za-z0-9_-]"), "?") ?: "unknown"
+                                AppLog.i("CarPlay event #$count type=$kind acknowledged", false)
+                            }
                             if (cmd?.get("type") == "iAPSendMessage") {
                                 val data =
                                     ((cmd["params"] as? Map<*, *>)?.get("data") ?: cmd["data"])
@@ -211,7 +228,7 @@ internal class CarPlayAirSession(
                                                     life,
                                                     ep.device,
                                                     { payload ->
-                                                        listener.command(
+                                                        control.request("POST", "/command",
                                                             BinaryPlist.encode(
                                                                 mapOf(
                                                                     "type" to "iAPSendMessage",
@@ -255,7 +272,7 @@ internal class CarPlayAirSession(
             )
         control.request("POST", "/command", BinaryPlist.encode(modes))
         hid.keys.forEach { uuid ->
-            eventSender?.command(
+            control.request("POST", "/command",
                 BinaryPlist.encode(
                     mapOf(
                         "type" to "hidSetInputMode",
@@ -276,7 +293,7 @@ internal class CarPlayAirSession(
             )
         video =
             CarPlayVideo(
-                tcp((screen["dataPort"] as Number).toInt()).getOutputStream(),
+                tcp(airPlayPort(screen["dataPort"])).getOutputStream(),
                 AirPlayStreamKeys.chachaStreamKey(keys.sharedSecret, screenId),
                 width,
                 height,
@@ -295,7 +312,7 @@ internal class CarPlayAirSession(
                         "streamConnectionID" to nextId(),
                     )
                 )
-            val sock = tcp((d["dataPort"] as Number).toInt())
+            val sock = tcp(airPlayPort(d["dataPort"]))
             sock.soTimeout = 0
             fun key(label: String) =
                 AirPlayCrypto.hkdfSha512(
@@ -345,9 +362,9 @@ internal class CarPlayAirSession(
                 socket.close(); encoder?.close()
                 continue
             }
-            val port = (desc["dataPort"] as? Number)?.toInt()?.and(65535) ?: 0
+            val port = airPlayPort(desc["dataPort"])
             if (port == 0) { socket.close(); encoder?.close(); continue }
-            audio = CarPlayAudio(socket, ep.host, port, (desc["controlPort"] as? Number)?.toInt()?.and(65535) ?: 0,
+            audio = CarPlayAudio(socket, ep.host, port, airPlayPort(desc["controlPort"]),
                 fmt.stream.toInt(), AirPlayStreamKeys.chachaStreamKey(keys.sharedSecret, audioId), fmt.rate, encoder, fmt.latencyMs)
             AppLog.i("CarPlay audio: ${fmt.stream}/${fmt.role}, ${if (fmt.aac) "AAC-LC" else "PCM"} stereo ${fmt.rate} Hz", false)
             break
@@ -360,10 +377,9 @@ internal class CarPlayAirSession(
             AppLog.i("CarPlay: RECORD ${android.os.SystemClock.elapsedRealtime() - recordedAt} ms, " +
                 "UDP keepalive sent=${udpSent.get()}, feedback replies=${feedbackReplies.get()}", false)
         }
-        // Streaming health is observed on media/event sockets. The only control request after
-        // RECORD is optional feedback. A slow or absent reply must neither kill the session
-        // nor hold up the receiver's transport heartbeat. Closing life still interrupts the read.
-        controlSocket.soTimeout = 0
+        // Streaming health is observed on media/event sockets. Optional feedback shares control
+        // with iAP commands; a slow reply must not block those or the media heartbeat.
+        // Closing life interrupts the reader and releases every outstanding request.
         val executor = Executors.newScheduledThreadPool(2)
         life.own { executor.shutdownNow() }
         val feedbackSince = java.util.concurrent.atomic.AtomicLong(0L)
@@ -390,7 +406,7 @@ internal class CarPlayAirSession(
             override fun run() {
                 try {
                     feedbackSince.set(android.os.SystemClock.elapsedRealtime())
-                    control.request("POST", "/feedback")
+                    control.request("POST", "/feedback", timeoutMillis = 0)
                     feedbackReplies.incrementAndGet()
                     delay = 1L
                 } catch (e: RtspError) {
