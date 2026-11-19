@@ -12,12 +12,31 @@ import org.junit.Test
 
 /** Байтовые примеры взяты из docs/carlife-protocol.md §9.2. */
 class ProtocolTest {
+    @Test fun dataSliceHasTheSameWireBytesAndOwnsItsPayload() {
+        val frame = ByteArray(512) { it.toByte() }
+        for ((start, length) in listOf(0 to 0, 0 to 512, 71 to 203, 511 to 1, 512 to 0)) {
+            val expected = Wire.dataInner(Msg.VIDEO_DATA, -17, frame.copyOfRange(start, start + length))
+            val packet = Wire.dataInner(Msg.VIDEO_DATA, -17, frame, start, length)
+            assertArrayEquals(expected, packet)
+            if (length > 0) { frame[start]++; assertArrayEquals(expected, packet) }
+        }
+        org.junit.Assert.assertThrows(IllegalArgumentException::class.java) {
+            Wire.dataInner(Msg.VIDEO_DATA, 0, frame, Int.MAX_VALUE, 55)
+        }
+    }
     private fun hex(s: String): ByteArray {
         val t = s.replace(" ", "")
         return ByteArray(t.length / 2) { t.substring(it * 2, it * 2 + 2).toInt(16).toByte() }
     }
 
     private fun frame(chan: Int, inner: ByteArray) = Wire.outerHeader(chan, inner.size) + inner
+
+    private fun bulk(chan: Int, inner: ByteArray, whole: Boolean = false): List<ByteArray> = buildList {
+        Wire.writeBulk(chan, inner, whole) { data, offset, size ->
+            if (isNotEmpty()) assertTrue(data === inner)
+            add(if (offset == 0 && size == data.size) data else data.copyOfRange(offset, offset + size))
+        }
+    }
 
     @Test
     fun huProtocolVersion() {
@@ -188,13 +207,13 @@ class ProtocolTest {
     @Test
     fun writeSequenceSplitsHeaderAndChunks() {
         val small = Wire.cmdInner(Msg.VIDEO_ENCODER_START, null)
-        val s = Wire.writeSequence(Ch.CMD, small)
+        val s = bulk(Ch.CMD, small)
         assertEquals(2, s.size)
         assertEquals(8, s[0].size)
         assertArrayEquals(small, s[1])
 
         val big = Wire.dataInner(Msg.VIDEO_DATA, 0, ByteArray(40000) { 1 })
-        val seq = Wire.writeSequence(Ch.VIDEO, big)
+        val seq = bulk(Ch.VIDEO, big)
         assertEquals(8, seq[0].size)
         assertEquals(big.size, Wire.u32(seq[0], 4))
         assertEquals(Ch.VIDEO, Wire.u32(seq[0], 0))
@@ -783,13 +802,13 @@ class ProtocolTest {
     fun writeWholeIsHeaderPlusOneBody() {
         // Mobis CCNC (h242): как Baidu, тело одним write любого размера
         val big = Wire.dataInner(Msg.VIDEO_DATA, 0, ByteArray(40000) { 1 })
-        val w = Wire.writeWhole(Ch.VIDEO, big)
+        val w = bulk(Ch.VIDEO, big, whole = true)
         assertEquals(2, w.size)
         assertEquals(8, w[0].size)
         assertEquals(big.size, Wire.u32(w[0], 4))
         assertEquals(Ch.VIDEO, Wire.u32(w[0], 0))
         assertTrue(w[1] === big)
-        assertEquals(1, Wire.writeWhole(Ch.CMD, ByteArray(0)).size)
+        assertEquals(1, bulk(Ch.CMD, ByteArray(0), whole = true).size)
     }
 
     @Test

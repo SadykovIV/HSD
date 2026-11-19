@@ -94,6 +94,8 @@ internal class DriveDeckLayoutProbe(spec: String, private val expectedGap: Int?)
         }
         fun edges() = bounds(viewDump(ui, activity), "N2").sortedBy { it.left }
         fun gap() = edges().let { if (it.size == 2) it[1].left - it[0].right else -1 }
+        val carRequests = java.util.concurrent.atomic.AtomicInteger()
+        val carControl = CarMenuControl.register(context) { carRequests.incrementAndGet() }
         try {
             // The first-run tutorial covers the entire launcher and deliberately consumes touch.
             if (bounds(viewDump(ui, activity), "Q3").isNotEmpty()) {
@@ -101,6 +103,12 @@ internal class DriveDeckLayoutProbe(spec: String, private val expectedGap: Int?)
                 poll("DriveDeck tutorial is still visible") { bounds(viewDump(ui, activity), "Q3").isEmpty() }
             }
             val originalGap = gap()
+            CarMenuControl.request(context, 0)
+            CarMenuControl.request(context, Int.MAX_VALUE)
+            SystemClock.sleep(150)
+            check(carRequests.get() == 0) { "Invalid parent accepted for car menu" }
+            click(element("Меню автомобиля", "Car menu"))
+            poll("DriveDeck did not request the native car menu") { carRequests.get() == 1 }
             val first = Rect()
             element("Изменить размер окон", "Resize windows").getBoundsInScreen(first)
             val x = first.centerX()
@@ -138,6 +146,11 @@ internal class DriveDeckLayoutProbe(spec: String, private val expectedGap: Int?)
                 checkNotNull(monitor.waitForActivityWithTimeout(8000)) { "Picker did not open the HSD fullscreen host" }
             } finally { test.removeMonitor(monitor) }
             check(ComponentName.unflattenFromString(host.intent.getStringExtra("component").orEmpty()) == entry)
+            tapCarMenu(test, ui, display, context.packageName) { x, y ->
+                remote.injectTouchPoints(MotionEvent.ACTION_DOWN, 0, intArrayOf(0), floatArrayOf(x.toFloat()), floatArrayOf(y.toFloat()))
+                remote.injectTouchPoints(MotionEvent.ACTION_UP, 0, intArrayOf(0), floatArrayOf(x.toFloat()), floatArrayOf(y.toFloat()))
+            }
+            poll("Fullscreen host did not request the native car menu") { carRequests.get() == 2 }
             poll("Fullscreen menu and Back must be accessible on the projection display") {
                 ui.windowsOnAllDisplays[display].orEmpty().any {
                     val root = it.root
@@ -148,8 +161,9 @@ internal class DriveDeckLayoutProbe(spec: String, private val expectedGap: Int?)
             }
             element(label)
             poll("Menu opened without returning to DriveDeck") { host.isDestroyed }
-            return "Injected touchscreen: spacing switch and divider, picker launch, fullscreen Menu, returned to app list on display $display"
+            return "Injected touchscreen: dock and fullscreen Car menu, invalid-display rejection, spacing switch and divider, picker launch, fullscreen Menu, returned to app list on display $display"
         } finally {
+            carControl.close()
             info.flags = originalFlags
             ui.serviceInfo = info
         }

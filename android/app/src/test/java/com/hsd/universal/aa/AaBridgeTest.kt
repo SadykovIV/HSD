@@ -528,6 +528,24 @@ class AaBridgeCoreTest {
     }
 
     @Test
+    fun desktopGestureFinishesWhileVideoMonitorIsOccupied() {
+        val peer = FakePeer()
+        core.peer = peer
+        core.desktopInputEnabled = true
+        val done = CountDownLatch(1)
+        val thread = Thread {
+            for (action in listOf(0, 2, 1)) core.onCarlifeTouch(action, 41, 65)
+            done.countDown()
+        }
+        synchronized(core) {
+            thread.start()
+            assertTrue("input blocked by video monitor", done.await(1, TimeUnit.SECONDS))
+        }
+        thread.join()
+        assertEquals(listOf(0, 2, 1), peer.touches.map { it.first })
+    }
+
+    @Test
     fun desktopCancelReleasesBothPointersAndStartsFreshGesture() {
         val peer = FakePeer()
         core.peer = peer

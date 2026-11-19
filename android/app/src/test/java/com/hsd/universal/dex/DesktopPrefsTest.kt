@@ -74,9 +74,9 @@ class DesktopPrefsTest {
         val context = MemoryPrefs()
         val prefs = DexPrefs(context)
         assertEquals(8, prefs.desktopBitrateMbps)
-        assertTrue(prefs.useSystemScreenTimeout)
+        assertFalse(prefs.desktopPanelControl)
         assertTrue(prefs.synchronizeAudioVideo)
-        prefs.useSystemScreenTimeout = false
+        prefs.desktopPanelControl = true
         prefs.synchronizeAudioVideo = false
         assertTrue(prefs.autoMusicPlayback)
         assertFalse(prefs.huNotificationsEnabled)
@@ -87,13 +87,28 @@ class DesktopPrefsTest {
         prefs.initialSetupCompleted = true
         val restored = DexPrefs(context)
         assertEquals(16, restored.desktopBitrateMbps)
-        assertFalse(restored.useSystemScreenTimeout)
+        assertTrue(restored.desktopPanelControl)
         assertFalse(restored.synchronizeAudioVideo)
         assertFalse(restored.autoMusicPlayback)
         assertTrue(restored.huNotificationsEnabled)
         assertTrue(restored.initialSetupCompleted)
         assertThrows(IllegalArgumentException::class.java) { prefs.desktopBitrateMbps = 0 }
         assertThrows(IllegalArgumentException::class.java) { prefs.desktopBitrateMbps = 21 }
+    }
+    @Test fun existingTimerRetainsItsEffectiveStateWhenScreenOwnershipIsUnified() {
+        for (system in listOf(true, false)) for (timer in listOf(true, false)) {
+            val context = MemoryPrefs()
+            context.values["system_screen_timeout"] = system
+            context.values["phone_idle_timer_enabled"] = timer
+            context.values["desktop_panel_control"] = true
+            val prefs = DexPrefs(context)
+            assertEquals(!system && timer, prefs.phoneTimerEnabled)
+            assertTrue(prefs.desktopPanelControl)
+            prefs.phoneTimerEnabled = true
+            assertTrue(DexPrefs(context).phoneTimerEnabled)
+            prefs.phoneTimerEnabled = false
+            assertFalse(DexPrefs(context).phoneTimerEnabled)
+        }
     }
     @Test fun activationMethodRemembersTransportWithoutSplittingTheDelegatedBackend() {
         val context = MemoryPrefs()

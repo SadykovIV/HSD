@@ -24,8 +24,13 @@ class FrameReader(input: InputStream, private val cryptor: () -> Cryptor?) {
 
     /** Only enabled for negotiation: normal media traffic creates no progress snapshots. */
     var trackProgress = false
+        set(value) {
+            if (value && !field) progress = ReadProgress()
+            field = value
+        }
     @Volatile var progress = ReadProgress()
         private set
+    var onFirstRead: (() -> Unit)? = null
 
     data class ReadProgress(
         val bytes: Long = 0, val frames: Int = 0, val stage: String = "idle",
@@ -44,7 +49,10 @@ class FrameReader(input: InputStream, private val cryptor: () -> Cryptor?) {
             val count = input.read(bytes, received, length - received)
             if (count < 0) throw EOFException("AAP ended while reading $stage ($received/$length)")
             received += count
-            if (trackProgress) progress = progress.copy(bytes = progress.bytes + count, received = received)
+            if (trackProgress) {
+                progress = progress.copy(bytes = progress.bytes + count, received = received)
+                if (count > 0) onFirstRead?.let { first -> onFirstRead = null; first() }
+            }
         }
     }
 

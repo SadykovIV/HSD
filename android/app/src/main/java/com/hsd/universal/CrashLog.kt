@@ -5,6 +5,10 @@ import android.app.ActivityManager
 import android.app.ApplicationExitInfo
 import android.content.Context
 import android.os.Build
+import android.os.SystemClock
+import android.util.AtomicFile
+import org.json.JSONObject
+import java.io.File
 import java.io.PrintWriter
 import java.io.StringWriter
 import java.text.SimpleDateFormat
@@ -23,6 +27,10 @@ object CrashLog {
     private const val STRINGS_MAX = 120
 
     @Volatile private var installed = false
+    @Volatile var cleanupEndedActivation = false
+        private set
+
+    internal fun activationReady() { cleanupEndedActivation = false }
 
     fun install(ctx: Context) {
         if (installed) return
@@ -51,7 +59,21 @@ object CrashLog {
         val am = ctx.getSystemService(ActivityManager::class.java) ?: return
         val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val seen = prefs.getLong(KEY_SEEN, 0L)
-        val list = am.getHistoricalProcessExitReasons(ctx.packageName, 0, 10)
+        val history = am.getHistoricalProcessExitReasons(ctx.packageName, 0, 10)
+        val lastMain = history.filter { it.processName == ctx.packageName }.maxByOrNull { it.timestamp }
+        if (lastMain?.reason == ApplicationExitInfo.REASON_OTHER && lastMain.description == "SwipeUpClean" &&
+            android.app.Application.getProcessName() == ctx.packageName) {
+            // Consult the last status written by HSD. This is only used to explain an interruption.
+            cleanupEndedActivation = runCatching {
+                val file = AtomicFile(File(ctx.filesDir, "computer-access-status.json"))
+                val status = file.openRead().use { JSONObject(it.bufferedReader().readText()) }
+                val lastInstall = ctx.packageManager.getPackageInfo(ctx.packageName, 0).lastUpdateTime
+                val boot = System.currentTimeMillis() - SystemClock.elapsedRealtime()
+                ActivationExitEvidence.matches(lastMain.pid, lastMain.timestamp, status.optInt("pid"),
+                    status.optBoolean("ready"), file.baseFile.lastModified(), maxOf(lastInstall, boot))
+            }.getOrDefault(false)
+        }
+        val list = history
             .filter { it.timestamp > seen }
             .sortedBy { it.timestamp }
         if (list.isEmpty()) return
@@ -139,4 +161,10 @@ object CrashLog {
         ApplicationExitInfo.REASON_OTHER -> "OTHER"
         else -> "reason=$r"
     }
+}
+
+/** A cleanup record alone does not say whether desktop access was active when Android stopped HSD. */
+internal object ActivationExitEvidence {
+    fun matches(exitPid: Int, exitAt: Long, savedPid: Int, wasReady: Boolean, savedAt: Long, since: Long) =
+        wasReady && savedPid > 0 && savedPid == exitPid && savedAt in since..exitAt
 }

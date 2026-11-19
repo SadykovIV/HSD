@@ -9,4 +9,6 @@
     <!-- Language names are written in their own language and are not translated. -->
     <string name="lang_en" translatable="false">English</string>
     <string name="lang_ru" translatable="false">Русский</string>
+    <string name="projection_separate_navigation">Separate navigation channel</string>
+    <string name="projection_separate_navigation_help">Send guidance through the head unit’s voice channel when a compatible channel is available. Otherwise guidance stays in the mixed output. Reconnect to apply.</string>
 </resources>

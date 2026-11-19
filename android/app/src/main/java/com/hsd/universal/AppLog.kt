@@ -3,6 +3,8 @@ package com.hsd.universal
 import android.content.Context
 import android.os.Build
 import android.util.Log
+import com.hsd.universal.update.ComponentPackages
+import com.hsd.universal.update.DesktopComponent
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -41,6 +43,8 @@ object AppLog {
         i("лог: ${f.absolutePath}")
         i("$TAG ${BuildConfig.VERSION_NAME} (code ${BuildConfig.VERSION_CODE}), " +
             "Android ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT}), ${Build.MANUFACTURER} ${Build.MODEL}")
+        val driveDeck = runCatching { ComponentPackages.installed(ctx, DesktopComponent.DRIVEDECK) }.getOrNull()
+        if (driveDeck != null) i("DriveDeck ${driveDeck.versionName} (code ${driveDeck.longVersionCode})", false)
         CrashLog.install(ctx)
     }
 

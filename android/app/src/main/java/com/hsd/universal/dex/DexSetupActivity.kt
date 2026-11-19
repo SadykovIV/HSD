@@ -8,7 +8,6 @@ import com.hsd.universal.ProjectionRoute
 import com.hsd.universal.ProjectionWifi
 import com.hsd.universal.DesktopTransport
 
-import com.hsd.universal.link.ReceiverAudioCalibration
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
@@ -72,6 +71,7 @@ open class DexSetupActivity : Activity() {
     private lateinit var progress: ProgressBar
     private lateinit var installedVersions: TextView
     private var driveDeckInstalled = false
+    private var driveDeckPlaybackUpdate = false
     private lateinit var installProfileButton: Button
     private var connectionModeChoice: Button? = null
     private var projectionRouteRow: DesktopSetupViews.NavigationRow? = null
@@ -112,9 +112,9 @@ open class DexSetupActivity : Activity() {
     private var idleModeHelp = ""
     private val phoneIdle by lazy {
         PhoneScreenIdleController(this,
-            isEnabled = { !prefs.useSystemScreenTimeout && when (prefs.phoneIdleMode) {
-                PhoneIdleMode.CURTAIN -> prefs.desktopPanelControl
-                PhoneIdleMode.PANEL -> !CarLifePhoneIdleTimer.ownsPhysicalTimer && prefs.desktopPanelControl &&
+            isEnabled = { prefs.desktopPanelControl && when (prefs.phoneIdleMode) {
+                PhoneIdleMode.CURTAIN -> true
+                PhoneIdleMode.PANEL -> !CarLifePhoneIdleTimer.ownsPhysicalTimer &&
                     (prefs.useShizuku || prefs.useDelegated && DelegatedPanelAccess.hasPermission(this))
                 PhoneIdleMode.DISABLED -> false
             } },
@@ -160,7 +160,6 @@ open class DexSetupActivity : Activity() {
     private lateinit var autoMusicChoice: DesktopSetupViews.Toggle
     private lateinit var imageSettings: LinearLayout
     private lateinit var audioSettings: LinearLayout
-    private lateinit var phoneSettings: LinearLayout
     private lateinit var phoneControlDetails: LinearLayout
     private lateinit var accessChoice: Button
     private lateinit var adbOptions: Button
@@ -173,7 +172,6 @@ open class DexSetupActivity : Activity() {
     private lateinit var resolutionChoice: Button
     private lateinit var fpsChoice: Button
     private lateinit var bitrateChoice: Button
-    private lateinit var avSyncChoice: DesktopSetupViews.Toggle
     private var videoTuningHelp = ""
     private lateinit var usbAudioChoice: DesktopSetupViews.Toggle
     private var usbAudioHelp = ""
@@ -258,9 +256,9 @@ open class DexSetupActivity : Activity() {
                 main.postDelayed(this, 500)
                 return
             }
-            if (ProjectionRoute.wireless(this@DexSetupActivity) && !ProjectionRoute.selected(this@DexSetupActivity).carLife) {
+            val route = ProjectionRoute.selected(this@DexSetupActivity)
+            if (route.usesLocalNetwork && !route.carLife) {
                 continuePendingConnection()
-                val route = ProjectionRoute.selected(this@DexSetupActivity)
                 when {
                     desktopConnectionReady() -> showState(getString(R.string.desktop_connected, desktopName), route.label(this@DexSetupActivity) + ". " + DesktopAudioState.status(this@DexSetupActivity))
                     BridgeService.alive -> showState(route.label(this@DexSetupActivity), CarLifeState.status(this@DexSetupActivity), busy = true)
@@ -418,7 +416,6 @@ open class DexSetupActivity : Activity() {
             return
         }
         AppLog.init(this)
-        com.hsd.universal.AaIdentityUpdates.maybeCheck(this)
         prefs = DexPrefs(this)
         launchInitialSetup = savedInstanceState == null && prefs.initialSetupAutoPending &&
             !prefs.initialSetupCompleted && !intent.getBooleanExtra(EXTRA_SHOW_ACTIVATION, false) &&
@@ -491,7 +488,7 @@ open class DexSetupActivity : Activity() {
         when {
             setupRequested && prefs.useDelegated && !DelegatedDesktopAccess.isReady(this) -> showDelegatedSetup()
             stopped -> showState(getString(R.string.desktop_stopped), getString(R.string.desktop_reconnect_the_usb_cable_or_tap_connect))
-            !ProjectionRoute.wireless(this) && WirelessPrefs(this).mode == CarLifeConnectionMode.USB && Actions.isUsbDetachedIdle() -> showUsbDetached()
+            ProjectionRoute.selected(this).usesUsbAccessory && WirelessPrefs(this).mode == CarLifeConnectionMode.USB && Actions.isUsbDetachedIdle() -> showUsbDetached()
             BridgeService.alive && CarLifeState.running -> { armed = true; monitorBridge = true; bridgeStartedAt = SystemClock.elapsedRealtime() }
             prefs.useDesktopService -> beginConnect(explicit = false)
             workerBusy.get() -> {
@@ -603,7 +600,7 @@ open class DexSetupActivity : Activity() {
             startActivity(Intent(this, DesktopOnboardingActivity::class.java))
         }
         settingsNavigator = DesktopSettingsNavigator(ui, settingsPage, settings) {
-            if (wizardStep) returnToWizardPermissions() else if (intent.getBooleanExtra(EXTRA_RETURN_TO_SETUP, false)) finish() else openSettings(false)
+            if (wizardStep) returnToWizard() else if (intent.getBooleanExtra(EXTRA_RETURN_TO_SETUP, false)) finish() else openSettings(false)
         }
         val activation = settingsNavigator.subpage("activation", getString(R.string.desktop_activation), "")
         if (wizardStep) ui.text(activation, getString(R.string.desktop_initial_setup_3_of_3), 14f)
@@ -634,7 +631,11 @@ open class DexSetupActivity : Activity() {
             phoneIdle.showNow(manualCurtain = true)
         }
         phoneScreenHint = ui.text(connection, "", 13f)
-        setupAccessButton = ui.button(connection, getString(R.string.desktop_activate)) { openActivationSetup() }
+        setupAccessButton = ui.button(connection, getString(R.string.desktop_activate)) {
+            openActivationSetup()
+            if (com.hsd.universal.CrashLog.cleanupEndedActivation && prefs.activationMethod == ActivationMethod.WIFI &&
+                prefs.hasPaired && !DelegatedDesktopAccess.isReady(this)) beginPhoneActivation()
+        }
 
         val profile = ui.section(home, getString(R.string.desktop_profile))
         desktopChoice = ui.button(profile, getString(R.string.desktop_profile_6aef, desktopProfileName)) {
@@ -746,7 +747,9 @@ open class DexSetupActivity : Activity() {
         setupDoneButton = ui.button(activation, getString(R.string.desktop_home)) {
             if (wizardStep) {
                 wizardProfileAvailable = DesktopOnboardingActivity.profileAvailable(this, prefs)
-                if (wizardCanFinish()) {
+                if (!wizardProfileAvailable) {
+                    returnToWizard(0)
+                } else if (wizardCanFinish()) {
                     prefs.initialSetupCompleted = true
                     prefs.initialSetupAutoPending = false
                     prefs.initialSetupInProgress = false
@@ -878,7 +881,9 @@ open class DexSetupActivity : Activity() {
 
     /** Local installed package versions only; never called from the periodic status renderer. */
     private fun renderInstalledVersions() {
-        driveDeckInstalled = runCatching { ComponentPackages.trustedInstalled(this, DesktopComponent.DRIVEDECK) != null }.getOrDefault(false)
+        val driveDeck = runCatching { ComponentPackages.trustedInstalled(this, DesktopComponent.DRIVEDECK) }.getOrNull()
+        driveDeckInstalled = driveDeck != null
+        driveDeckPlaybackUpdate = DesktopComponent.DRIVEDECK.needsPlaybackUpdate(driveDeck?.longVersionCode)
         val components = DesktopComponent.entries.mapNotNull { spec ->
             val info = try { ComponentPackages.installed(this, spec) }
                 catch (_: SecurityException) { null }
@@ -902,33 +907,31 @@ open class DexSetupActivity : Activity() {
         ui.help(usbAudioChoice.row, getString(R.string.desktop_send_audio_over_usb, projectionName)) { usbAudioHelp }
         usbAudioStatus = ui.text(audioSettings, "", 13f)
         ProjectionAudioSettings.add(this, ui, audioSettings, prefs)
-        avSyncChoice = ui.toggle(audioSettings, getString(R.string.desktop_av_sync_enabled), prefs.synchronizeAudioVideo) { checked ->
-            if (!applyingAccessChoice && !accessChoiceLocked()) prefs.synchronizeAudioVideo = checked
+        val avSyncChoice = ui.toggle(audioSettings, getString(R.string.desktop_av_sync_enabled), prefs.synchronizeAudioVideo) { checked ->
+            prefs.synchronizeAudioVideo = checked
         }
         ui.help(avSyncChoice.row, getString(R.string.desktop_av_sync_enabled)) { getString(R.string.desktop_av_sync_help) }
-        ui.button(audioSettings, getString(R.string.desktop_audio_sync)) { showReceiverAudioTiming() }
+        ui.button(audioSettings, getString(R.string.desktop_audio_sync)) {
+            ProjectionAudioSettings.timing(this, ui, prefs) { avSyncChoice.control.isChecked = prefs.synchronizeAudioVideo }
+        }
         autoMusicChoice = ui.toggle(audioSettings, getString(R.string.desktop_resume_music_automatically_on_connection), prefs.autoMusicPlayback) {
             prefs.autoMusicPlayback = it
         }
         ui.help(autoMusicChoice.row, getString(R.string.desktop_resume_music_automatically_on_connection)) {
             getString(R.string.desktop_access_mode_the_music_continues_after_the_image_and, DesktopTransport.shortName)
         }
-        phoneSettings = settingsNavigator.subpage("phone-display", getString(R.string.desktop_phone_screen_control), "")
-        val systemSleepChoice = ui.toggle(phoneSettings, getString(R.string.desktop_system_sleep), prefs.useSystemScreenTimeout) { checked ->
-            prefs.useSystemScreenTimeout = checked
-            phoneIdle.refresh()
-            renderPhoneScreenControl()
-        }
-        ui.help(systemSleepChoice.row, getString(R.string.desktop_system_sleep)) { getString(R.string.desktop_system_sleep_help) }
-        ui.text(phoneSettings, getString(R.string.desktop_when_the_control_is_turned_off_the_phone_controls, DesktopTransport.shortName, projectionName))
-        panelControlChoice = ui.toggle(phoneSettings, getString(R.string.desktop_managing_the_phone_display), prefs.desktopPanelControl) { checked ->
+        val phoneSettings = settingsNavigator.block()
+        val screenOwner = getString(R.string.desktop_managing_the_phone_display, DesktopTransport.appName)
+        panelControlChoice = ui.toggle(phoneSettings, screenOwner, prefs.desktopPanelControl) { checked ->
             if (!applyingAccessChoice && !accessChoiceLocked()) {
                 prefs.desktopPanelControl = checked
                 phoneIdle.refresh()
                 renderAccessControls()
             }
         }
-        ui.help(panelControlChoice.row, getString(R.string.desktop_managing_the_phone_display)) { panelControlHelp }
+        ui.help(panelControlChoice.row, screenOwner) {
+            getString(R.string.desktop_phone_screen_owner_hint) + "\n\n" + panelControlHelp
+        }
         phoneControlDetails = ui.group(phoneSettings)
         panelControlStatus = ui.text(phoneControlDetails, "", 13f)
         idleModeChoice = ui.button(phoneControlDetails, getString(R.string.desktop_how_to_turn_off_the_screen)) {
@@ -990,37 +993,6 @@ open class DexSetupActivity : Activity() {
             getString(R.string.desktop_opens_the_android_system_settings_allow_the_navigator_to, DesktopTransport.shortName)
         }
 
-    }
-
-    private fun showReceiverAudioTiming() {
-        val dialog = AlertDialog.Builder(this).setTitle(getString(R.string.desktop_audio_sync))
-        if (!prefs.synchronizeAudioVideo) {
-            dialog.setMessage(getString(R.string.desktop_av_sync_disabled))
-                .setPositiveButton(getString(R.string.apps_warn_ok), null).show()
-            return
-        }
-        val selected = ReceiverAudioCalibration.selected(this)
-        if (selected == null) {
-            dialog.setMessage(getString(R.string.desktop_synchronization_works_automatically_here_you_can_make_an_adjustment, projectionName))
-                .setPositiveButton(getString(R.string.apps_warn_ok), null).show()
-            return
-        }
-        val input = EditText(this).apply {
-            inputType = InputType.TYPE_CLASS_NUMBER
-            filters = arrayOf(InputFilter.LengthFilter(4))
-            setSingleLine(); setText(selected.ms.toString()); selectAll()
-            contentDescription = getString(R.string.desktop_additional_audio_delay_in_milliseconds)
-        }
-        val alert = dialog.setMessage(getString(R.string.desktop_synchronizes_the_streams_automatically_if_the_sound_is_from, selected.name, DesktopTransport.shortName, projectionName))
-            .setView(input).setNegativeButton(getString(R.string.mock_cancel), null).setPositiveButton(getString(R.string.desktop_save), null).create()
-        alert.setOnShowListener {
-            alert.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val ms = input.text.toString().toIntOrNull()
-                if (ms == null || ms !in 0..ReceiverAudioCalibration.MAX_MS) input.error = getString(R.string.desktop_enter_0_to_2000_ms)
-                else { ReceiverAudioCalibration.set(this, selected, ms); alert.dismiss() }
-            }
-        }
-        alert.show()
     }
 
     private fun buildPermissionSettings() {
@@ -1304,17 +1276,20 @@ open class DexSetupActivity : Activity() {
         if (!visible || stopped) return
         if (!DesktopAccess.isReadyForProjection(this)) { showAccessSetup(); return }
         if (wizardStep) {
-            showState(getString(R.string.desktop_access_is_active), getString(R.string.desktop_tap_finish_setup_then_connect_to_your_head_unit))
+            val hint = if (wizardProfileAvailable) R.string.desktop_tap_finish_setup_then_connect_to_your_head_unit
+                else R.string.desktop_install_the_selected_component_or_select_the_built_in
+            showState(getString(R.string.desktop_access_is_active), getString(hint))
             return
         }
         setup.visibility = View.GONE
         shizukuSetup.visibility = View.GONE
         armed = true
-        if (ProjectionRoute.wireless(this) && !ProjectionRoute.selected(this).carLife) {
+        val route = ProjectionRoute.selected(this)
+        if (route.usesLocalNetwork && !route.carLife) {
             if (!BridgeService.alive && !stopped) {
                 try {
                     startForegroundService(DesktopTransport.service(this))
-                    showState(ProjectionRoute.selected(this).label(this), getString(R.string.desktop_connecting_to_head_unit), busy = true)
+                    showState(route.label(this), getString(R.string.desktop_connecting_to_head_unit), busy = true)
                 } catch (failure: RuntimeException) {
                     armed = false
                     showState(getString(R.string.desktop_connection_failed), failure.message.orEmpty())
@@ -1363,9 +1338,13 @@ open class DexSetupActivity : Activity() {
         if (DelegatedDesktopAccess.isReady(this)) {
             showState(getString(R.string.desktop_access_active, DesktopTransport.shortName), getString(R.string.desktop_connect_using_the_selected_method_the_desktop_will_start, projectionName))
         } else {
-            showState(getString(R.string.desktop_activation_required), getString(R.string.desktop_activate_then_plug_in_in_the_chosen_way, DesktopTransport.shortName, projectionName))
+            showState(getString(R.string.desktop_activation_required), missingAccessMessage())
         }
     }
+
+    private fun missingAccessMessage() = if (prefs.useDelegated && com.hsd.universal.CrashLog.cleanupEndedActivation)
+        getString(R.string.activation_interrupted_by_cleanup)
+    else getString(R.string.desktop_activate_then_plug_in_in_the_chosen_way, DesktopTransport.shortName, projectionName)
 
     private fun openActivationSetup() {
         setupRequested = true
@@ -1378,8 +1357,8 @@ open class DexSetupActivity : Activity() {
     private fun wizardCanFinish(): Boolean = DesktopOnboardingPolicy.canComplete(prefs.initialSetupReviewed,
         wizardProfileAvailable, if (prefs.useDelegated) DesktopAccess.activationSetupComplete(this) else DesktopAccess.isReadyForProjection(this))
 
-    private fun returnToWizardPermissions() {
-        prefs.initialSetupStep = 1
+    private fun returnToWizard(step: Int = 1) {
+        prefs.initialSetupStep = step
         startActivity(Intent(this, DesktopOnboardingActivity::class.java))
         finish()
     }
@@ -1735,7 +1714,7 @@ open class DexSetupActivity : Activity() {
     private fun activationExplanation(status: DesktopActivationUiPolicy.Status): String = when (status.state) {
         DesktopActivationUiPolicy.State.ACTIVATING -> hint.text.toString()
         DesktopActivationUiPolicy.State.INCOMPLETE -> getString(R.string.desktop_the_permissions_are_retained_but_the_current_activation_check)
-        DesktopActivationUiPolicy.State.NEEDS_ACCESS -> getString(R.string.desktop_activate_in_the_selected_way_then_connect, DesktopTransport.shortName, projectionName)
+        DesktopActivationUiPolicy.State.NEEDS_ACCESS -> missingAccessMessage()
         DesktopActivationUiPolicy.State.NEEDS_UPDATED_ACCESS -> getString(R.string.desktop_selected_features_need_additional_permissions_complete_the_current_access, DesktopTransport.shortName)
         DesktopActivationUiPolicy.State.DESKTOP_UNAVAILABLE -> getString(R.string.desktop_application_permissions_are_saved_but_the_independent_screen_is)
         DesktopActivationUiPolicy.State.CONNECTED -> listOf(getString(R.string.desktop_projecting_to, projectionName, DesktopAudioState.status(this@DexSetupActivity)), recoveryExplanation(status)).filter(String::isNotBlank).joinToString("\n")
@@ -1751,12 +1730,18 @@ open class DexSetupActivity : Activity() {
         val accessReady = DesktopAccess.isReady(this)
         initialSetupSection.visibility = if (prefs.initialSetupCompleted) View.GONE else View.VISIBLE
         setupDoneButton.visibility = if (wizardStep || !PhonePairingService.active && !phoneLaunchCommitted) View.VISIBLE else View.GONE
-        setupDoneButton.isEnabled = !wizardStep || (!PhonePairingService.active && !phoneLaunchCommitted && wizardCanFinish())
-        setupDoneButton.updateText(if (wizardStep) getString(R.string.desktop_finish_setup) else if (intent.getBooleanExtra(EXTRA_RETURN_TO_SETUP, false)) getString(R.string.desktop_return_to_setup) else getString(R.string.desktop_home))
+        setupDoneButton.isEnabled = !wizardStep || (!PhonePairingService.active && !phoneLaunchCommitted && (!wizardProfileAvailable || wizardCanFinish()))
+        setupDoneButton.updateText(getString(when {
+            wizardStep && !wizardProfileAvailable -> R.string.desktop_choose_desktop
+            wizardStep -> R.string.desktop_finish_setup
+            intent.getBooleanExtra(EXTRA_RETURN_TO_SETUP, false) -> R.string.desktop_return_to_setup
+            else -> R.string.desktop_home
+        }))
         val activationReady = DesktopAccess.activationSetupComplete(this)
         val activationUi = activationUiStatus(activationReady)
         setupAccessButton.visibility = if (activationReady || activationUi.state == DesktopActivationUiPolicy.State.CONNECTED) View.GONE else View.VISIBLE
-        setupAccessButton.updateText(if (computerReady) getString(R.string.desktop_reactivate) else getString(R.string.desktop_activate))
+        setupAccessButton.updateText(if (computerReady || prefs.useDelegated && com.hsd.universal.CrashLog.cleanupEndedActivation)
+            getString(R.string.desktop_reactivate) else getString(R.string.desktop_activate))
         setupAccessButton.isEnabled = !PhonePairingService.active && !phoneLaunchCommitted
         val activationInProgress = restoringDebugMode || activationStopPending || PhonePairingService.active || phoneLaunchCommitted
         settingsNavigator.summary("activation", activationSummary(activationUi))
@@ -1786,9 +1771,12 @@ open class DexSetupActivity : Activity() {
         adbOptions.updateText(if (manualAdbOpen) getString(R.string.desktop_hide_manual_entry) else getString(R.string.desktop_enter_address_and_ports_manually))
         desktopChoice.updateText(getString(R.string.desktop_profile_6aef, desktopProfileName))
         desktopChoice.isEnabled = enabled
-        installProfileButton.visibility = if (prefs.desktopMode == DesktopModePolicy.DRIVEDECK && !driveDeckInstalled) View.VISIBLE else View.GONE
+        installProfileButton.visibility = if (prefs.desktopMode == DesktopModePolicy.DRIVEDECK && (!driveDeckInstalled || driveDeckPlaybackUpdate)) View.VISIBLE else View.GONE
+        installProfileButton.updateText(if (driveDeckPlaybackUpdate) getString(R.string.drivedeck_update_button)
+            else getString(R.string.desktop_install_drivedeck, BuildConfig.BRAND))
         desktopChoiceHint.updateText(if (prefs.desktopMode == DesktopModePolicy.DRIVEDECK && !driveDeckInstalled)
             getString(R.string.desktop_for_this_profile_install_drivedeck_the_normal_version_of, BuildConfig.BRAND)
+            else if (prefs.desktopMode == DesktopModePolicy.DRIVEDECK && driveDeckPlaybackUpdate) getString(R.string.drivedeck_playback_update)
             else if (!enabled) getString(R.string.desktop_to_change_the_profile_stop_the_connection)
             else when (prefs.desktopMode) {
                 DesktopModePolicy.DRIVEDECK -> getString(R.string.desktop_map_and_music_side_by_side_on_the_head)
@@ -1812,7 +1800,6 @@ open class DexSetupActivity : Activity() {
         resolutionChoice.isEnabled = enabled && desktop
         fpsChoice.isEnabled = enabled && desktop
         bitrateChoice.isEnabled = enabled && desktop
-        avSyncChoice.setEnabled(enabled && desktop)
         resolutionChoice.updateText(getString(R.string.desktop_resolution, prefs.desktopResolutionLabel))
         densityChoice.updateText(getString(R.string.desktop_interface_size, if (prefs.desktopDensity == 0) getString(R.string.desktop_auto) else "${prefs.desktopDensity} DPI"))
         fpsChoice.updateText(getString(R.string.desktop_fps_limit_value, getString(prefs.desktopFps.titleRes)))
@@ -1847,8 +1834,7 @@ open class DexSetupActivity : Activity() {
         applyingAccessChoice = true
         try { panelControlChoice.control.isChecked = prefs.desktopPanelControl } finally { applyingAccessChoice = false }
         panelControlChoice.setEnabled(enabled && desktop)
-        settingsNavigator.summary("phone-display", if (prefs.desktopPanelControl) getString(R.string.desktop_manages, DesktopTransport.appName) else getString(R.string.desktop_screen_control_phone))
-        phoneControlDetails.visibility = View.VISIBLE
+        phoneControlDetails.visibility = if (prefs.desktopPanelControl) View.VISIBLE else View.GONE
         idleModeChoice.isEnabled = desktop && prefs.desktopPanelControl
         idleTimeoutChoice.isEnabled = desktop && prefs.desktopPanelControl
         panelControlHelp = when {
@@ -1924,13 +1910,13 @@ open class DexSetupActivity : Activity() {
 
     private fun renderConnectionControl() {
         projectionWifiButton.visibility = if (CarLifeState.waitingForProjectionWifi) View.VISIBLE else View.GONE
-        val wireless = ProjectionRoute.wireless(this) || !WirelessCarLife.preferUsb(this)
+        val accessory = ProjectionRoute.selected(this).usesUsbAccessory && WirelessCarLife.preferUsb(this)
         val state = DesktopConnectionButtonPolicy.state(
-            stopped = stopped, detached = !wireless && Actions.isUsbDetachedIdle(),
+            stopped = stopped, detached = accessory && Actions.isUsbDetachedIdle(),
             serviceAlive = BridgeService.alive, desktopRunning = DexState.running,
             carLifeRunning = CarLifeState.running,
             videoFlowing = DesktopConnectionState.videoIsFlowing(SystemClock.elapsedRealtime()),
-            failed = DexState.error != null || !wireless && Actions.lastUsbResult.state == Actions.UsbScanState.FAILED,
+            failed = DexState.error != null || accessory && Actions.lastUsbResult.state == Actions.UsbScanState.FAILED,
             working = screenBusy || deferredConnect || restartAt != 0L ||
                 permissionAction != null || shizukuPermissionToken != null,
             connectionPending = armed || monitorBridge && BridgeService.alive,
@@ -1964,7 +1950,6 @@ open class DexSetupActivity : Activity() {
             (prefs.desktopPanelControl || DexState.phoneScreenOff)
         val visibility = if (available) View.VISIBLE else View.GONE
         val mode = prefs.phoneScreenMode
-        idleTimeoutChoice.isEnabled = !prefs.useSystemScreenTimeout
         val canBlankPanel = available && prefs.desktopPanelControl && (prefs.useShizuku || prefs.useDelegated && DelegatedPanelAccess.isAvailable(this))
         idleModeChoice.updateText(getString(R.string.desktop_deactivation_method, getString(mode.labelRes)))
         idleTimeoutChoice.updateText(getString(R.string.desktop_extinguish_through, if (prefs.phoneTimerEnabled) getString(prefs.phoneIdleTimeout.labelRes) else getString(R.string.desktop_no_timer)))
@@ -2244,7 +2229,7 @@ open class DexSetupActivity : Activity() {
 
     private fun usbAttached(attachment: Long? = Actions.observeUsbConnection(this)) {
         if (wizardStep || intent.getBooleanExtra(EXTRA_RETURN_TO_SETUP, false) || restartAt != 0L) return
-        if (ProjectionRoute.wireless(this)) return
+        if (!ProjectionRoute.selected(this).usesUsbAccessory) return
         if (phoneLaunchCommitted || PhonePairingService.active || WirelessPrefs(this).mode == CarLifeConnectionMode.WIFI) return
         if (stopped) return
         if (attachment != null) lastUsbAttachment = attachment
@@ -2299,7 +2284,10 @@ open class DexSetupActivity : Activity() {
         cancelContinuation()
         bridgeStartedAt = 0
         lastError = ""
-        if (BridgeService.alive) {
+        val connectedHint = Actions.reconnectHint(this)
+        if (connectedHint != null) {
+            showState(getString(R.string.usb_reconnect_waiting), connectedHint)
+        } else if (BridgeService.alive) {
             showState(getString(R.string.desktop_usb_disconnected), getString(R.string.desktop_there_s_a_short_pause_to_reconnect_if_the))
         } else {
             showState(getString(R.string.desktop_session_stopped), getString(R.string.desktop_the_phone_can_be_connected_to_the_computer_the, projectionName))

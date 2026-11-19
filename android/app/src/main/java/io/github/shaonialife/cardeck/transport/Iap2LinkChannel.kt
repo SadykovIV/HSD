@@ -15,8 +15,9 @@ class Iap2LinkChannel(
     private val stream: DuplexStream,
     name: String = "iap2-link",
     private val log: (String) -> Unit = {},
+    controlVersion: Int = 2,
 ) : Closeable {
-    private val engine = Iap2LinkEngine()
+    private val engine = Iap2LinkEngine(controlVersion = controlVersion)
     private val lock = Object()
     private val controls = LinkedBlockingQueue<ByteArray?>()
     private val readyLatch = CountDownLatch(1)
@@ -34,6 +35,8 @@ class Iap2LinkChannel(
     private var txFrameLogs = 0
 
     val isAlive: Boolean get() = !terminated
+
+    val negotiatedControlVersion: Int get() = synchronized(lock) { engine.negotiatedControlVersion }
 
     fun progressSummary(): String = synchronized(lock) { engine.progressSummary() }
 
@@ -94,7 +97,7 @@ class Iap2LinkChannel(
             if (terminated) return false
             val accepted = engine.sendControl(bytes, nowMillis(), awaitAck)
             drainOutputLocked()
-            return accepted
+            return accepted && !terminated
         }
     }
 

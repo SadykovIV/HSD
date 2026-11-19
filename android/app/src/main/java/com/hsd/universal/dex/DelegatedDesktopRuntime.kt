@@ -85,11 +85,11 @@ internal class DelegatedDesktopRuntime(private val context: Context, private val
         inputGateway.unregisterDisplay(id, token)
     }
 
-    override fun launchDesktop(mode: Int, id: Int) {
+    override fun launchDesktop(mode: Int, id: Int, sessionId: Long) {
         val component = DelegatedDesktopPolicy.desktopComponent(mode, id, context.packageName)
         val activity = if (mode == DesktopModePolicy.DRIVEDECK) DesktopModePolicy.driveDeckHome(context) else component.className
         launch(id, ComponentName(component.packageName, activity), component.ownActivity, requireLauncher = false,
-            secondaryHome = mode == DesktopModePolicy.SAMSUNG_DEX)
+            secondaryHome = mode == DesktopModePolicy.SAMSUNG_DEX, sessionId = sessionId)
     }
 
     override fun launchChild(parentId: Int, id: Int, packageName: String, className: String, desktopPane: Boolean) {
@@ -100,7 +100,7 @@ internal class DelegatedDesktopRuntime(private val context: Context, private val
     }
 
     private fun launch(id: Int, component: ComponentName, ownActivity: Boolean, requireLauncher: Boolean, desktopPane: Boolean = false,
-                      secondaryHome: Boolean = false) {
+                      secondaryHome: Boolean = false, sessionId: Long = 0) {
         require(id > 0) { "Запуск на основном экране запрещён" }
         val pm = context.packageManager
         val info = pm.getActivityInfo(component, 0)
@@ -123,6 +123,7 @@ internal class DelegatedDesktopRuntime(private val context: Context, private val
         if (secondaryHome) intent.addCategory(Intent.CATEGORY_SECONDARY_HOME)
         if (!requireLauncher && component.packageName == DesktopModePolicy.DRIVEDECK_PACKAGE) {
             intent.putExtra(ProjectionHost.PACKAGE, context.packageName).putExtra(ProjectionHost.DISPLAY, id)
+                .putExtra(ProjectionHost.SESSION, sessionId)
         }
         if (requireLauncher || component.packageName == DesktopModePolicy.DRIVEDECK_PACKAGE) {
             intent.addCategory(Intent.CATEGORY_LAUNCHER)

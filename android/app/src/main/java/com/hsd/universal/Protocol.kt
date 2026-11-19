@@ -287,13 +287,16 @@ object Wire {
     }
 
     /** Внутреннее VIDEO/... сообщение: [len u32][time u32][type u32] + data. */
-    fun dataInner(type: Int, time: Int, data: ByteArray?): ByteArray {
-        val n = data?.size ?: 0
+    fun dataInner(type: Int, time: Int, data: ByteArray?): ByteArray =
+        dataInner(type, time, data, 0, data?.size ?: 0)
+
+    fun dataInner(type: Int, time: Int, data: ByteArray?, offset: Int, n: Int): ByteArray {
+        require(offset >= 0 && n in 0..Int.MAX_VALUE - 12 && offset <= (data?.size ?: 0) - n)
         val m = ByteArray(12 + n)
         putU32(m, 0, n)
         putU32(m, 4, time)
         putU32(m, 8, type)
-        if (data != null) System.arraycopy(data, 0, m, 12, n)
+        if (data != null) System.arraycopy(data, offset, m, 12, n)
         return m
     }
 
@@ -301,24 +304,15 @@ object Wire {
      * Последовательность отдельных write(): сначала 8-байтный заголовок, затем тело кусками <= 16384
      * (так делает HU Baidu и на это рассчитан f_accessory, спека §1.4).
      */
-    fun writeSequence(chan: Int, inner: ByteArray): List<ByteArray> {
-        val out = ArrayList<ByteArray>()
-        out.add(outerHeader(chan, inner.size))
+    inline fun writeBulk(chan: Int, inner: ByteArray, whole: Boolean, write: (ByteArray, Int, Int) -> Unit) {
+        write(outerHeader(chan, inner.size), 0, 8)
         var p = 0
         while (p < inner.size) {
-            val n = minOf(CHUNK, inner.size - p)
-            out.add(inner.copyOfRange(p, p + n))
+            val n = if (whole) inner.size else minOf(CHUNK, inner.size - p)
+            write(inner, p, n)
             p += n
         }
-        return out
     }
-
-    /**
-     * Запись как у Baidu (AoaWriteTransport :73-85, AOAConnectManager :177-190): 8 байт заголовка одним write,
-     * весь inner одним write любого размера. Для ГУ Mobis CCNC (h242).
-     */
-    fun writeWhole(chan: Int, inner: ByteArray): List<ByteArray> =
-        if (inner.isEmpty()) listOf(outerHeader(chan, 0)) else listOf(outerHeader(chan, inner.size), inner)
 
     fun parseCmd(inner: ByteArray): CmdMsg? {
         if (inner.size < 8) return null
@@ -752,13 +746,21 @@ object AnnexB {
         }
     }
 
-    fun units(data: ByteArray): List<UnitRange> {
+    fun units(data: ByteArray): List<UnitRange> = units(data, 0, data.size)
+
+    fun units(data: ByteArray, offset: Int, endExclusive: Int): List<UnitRange> {
         val result = ArrayList<UnitRange>()
         var prefix = -1
-        var start = 0
-        var i = 0
-        while (i + 2 < data.size) {
-            if (data[i].toInt() != 0 || data[i + 1].toInt() != 0 || data[i + 2].toInt() != 1) {
+        var start = offset
+        var i = offset
+        while (i + 2 < endExclusive) {
+            val third = data[i + 2].toInt()
+            // A nonzero byte other than 1 cannot belong to a 00 00 01 prefix.
+            if (third != 0 && third != 1) {
+                i += 3
+                continue
+            }
+            if (third != 1 || data[i].toInt() != 0 || data[i + 1].toInt() != 0) {
                 i++
                 continue
             }
@@ -768,7 +770,7 @@ object AnnexB {
             start = i + 3
             i = start
         }
-        if (prefix >= 0) result.add(UnitRange(prefix, start, data.size))
+        if (prefix >= 0) result.add(UnitRange(prefix, start, endExclusive))
         return result
     }
 

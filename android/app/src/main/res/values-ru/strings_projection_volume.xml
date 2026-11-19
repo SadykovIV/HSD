@@ -3,6 +3,7 @@
     <string name="projection_navigation_volume">Навигация и голосовые подсказки</string>
     <string name="projection_volume_value">%1$s: %2$d%%</string>
     <string name="projection_volume_help">Громкость меняется сразу для звука, который HSD передаёт через Android Auto, CarLife и CarPlay. При прямом подключении Bluetooth громкостью управляют телефон и магнитола.</string>
-    <string name="projection_navigation_apps">Дополнительные приложения навигации</string>
-    <string name="projection_navigation_apps_help">Навигационные подсказки распознаются автоматически. Если приложение передаёт их как музыку, выберите его здесь: после переподключения его медиазвук будет использовать громкость подсказок. Громкость других приложений не изменится.</string>
+    <string name="projection_navigation_apps">Навигационные приложения</string>
+    <string name="projection_navigation_apps_empty">Пока нет выбранных приложений</string>
+    <string name="projection_navigation_apps_help">HSD распознаёт навигационные подсказки автоматически. Добавьте приложение, если оно передаёт подсказки как музыку. При следующем подключении громкость подсказок будет применяться ко всему медиазвуку этого приложения.</string>
 </resources>

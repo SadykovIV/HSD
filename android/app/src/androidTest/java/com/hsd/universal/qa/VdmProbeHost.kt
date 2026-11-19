@@ -14,6 +14,12 @@ internal object VdmProbeHost {
     fun start(test: Instrumentation, ui: UiAutomation): AutoCloseable {
         if (Build.VERSION.SDK_INT < 37) return AutoCloseable { }
         check(Build.HARDWARE in listOf("ranchu", "goldfish"))
+        return startDisplayOwner(test, ui)
+    }
+
+    /** Start the ordinary HSD display owner for a standalone generated scene or an emulator test. */
+    fun startDisplayOwner(test: Instrumentation, ui: UiAutomation): AutoCloseable {
+        check(Build.VERSION.SDK_INT >= 37 && test.targetContext.packageName == "com.hsd.universal")
         val apk = test.targetContext.applicationInfo.sourceDir
         check(VdmHostBootstrapPolicy.validApk(apk) && apk.none(Char::isWhitespace))
         val token = UUID.randomUUID().toString().replace("-", "")

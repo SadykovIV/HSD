@@ -25,6 +25,12 @@ internal class DesktopMusicOutputLink(private val graceMs: Long) {
 
     fun markReady() { if (owner != null && !outputLost) sawReady = true }
 
+    fun consumeDisconnect(service: Any, link: Any, hadPicture: Boolean): Boolean {
+        if (serviceOwner !== service || owner !== link || outputLost || !(sawReady || hadPicture)) return false
+        consumeLoss()
+        return true
+    }
+
     fun close(link: Any, now: Long): Boolean {
         if (owner !== link) return false
         if (sawReady && !outputLost) readyLinkClosedAt = now
@@ -35,14 +41,12 @@ internal class DesktopMusicOutputLink(private val graceMs: Long) {
 
     /** The failed fd must itself have delivered a desktop; a failed retry has no such claim. */
     fun consumeTransportLoss(service: Any, link: Any, hadPicture: Boolean, carriedAudio: Boolean): Boolean {
-        if (serviceOwner !== service || owner !== link || outputLost || !(sawReady || hadPicture)) return false
         // A camera or source switch may close just the projection endpoint while Bluetooth keeps playing.
         if (!carriedAudio) {
-            markReady() // retain physical-detach evidence if the first frame arrived between polls
+            if (serviceOwner === service && owner === link && hadPicture) markReady()
             return false
         }
-        consumeLoss()
-        return true
+        return consumeDisconnect(service, link, hadPicture)
     }
 
     fun consumePhysicalDetach(service: Any, now: Long): Boolean {

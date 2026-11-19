@@ -48,10 +48,12 @@ internal class DesktopAudioClock(private val sampleRate: Int = DesktopAudioPolic
         // sampled driver timestamp turns timestamp jitter into gaps/overlaps when stems
         // are mixed. Calibrate once; advance by sample count until an actual overrun.
         val estimate = checkNotNull(fallbackOriginUs) + framesRead * 1_000_000L / sampleRate
-        // Some loopback drivers never publish AudioTimestamp. Even then the bounded
-        // ring cannot retain seconds of samples across a stall; resynchronize at its
-        // oldest possible sample, rather than declaring a delayed read fresh.
-        val oldestTimeUs = if (mayHaveOverrun) nowUs - ringUs - durationUs else Long.MIN_VALUE
+        // Bound recovery in the producer's time domain. A fresh AudioTimestamp can
+        // also re-anchor a submix that paused/restarted without resetting its counter.
+        // A delayed reader with an unchanged producer timestamp must not invent gaps
+        // or make old samples fresh. Wall time is only the fallback without a timestamp.
+        val producerTimeUs = if (timed) hardwareTimeUs!! else nowUs
+        val oldestTimeUs = if (mayHaveOverrun) producerTimeUs - ringUs - durationUs else Long.MIN_VALUE
         val value = maxOf(lastEndUs ?: Long.MIN_VALUE, oldestTimeUs, minOf(nowUs, estimate))
         discontinuityUs = lastEndUs?.let { (value - it).coerceAtLeast(0) } ?: 0
         framesRead += frames

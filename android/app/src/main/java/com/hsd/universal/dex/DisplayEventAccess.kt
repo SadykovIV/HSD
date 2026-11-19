@@ -3,6 +3,8 @@ package com.hsd.universal.dex
 import android.view.InputEvent
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.os.Build
+import com.hsd.universal.AppLog
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier
@@ -10,6 +12,10 @@ import java.lang.reflect.Modifier
 /** Resolves the concrete TestApi overrides used by instrumented Android 13 processes. */
 internal class DisplayEventAccess {
     private val methods = DisplayEventMethods(MotionEvent::class.java, KeyEvent::class.java, InputEvent::class.java)
+    private val samsungActivity = if (Build.MANUFACTURER.equals("samsung", ignoreCase = true))
+        SamsungHuActivity(MotionEvent::class.java, KeyEvent::class.java) { kind, applied ->
+            AppLog.i("DESKTOP INPUT: Samsung remote $kind noResetUserActivity=$applied", false)
+        } else null
 
     /** Checks both event types and their actual readback before a session. These local events are never injected. */
     fun preflight() {
@@ -21,8 +27,11 @@ internal class DisplayEventAccess {
         } finally { motion.recycle() }
     }
 
-    /** Caller must first validate the current owned display/token; this only assigns and reads back its ID. */
-    fun setDisplayId(event: InputEvent, displayId: Int) = methods.setDisplayId(event, displayId)
+    /** Only called for a live, owned projection target. Head-unit input is independent of panel control. */
+    fun targetProjectionDisplay(event: InputEvent, displayId: Int) {
+        methods.setDisplayId(event, displayId)
+        samsungActivity?.mark(event, displayId)
+    }
 
     fun getDisplayId(event: InputEvent): Int = methods.getDisplayId(event)
 }

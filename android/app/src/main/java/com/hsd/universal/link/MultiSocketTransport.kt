@@ -364,6 +364,7 @@ class MultiSocketTransport internal constructor(
     override val videoQueueAgeMs: Long get() = maxOf(videoWriteAgeMs,
         queues[Ch.VIDEO]?.peek()?.congestionAgeMs(clock()) ?: 0)
     override val drainBytesPerSec: Double get() = drain.bytesPerSec
+    override val availableVideoBytesPerSec: Double get() = drain.availableVideoBytesPerSec
     override fun queueSize(chan: Int): Int = queues[chan]?.size ?: 0
 
     val heartbeats: Long get() = hbCount
@@ -521,8 +522,8 @@ class MultiSocketTransport internal constructor(
                         videoFrames.decrementAndGet()
                     }
                 }
-                if (packet.lastFragment) packet.frame?.written()
                 if (video) drain.onWrite(clock(), true, inner.size, System.nanoTime() - t)
+                if (packet.lastFragment) packet.frame?.written()
                 synchronized(txLock) { onWritten(chan, inner) }
             }
         } catch (_: InterruptedException) {

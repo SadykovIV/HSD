@@ -87,6 +87,7 @@ class AapSession(
     private val options: SessionOptions = SessionOptions(),
 ) {
     interface Callbacks {
+        fun onFirstUsbRead(session: AapSession) {}
         fun onWaitingForUsbVersion(session: AapSession) {}
         fun onNegotiationStarted(session: AapSession) {}
         /** The complete encrypted DISCOVERY request has been written and flushed. */
@@ -160,6 +161,9 @@ class AapSession(
     private val scheduler: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { r ->
         Thread(r, "aap-timer").apply { isDaemon = true }
     }
+    private val discoveryTimeout = DiscoveryTimeout(
+        arm = { task -> schedule(task, 10, TimeUnit.SECONDS) },
+        expire = { reason -> fail(reason, null) })
     private val channels = java.util.concurrent.ConcurrentHashMap<Int, ServiceChannel>()
     private var pendingOpens = 0
     /**
@@ -192,6 +196,8 @@ class AapSession(
     }
 
     fun start() {
+        reader.trackProgress = transport.usbAccessory
+        if (transport.usbAccessory) reader.onFirstRead = { callbacks.onFirstUsbRead(this) }
         Thread(::readLoop, "aap-reader").apply { isDaemon = true; priority = Thread.MAX_PRIORITY - 1 }.start()
         Thread(::writeLoop, "aap-writer").apply { isDaemon = true; priority = Thread.MAX_PRIORITY - 1 }.start()
         // An attached USB receiver can start projection long after accessory enumeration.
@@ -317,7 +323,7 @@ class AapSession(
                         log.w("head unit refused channel ${ch.id} (${ch.name}): $status")
                     }
                     // <= 0 and state guard: a duplicate open-response must not wedge OPENING forever.
-                    if (--pendingOpens <= 0 && state == State.OPENING) enterRunning()
+                    if (state == State.OPENING && --pendingOpens <= 0) enterRunning()
                 }
                 ControlMsg.CHANNEL_CLOSE_NOTIFICATION -> {
                     ch.opened = false
@@ -398,6 +404,7 @@ class AapSession(
     }
 
     private fun onVersionRequest(msg: AapMessage) {
+        reader.trackProgress = false
         if (state != State.VERSION) {
             fail("version request in state $state", null)
             return
@@ -481,14 +488,13 @@ class AapSession(
         val request = req.toByteArray()
         discoveryRequestBytes = request.size
         discoveryRequestSummary = "body=${request.size}B icons=${req.smallIcon.size()}/${req.mediumIcon.size()}/${req.largeIcon.size()}B phoneInfo=${req.hasPhoneInfo()}"
+        discoveryTimeout.start()
         sendRaw(0, AapMessage.plaintext(ControlMsg.SERVICE_DISCOVERY_REQUEST, request),
             onSent = {
                 discoveryRequestWritten = true
+                discoveryTimeout.written()
                 callbacks.onDiscoveryRequestSent(this)
             })
-        schedule({
-            if (state == State.DISCOVERY) fail("no service discovery response", null)
-        }, 10, TimeUnit.SECONDS)
     }
 
     private fun onServiceDiscovery(msg: AapMessage) {
@@ -496,6 +502,7 @@ class AapSession(
             fail("service discovery response in state $state", null)
             return
         }
+        if (!discoveryTimeout.received()) return
         val resp = try {
             ServiceDiscoveryResponse.parseFrom(msg.bodyBytes())
         } catch (e: com.google.protobuf.InvalidProtocolBufferException) {
@@ -517,11 +524,7 @@ class AapSession(
         state = State.OPENING
         pendingOpens = wanted.size
         for (ch in wanted) {
-            ch.attach(this)
-            channels[ch.id] = ch
-            send(ch.id, ControlMsg.CHANNEL_OPEN_REQUEST,
-                ChannelOpenRequest.newBuilder().setPriority(ch.openPriority).setServiceId(ch.id).build(),
-                control = true)
+            openChannel(ch)
         }
         if (wanted.isEmpty()) {
             enterRunning()
@@ -534,6 +537,18 @@ class AapSession(
             }, 10, TimeUnit.SECONDS)
         }
         startKeepAlive()
+    }
+
+    /** Optional audio can be enabled after discovery without reopening the projection. */
+    fun openOptionalChannel(channel: ServiceChannel) {
+        if (state == State.RUNNING && !channels.containsKey(channel.id)) openChannel(channel)
+    }
+
+    private fun openChannel(channel: ServiceChannel) {
+        if (channels.putIfAbsent(channel.id, channel) != null) return
+        channel.attach(this)
+        send(channel.id, ControlMsg.CHANNEL_OPEN_REQUEST,
+            ChannelOpenRequest.newBuilder().setPriority(channel.openPriority).setServiceId(channel.id).build(), control = true)
     }
 
     /** From the reader or, on an open timeout, the timer: [Callbacks.onRunning] must still run once. */

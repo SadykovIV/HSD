@@ -5,6 +5,15 @@ import org.junit.Test
 import java.io.EOFException
 
 class CarPlayDeviceCapabilitiesTest {
+    @Test fun alternateNavigationNeverReusesTelephonyOrMediaAndPreservesEldFrameSize() {
+        fun cap(stream:Int,role:String,mask:Long) = mapOf("type" to stream,"audioType" to role,"audioOutputFormats" to mask)
+        val info = mapOf("audioFormats" to listOf(cap(100,"telephony",1L shl 26),
+            cap(102,"media",1L shl 22),cap(101,"default",1L shl 24)))
+        val voice = CarPlayAudioProfile.candidates(info,true).single()
+        assertEquals(101L,voice.stream); assertEquals(44100,voice.rate)
+        assertEquals(2,voice.channels); assertEquals(39,voice.aacProfile); assertEquals(480,voice.framesPerPacket)
+        assertTrue(CarPlayAudioProfile.candidates(mapOf("audioFormats" to listOf(cap(100,"alert",1L shl 24))),true).isEmpty())
+    }
     private fun hex(s: String) = s.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
     private val finger = "050d0922a102050d093875089501810209331500250175019501810275079501810105010930150026ff7f7510950181020931150026ff7f751095018102c0"
     @Test fun twoTouchSlotsMapControllerUnitsToDisplayPixels() {

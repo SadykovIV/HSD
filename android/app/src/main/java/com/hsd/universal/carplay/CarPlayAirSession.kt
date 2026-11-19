@@ -1,7 +1,6 @@
 package com.hsd.universal.carplay
 
 import android.content.Context
-import android.util.Base64
 import com.hsd.universal.AutoAudioEncoder
 import com.hsd.universal.AppLog
 import com.hsd.universal.ProjectionResources
@@ -30,13 +29,20 @@ internal class CarPlayAirSession(
     private val life: ProjectionResources,
     private val event: (Map<*, *>) -> Unit,
     private val failed: (Exception) -> Unit,
+    private val screenFocus: (Boolean) -> Unit = {},
 ) {
     private val networkAccess = ProjectionNetworkAccess(context)
+    private val screenSocket = java.util.concurrent.atomic.AtomicReference<Socket?>()
+    init { life.own { screenSocket.getAndSet(null)?.close() } }
     private var eventIap: CarPlayIapChannel? = null
-    lateinit var video: CarPlayVideo
-        private set
+    @Volatile private var screenController: CarPlayScreenController? = null
+    val screenProjected get() = screenController?.projected == true
+    fun requestCarMenu() { screenController?.carMenu() }
+    fun sendVideo(payload: ByteArray, ptsUs: Long) = screenController?.send(payload, ptsUs) == true
 
     var audio: CarPlayAudio? = null
+        private set
+    var navigationAudio: CarPlayAudio? = null
         private set
 
     data class Display(
@@ -46,14 +52,25 @@ internal class CarPlayAirSession(
         val hid: Map<String, ByteArray>,
     )
 
-    private fun tcp(port: Int): Socket {
+    private fun tcp(port: Int, ownedByScreen: Boolean = false): Socket {
         require(port in 1..65535)
         val s = networkAccess.socket(ep.network)
-        life.own(s::close)
-        s.tcpNoDelay = true
-        s.soTimeout = 12_000
-        networkAccess.checked { s.connect(InetSocketAddress(ep.host, port), 7000) }
-        return s
+        try {
+            if (ownedByScreen) {
+                // A screen may be recreated many times in one journey. Retain only its live or
+                // connecting socket, while session close can still interrupt an unfinished connect.
+                screenSocket.getAndSet(s)?.close()
+                if (life.isClosed) throw java.io.IOException("CarPlay session closed")
+            } else life.own(s::close)
+            s.tcpNoDelay = true
+            s.soTimeout = 12_000
+            networkAccess.checked { s.connect(InetSocketAddress(ep.host, port), 7000) }
+            return s
+        } catch (e: Exception) {
+            if (ownedByScreen) screenSocket.compareAndSet(s, null)
+            s.close()
+            throw e
+        }
     }
 
     private fun udp() =
@@ -63,47 +80,10 @@ internal class CarPlayAirSession(
             it.bind(InetSocketAddress(0))
         }
 
-    private fun pair(wire: AirPlayWire): PairVerifyClient.ControlKeys {
-        val prefs = context.getSharedPreferences("carplay-identities", Context.MODE_PRIVATE)
-        fun encode(b: ByteArray) = Base64.encodeToString(b, Base64.NO_WRAP)
-        fun stored(k: String) = prefs.getString(k, null)?.let { Base64.decode(it, Base64.DEFAULT) }
-        val privateKey =
-            stored("key")
-                ?: AirPlayCrypto.ed25519Generate().privateKey.also {
-                    check(prefs.edit().putString("key", encode(it)).commit())
-                }
-        val id =
-            prefs.getString("controller", null)
-                ?: UUID.randomUUID().toString().also {
-                    check(prefs.edit().putString("controller", it).commit())
-                }
-        val identity =
-            ControllerIdentity(id, privateKey, AirPlayCrypto.ed25519PublicKey(privateKey))
-        val io = TlvTransport { path, body ->
+    private fun pair(wire: AirPlayWire) =
+        CarPlayReceiverPairing.authenticate(context, ep.peer, ep.publicKey, TlvTransport { path, body ->
             wire.request("POST", path, body, "application/pairing+tlv8")
-        }
-        val pinned = stored("peer." + ep.peer)
-        if (pinned != null && ep.publicKey != null)
-            require(pinned.contentEquals(ep.publicKey)) { "Ключ сопряжённой магнитолы изменился" }
-        val expected =
-            pinned
-                ?: run {
-                    val setup = PairSetupClient(identity, io) {}.run()
-                    val key =
-                        setup?.publicKey
-                            ?: ep.publicKey
-                            ?: error("Магнитола не предоставила проверяемый ключ AirPlay")
-                    if (ep.publicKey != null)
-                        require(ep.publicKey.contentEquals(key)) {
-                            "Ключ AirPlay отличается от ключа iAP2"
-                        }
-                    key
-                }
-        val keys = PairVerifyClient(identity, io) {}.run(expected)
-        if (pinned == null)
-            check(prefs.edit().putString("peer." + ep.peer, encode(expected)).commit())
-        return keys
-    }
+        })
 
     fun start(): Display {
         val controlSocket = tcp(ep.port)
@@ -184,6 +164,37 @@ internal class CarPlayAirSession(
                 }
                 .toMap()
         hid.values.forEach { logHidDescriptor(it) }
+        fun stream(desc: Map<String, Any?>): Map<*, *> {
+            val response = dict("SETUP", "/", mapOf("streams" to listOf(desc)))
+            return (response["streams"] as List<*>).filterIsInstance<Map<*, *>>().first {
+                it["type"] == desc["type"]
+            }
+        }
+        fun nextId() = SecureRandom().nextLong().ushr(1).coerceAtLeast(1)
+        val screens = CarPlayScreenController(
+            setup = {
+                val id = nextId()
+                val description = stream(mapOf("type" to 110L, "streamConnectionID" to id,
+                    "uuid" to uuid, "latencyMs" to 25L))
+                val socket = tcp(airPlayPort(description["dataPort"]), ownedByScreen = true)
+                val sender = CarPlayVideo(socket.getOutputStream(),
+                    AirPlayStreamKeys.chachaStreamKey(keys.sharedSecret, id), width, height, screenStats)
+                object : CarPlayScreenController.Stream {
+                    override fun send(payload: ByteArray, ptsUs: Long) = sender.send(payload, ptsUs)
+                    override fun keepAlive() = sender.keepAlive()
+                    override fun close() { screenSocket.compareAndSet(socket, null); socket.close() }
+                }
+            },
+            teardown = { dict("TEARDOWN", "/", mapOf("streams" to listOf(mapOf("type" to 110L, "uuid" to uuid)))) },
+            notifyModes = { control.request("POST", "/command", BinaryPlist.encode(it)) },
+            focus = {
+                AppLog.i("CarPlay screen: ${if (it) "projection" else "native head unit menu"}; audio session retained", false)
+                screenFocus(it)
+            },
+            failed = failed,
+        )
+        life.own(screens::close)
+        screenController = screens
         val eventPort = airPlayPort(setup["eventPort"])
         AppLog.i("CarPlay channels: eventPort=$eventPort timingPort=${time.port}", false)
         if (eventPort > 0) {
@@ -203,6 +214,7 @@ internal class CarPlayAirSession(
                 )
             thread(name = "CarPlay events", isDaemon = true) {
                 try {
+                    val observedKinds = HashSet<String>()
                     while (!s.isClosed) {
                         val m = listener.read()
                         if (m.line.startsWith("RTSP/") || m.line.startsWith("HTTP/")) continue
@@ -211,10 +223,20 @@ internal class CarPlayAirSession(
                         eventReplies.incrementAndGet()
                         if (m.line.contains(" /command ") && m.data.isNotEmpty()) {
                             val cmd = BinaryPlist.parse(m.data) as? Map<*, *>
-                            if (count <= 12) {
-                                val kind = (cmd?.get("type") as? String)?.take(64)
-                                    ?.replace(Regex("[^A-Za-z0-9_-]"), "?") ?: "unknown"
+                            val kind = (cmd?.get("type") as? String)?.take(64)
+                                ?.replace(Regex("[^A-Za-z0-9_-]"), "?") ?: "unknown"
+                            if (count <= 12 || observedKinds.size < 64 && observedKinds.add(kind)) {
                                 AppLog.i("CarPlay event #$count type=$kind acknowledged", false)
+                            }
+                            if (kind in setOf("changeModes", "modesChanged", "duckAudio", "unduckAudio")) {
+                                // Public control values only. Never log iAP messages, HID reports,
+                                // network parameters or arbitrary strings from the accessory.
+                                val params = cmd?.get("params") as? Map<*, *> ?: emptyMap<Any, Any>()
+                                val resources = (params["resources"] as? List<*>).orEmpty().take(8)
+                                    .filterIsInstance<Map<*, *>>().map { r ->
+                                        r.filter { (k, v) -> k in setOf("resourceID", "entity", "permanentEntity", "transferType") && v is Number }
+                                    }
+                                AppLog.i("CarPlay audio control: $kind resources=$resources duration=${params["durationMs"] as? Number} volume=${params["volume"] as? Number}", false)
                             }
                             if (cmd?.get("type") == "iAPSendMessage") {
                                 val data =
@@ -244,7 +266,10 @@ internal class CarPlayAirSession(
                                                 .also { eventIap = it }
                                     link.accept(data)
                                 }
-                            } else if (cmd != null) event(cmd)
+                            } else if (cmd != null) {
+                                screens.event(cmd)
+                                event(cmd)
+                            }
                         }
                     }
                 } catch (e: Exception) {
@@ -252,13 +277,6 @@ internal class CarPlayAirSession(
                 }
             }
         }
-        fun stream(desc: Map<String, Any?>): Map<*, *> {
-            val response = dict("SETUP", "/", mapOf("streams" to listOf(desc)))
-            return (response["streams"] as List<*>).filterIsInstance<Map<*, *>>().first {
-                it["type"] == desc["type"]
-            }
-        }
-        fun nextId() = SecureRandom().nextLong().ushr(1).coerceAtLeast(1)
         val modes =
             mapOf(
                 "type" to "modesChanged",
@@ -281,24 +299,7 @@ internal class CarPlayAirSession(
                 )
             )
         }
-        val screenId = nextId()
-        val screen =
-            stream(
-                mapOf(
-                    "type" to 110L,
-                    "streamConnectionID" to screenId,
-                    "uuid" to uuid,
-                    "latencyMs" to 25L,
-                )
-            )
-        video =
-            CarPlayVideo(
-                tcp(airPlayPort(screen["dataPort"])).getOutputStream(),
-                AirPlayStreamKeys.chachaStreamKey(keys.sharedSecret, screenId),
-                width,
-                height,
-                screenStats,
-            )
+        screens.start()
         val enabled =
             (setup["enabledFeatures"] as? List<*>).orEmpty().map { it.toString().lowercase() }
         if (enabled.any { it in setOf("iap", "iap2", "datastream", "iapdatastream") }) {
@@ -339,13 +340,18 @@ internal class CarPlayAirSession(
         AppLog.i("CarPlay audio capabilities: " + formats.take(32).joinToString { d ->
             "${d["type"]}/${d["audioType"]} output=0x${(d["audioOutputFormats"] as? Number)?.toLong()?.toString(16)}"
         }, false)
-        for (fmt in CarPlayAudioProfile.candidates(info)) {
-            val encoder = if (fmt.aac) try {
-                AutoAudioEncoder(prefix = 0).apply { prepare(fmt.rate) }
+        fun negotiateAudio(navigation: Boolean): CarPlayAudio? {
+          for (fmt in CarPlayAudioProfile.candidates(info, navigation)) {
+            val encoder = if (fmt.aac) AutoAudioEncoder(prefix = 0, channels = fmt.channels,
+                profile = fmt.aacProfile) else null
+            try {
+                encoder?.prepare(fmt.rate)
+                encoder?.verifyFrameLength(fmt.rate, fmt.framesPerPacket)
             } catch (e: Exception) {
-                AppLog.i("CarPlay audio: AAC encoder unavailable (${e.javaClass.simpleName})", false)
+                encoder?.close()
+                AppLog.i("CarPlay audio: ${fmt.stream}/${fmt.role} codec unavailable (${e.message})", false)
                 continue
-            } else null
+            }
             if (encoder != null) life.own(encoder::close)
             val audioId = nextId()
             val socket = udp()
@@ -364,10 +370,19 @@ internal class CarPlayAirSession(
             }
             val port = airPlayPort(desc["dataPort"])
             if (port == 0) { socket.close(); encoder?.close(); continue }
-            audio = CarPlayAudio(socket, ep.host, port, airPlayPort(desc["controlPort"]),
-                fmt.stream.toInt(), AirPlayStreamKeys.chachaStreamKey(keys.sharedSecret, audioId), fmt.rate, encoder, fmt.latencyMs)
-            AppLog.i("CarPlay audio: ${fmt.stream}/${fmt.role}, ${if (fmt.aac) "AAC-LC" else "PCM"} stereo ${fmt.rate} Hz", false)
-            break
+            val sender = CarPlayAudio(socket, ep.host, port, airPlayPort(desc["controlPort"]),
+                fmt.stream.toInt(), AirPlayStreamKeys.chachaStreamKey(keys.sharedSecret, audioId), fmt.rate, encoder, fmt.latencyMs,
+                channels = fmt.channels, encodedFrames = fmt.framesPerPacket)
+            val codec = if (!fmt.aac) "PCM" else if (fmt.aacProfile == 39) "AAC-ELD" else "AAC-LC"
+            AppLog.i("CarPlay audio: ${fmt.stream}/${fmt.role}, $codec ${fmt.channels} channels ${fmt.rate} Hz", false)
+            return sender
+          }
+          return null
+        }
+        audio = negotiateAudio(false)
+        if (com.hsd.universal.dex.DexPrefs(context).separateNavigationAudio) {
+            navigationAudio = negotiateAudio(true)
+            if (navigationAudio == null) AppLog.i("CarPlay navigation: no compatible alternate output; using mixed audio", false)
         }
         if (audio == null) AppLog.i("CarPlay audio: no negotiated media output", false)
         control.request("RECORD", "/", byteArrayOf())
@@ -382,11 +397,22 @@ internal class CarPlayAirSession(
         // Closing life interrupts the reader and releases every outstanding request.
         val executor = Executors.newScheduledThreadPool(2)
         life.own { executor.shutdownNow() }
+        life.own {
+            audio?.let { AppLog.i("CarPlay audio final: ${it.progressSummary()}", false) }
+            navigationAudio?.let { AppLog.i("CarPlay navigation final: ${it.progressSummary()}", false) }
+        }
+        val audioReportAt = java.util.concurrent.atomic.AtomicLong(0L)
         val feedbackSince = java.util.concurrent.atomic.AtomicLong(0L)
         executor.scheduleAtFixedRate(
             {
                 try {
-                    video.keepAlive()
+                    screens.keepAlive()
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    if (now - audioReportAt.get() >= 10_000) {
+                        audioReportAt.set(now)
+                        audio?.let { AppLog.i("CarPlay audio: ${it.progressSummary()}", false) }
+                        navigationAudio?.let { AppLog.i("CarPlay navigation: ${it.progressSummary()}", false) }
+                    }
                     val since = feedbackSince.get()
                     if (since > 0 && android.os.SystemClock.elapsedRealtime() - since >= 12_000 &&
                         feedbackSince.compareAndSet(since, -1L))
@@ -403,11 +429,22 @@ internal class CarPlayAirSession(
         // continue when the receiver declines telemetry. Transport and session errors are fatal.
         val feedback = object : Runnable {
             var delay = 1L
+            var reportAt = 0L
             override fun run() {
                 try {
                     feedbackSince.set(android.os.SystemClock.elapsedRealtime())
-                    control.request("POST", "/feedback", timeoutMillis = 0)
+                    val body = control.request("POST", "/feedback", timeoutMillis = 0)
                     feedbackReplies.incrementAndGet()
+                    val now = android.os.SystemClock.elapsedRealtime()
+                    if (body.isNotEmpty() && now - reportAt >= 10_000) {
+                        reportAt = now
+                        val response = runCatching { BinaryPlist.parse(body) as? Map<*, *> }.getOrNull()
+                        val streams = (response?.get("streams") as? List<*>).orEmpty().take(8)
+                            .filterIsInstance<Map<*, *>>().map { stream ->
+                                stream.filter { (k, v) -> k in setOf("type", "streamConnectionID", "sampleTime", "rate", "buffered", "audioLatencyMs") && v is Number }
+                            }
+                        AppLog.i("CarPlay receiver audio feedback: streams=$streams", false)
+                    }
                     delay = 1L
                 } catch (e: RtspError) {
                     when (e.status) {

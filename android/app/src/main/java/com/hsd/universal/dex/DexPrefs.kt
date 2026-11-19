@@ -41,15 +41,15 @@ class DexPrefs @JvmOverloads constructor(private val context: Context, private v
             prefs.edit().putString("phone_screen_mode", value.name).apply()
         }
     internal var phoneTimerEnabled: Boolean
-        get() = prefs.getBoolean("phone_idle_timer_enabled",
-            prefs.getString("phone_idle_mode", null)?.let { it != PhoneIdleMode.DISABLED.name }
-                ?: prefs.contains("phone_idle_timeout"))
-        set(value) { prefs.edit().putBoolean("phone_idle_timer_enabled", value).apply() }
+        get() {
+            if (prefs.contains("phone_control_timer_enabled")) return prefs.getBoolean("phone_control_timer_enabled", false)
+            // Older versions allowed an interval to remain saved under an inactive timer.
+            return !prefs.getBoolean("system_screen_timeout", true) && prefs.getBoolean("phone_idle_timer_enabled",
+                prefs.getString("phone_idle_mode", null)?.let { it != PhoneIdleMode.DISABLED.name }
+                    ?: prefs.contains("phone_idle_timeout"))
+        }
+        set(value) { prefs.edit().putBoolean("phone_control_timer_enabled", value).apply() }
     internal val phoneIdleMode: PhoneIdleMode get() = if (phoneTimerEnabled) phoneScreenMode else PhoneIdleMode.DISABLED
-    /** Normal Android sleep/keyguard is the default. Panel blanking remains an explicit action. */
-    var useSystemScreenTimeout: Boolean
-        get() = prefs.getBoolean("system_screen_timeout", true)
-        set(value) { prefs.edit().putBoolean("system_screen_timeout", value).apply() }
     internal var phoneIdleTimeout: PhoneIdleTimeout
         get() = PhoneIdleTimeout.restore(prefs.getString("phone_idle_timeout", null))
         set(value) { prefs.edit().putString("phone_idle_timeout", value.name).apply() }
@@ -193,6 +193,9 @@ class DexPrefs @JvmOverloads constructor(private val context: Context, private v
     var navigationVolume: Int
         get() = prefs.getInt("navigation_volume", 100).coerceIn(0, 100)
         set(value) { require(value in 0..100); prefs.edit().putInt("navigation_volume", value).apply() }
+    var separateNavigationAudio: Boolean
+        get() = prefs.getBoolean("separate_navigation_audio", false)
+        set(value) { prefs.edit().putBoolean("separate_navigation_audio", value).apply() }
     var navigationAudioApps: Set<String>
         get() = prefs.getStringSet("navigation_audio_apps", emptySet()).orEmpty().toSet()
         set(value) { prefs.edit().putStringSet("navigation_audio_apps", value.toSet()).apply() }

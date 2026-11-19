@@ -6,6 +6,10 @@ import android.content.IntentFilter
 import com.hsd.universal.R
 
 internal data class UsbBusState(val connected: Boolean?, val configured: Boolean?, val accessory: Boolean?) {
+    fun mayEnumerateAfter(previous: UsbBusState, awaitingReconnect: Boolean) = connected != false &&
+        (accessory == true && previous.accessory != true || awaitingReconnect && connected == true && configured == true &&
+            (previous.connected != true || previous.configured != true))
+
     fun waitingMessage() = when {
         connected == false -> R.string.usb_wait_data
         accessory == true -> R.string.usb_wait_enumeration

@@ -32,6 +32,7 @@ import com.hsd.universal.aa.ProbeResult
 import com.hsd.universal.aa.TranscodeSelfCheck
 import com.hsd.universal.dex.DexPrefs
 import com.hsd.universal.dex.DesktopAccess
+import com.hsd.universal.dex.UsbAttachActivity
 import com.hsd.universal.dex.DexAutoConnectPolicy
 import com.hsd.universal.link.car.CarLifeConnectionMode
 import com.hsd.universal.link.car.WirelessPrefs
@@ -50,10 +51,32 @@ object Actions {
         private set
     private val usbGate = UsbScanGate { SystemClock.elapsedRealtime() }
     private val autoConnect = DexAutoConnectPolicy()
+    internal data class UsbOpen(val attachment: Long, val number: Int) {
+        fun log(event: String) = AppLog.i("Android Auto USB · attachment=$attachment open=$number elapsedMs=${SystemClock.elapsedRealtime()} · $event", false)
+    }
+    private var lastAutoOpen: UsbOpen? = null
+
+    @Synchronized internal fun openingAuto(accessory: UsbAccessory): UsbOpen {
+        autoConnect.observeAccessory(accessoryKey(accessory))
+        val id = checkNotNull(autoConnect.attachment)
+        return UsbOpen(id, (lastAutoOpen?.takeIf { it.attachment == id }?.number ?: 0) + 1)
+            .also { lastAutoOpen = it; it.log("opening accessory") }
+    }
+
+    private fun traceAutoDetach() {
+        lastAutoOpen?.log("DETACHED")
+        lastAutoOpen = null
+    }
     private val detachedIdle = UsbDetachedIdle()
     private val wiredSelection = WiredAccessorySelection()
     private var observingUsb = false
     private var usbBus = UsbBusState.read(null)
+    private val attachHandler by lazy { Handler(Looper.getMainLooper()) }
+    private val attachCallbacks = Any()
+    private val enumeration = UsbEnumerationRetry({ delay, action ->
+        attachHandler.postAtTime({ synchronized(this@Actions) { action() } }, attachCallbacks, SystemClock.uptimeMillis() + delay)
+    }, { attachHandler.removeCallbacksAndMessages(attachCallbacks) })
+    private var deliveredAttachment: Long? = null
     private const val USB_PERMISSION_TOKEN = "hsd.usb.permission.token"
 
     fun isCarLifeAccessory(accessory: UsbAccessory) = UsbAccessoryPolicy.accepts(accessory.manufacturer, accessory.model)
@@ -61,8 +84,12 @@ object Actions {
         route == UsbAccessoryPolicy.route(accessory.manufacturer, accessory.model)
 
     @Synchronized internal fun routeChanged(ctx: Context) {
+        enumeration.cancel()
+        deliveredAttachment = null
         usbGate.reset()
-        CarProfile.enableTrigger(ctx, ProjectionRoute.selected(ctx) == ProjectionRoute.CARLIFE_WIFI)
+        val route = ProjectionRoute.selected(ctx)
+        UsbAttachActivity.syncHandler(ctx, route)
+        CarProfile.enableTrigger(ctx, route == ProjectionRoute.CARLIFE_WIFI)
         if (BridgeService.alive && !autoConnect.stopped)
             ctx.startForegroundService(DesktopTransport.service(ctx).setAction(BridgeService.ACTION_RECONFIGURE))
     }
@@ -72,7 +99,7 @@ object Actions {
         val route = ProjectionRoute.selected(ctx)
         try {
             when {
-                route.wired -> scan(ctx, "смена способа подключения", retryPermission = true)
+                route.usesUsbAccessory -> scan(ctx, "смена способа подключения", retryPermission = true)
                 route.carLife -> WirelessCarLife.startReady(ctx)
                 else -> ctx.startForegroundService(DesktopTransport.service(ctx))
             }
@@ -88,12 +115,15 @@ object Actions {
 
     @Synchronized fun isUsbDetachedIdle(): Boolean = detachedIdle.idle
 
+    @Synchronized internal fun reconnectHint(ctx: Context): String? = if (detachedIdle.idle && usbBus.connected == true)
+        ctx.getString(usbBus.waitingMessage(), ProjectionRoute.selected(ctx).protocol) else null
+
     @Synchronized internal fun connectDecision(explicit: Boolean, serviceAlive: Boolean, sessionReady: Boolean): DexAutoConnectPolicy.Decision {
         if (explicit) detachedIdle.explicitConnect()
         return autoConnect.decide(explicit, serviceAlive, sessionReady)
     }
 
-    @Synchronized fun stopUsbAutoStartForSession() { autoConnect.stop() }
+    @Synchronized fun stopUsbAutoStartForSession() { enumeration.cancel(); autoConnect.stop() }
 
     @Synchronized fun resumeUsbAutoStart() { detachedIdle.explicitConnect(); autoConnect.resume() }
 
@@ -101,14 +131,29 @@ object Actions {
     private fun registerUsbObserver(ctx: Context) {
         if (!observingUsb) {
             val app = ctx.applicationContext
+            UsbAttachActivity.syncHandler(app, ProjectionRoute.selected(app))
             val initial = app.registerReceiver(object : BroadcastReceiver() {
                 override fun onReceive(context: Context, intent: Intent) {
-                    if (intent.action == UsbDetachPolicy.USB_STATE) synchronized(this@Actions) {
-                        usbBus = UsbBusState.read(intent)
+                    // registerReceiver already supplied the sticky state synchronously.
+                    if (isInitialStickyBroadcast) return
+                    synchronized(this@Actions) {
+                        val before = usbBus
+                        val busEvent = intent.action == UsbDetachPolicy.USB_STATE
+                        if (busEvent) usbBus = UsbBusState.read(intent)
+                        if (intent.action == UsbManager.ACTION_USB_ACCESSORY_ATTACHED ||
+                            (busEvent && usbBus.mayEnumerateAfter(before, detachedIdle.idle))) {
+                            usbAttachmentReported(context)
+                        } else {
+                            val previous = autoConnect.attachment
+                            val list = usbAccessories(context) ?: return
+                            observeAccessories(context, list)
+                            if (busEvent && usbBus.connected != false && autoConnect.attachment != null && previous != autoConnect.attachment) {
+                                usbAttachmentReported(context)
+                            } else if (list.isEmpty() && (usbBus.connected == false || intent.action == UsbManager.ACTION_USB_ACCESSORY_DETACHED)) {
+                                enumeration.cancel()
+                            }
+                        }
                     }
-                    // Use current system state: a queued old detach must not rearm
-                    // a stopped connection that is still physically present.
-                    observeUsbConnection(context)
                 }
             }, IntentFilter().apply {
                 addAction(UsbManager.ACTION_USB_ACCESSORY_ATTACHED)
@@ -120,16 +165,40 @@ object Actions {
         }
     }
 
+    @Synchronized internal fun usbAttachmentReported(ctx: Context) {
+        val app = ctx.applicationContext
+        registerUsbObserver(app)
+        if (!ProjectionRoute.selected(app).usesUsbAccessory) return
+        enumeration.signal {
+            if (!ProjectionRoute.selected(app).usesUsbAccessory) return@signal true
+            // Neither the intent extras nor USB_STATE grants permission or identifies the receiver.
+            val usb = app.getSystemService(UsbManager::class.java)
+            val list = usbAccessories(app) ?: return@signal false
+            observeAccessories(app, list)
+            val route = ProjectionRoute.selected(app)
+            val accessory = list.firstOrNull { matchesRoute(route, it) } ?: return@signal false
+            val id = autoConnect.attachment ?: return@signal false
+            if (!autoConnect.stopped && deliveredAttachment != id) {
+                if (!UsbAttachActivity.startAttached(app, usb, accessory)) return@signal false
+                deliveredAttachment = id
+            }
+            true
+        }
+    }
+
+    private fun usbAccessories(ctx: Context) =
+        runCatching { ctx.getSystemService(UsbManager::class.java).accessoryList.orEmpty() }.getOrNull()
+
     @Synchronized fun observeUsbConnection(ctx: Context): Long? {
         registerUsbObserver(ctx)
         // A failed query is not evidence that the physical accessory was detached.
-        val list = runCatching { ctx.getSystemService(UsbManager::class.java).accessoryList.orEmpty() }
-            .getOrNull() ?: return null
+        val list = usbAccessories(ctx) ?: return null
         observeAccessories(ctx, list)
         return autoConnect.attachment
     }
 
     private fun observeAccessories(ctx: Context, list: Array<out UsbAccessory>) {
+        if (list.isEmpty() && usbBus.connected == false) traceAutoDetach()
         val selected = ProjectionRoute.selected(ctx)
         val available = list.mapNotNull { UsbAccessoryPolicy.route(it.manufacturer, it.model) }.toSet()
         val route = if (DesktopTransport.universal) wiredSelection.observe(selected, available) else selected
@@ -137,7 +206,7 @@ object Actions {
         val key = list.firstOrNull { matchesRoute(route, it) }?.let(::accessoryKey)
         val reconnected = detachedIdle.idle && key != null
         if (key == null) usbGate.reset()
-        autoConnect.observeAccessory(key)
+        if (key != null || !autoConnect.stopped || usbBus.connected != true) autoConnect.observeAccessory(key)
         detachedIdle.observeCompatibleAccessory(key != null)
         if (reconnected) publish(UsbScanState.WAITING_FOR_ACCESSORY,
             ctx.getString(R.string.usb_receiver_found, route.protocol), "новый аксессуар после detach")
@@ -150,12 +219,16 @@ object Actions {
             val usb = ctx.getSystemService(UsbManager::class.java)
             val list = usb.accessoryList.orEmpty()
             observeAccessories(ctx, list)
-            if (ProjectionRoute.wireless(ctx) || WirelessPrefs(ctx).mode == CarLifeConnectionMode.WIFI) {
+            if (ProjectionRoute.selected(ctx) == ProjectionRoute.HICAR_USB) {
+                usbGate.reset()
+                return publish(UsbScanState.WAITING_FOR_ACCESSORY, ctx.getString(R.string.hicar_usb_wait_ncm), reason)
+            }
+            if (!ProjectionRoute.selected(ctx).usesUsbAccessory || WirelessPrefs(ctx).mode == CarLifeConnectionMode.WIFI) {
                 usbGate.reset()
                 return publish(UsbScanState.WAITING_FOR_ACCESSORY, ctx.getString(R.string.usb_wifi_selected, DesktopTransport.name), reason)
             }
             if (detachedIdle.idle) {
-                return publish(UsbScanState.DETACHED, ctx.getString(R.string.usb_wait_reconnect), reason)
+                return publish(UsbScanState.DETACHED, reconnectHint(ctx) ?: ctx.getString(R.string.usb_wait_reconnect), reason)
             }
             if (autoConnect.stopped) {
                 return publish(UsbScanState.WAITING_FOR_ACCESSORY, ctx.getString(R.string.desktop_connection_stopped), reason)
@@ -267,6 +340,8 @@ object Actions {
 
     /** Only BridgeService calls this after confirming physical accessory absence. No privilege teardown. */
     @Synchronized fun onUsbDetached(ctx: Context) {
+        enumeration.cancel()
+        traceAutoDetach()
         detachedIdle.detached()
         autoConnect.observeAccessory(null)
         usbGate.reset() // Late USB grants cannot restart an absent accessory.
@@ -286,7 +361,7 @@ object Actions {
         if (userInitiated) {
             com.hsd.universal.dex.DesktopMusicPlayback.stop("explicit Stop")
             observeUsbConnection(ctx)
-            autoConnect.stop()
+            stopUsbAutoStartForSession()
             detachedIdle.explicitConnect() // Keep explicit Stop distinct from passive detached idle.
         }
         AppLog.i(if (userInitiated) "кнопка Стоп" else "остановка для восстановления подключения")

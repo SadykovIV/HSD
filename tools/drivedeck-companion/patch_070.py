@@ -1,14 +1,19 @@
-"""Integration points in the author's HeadSwap edition of DriveDeck 0.7.0, code 348."""
+"""Integration points in the author's HeadSwap edition of DriveDeck 0.7.0."""
 import copy
 import json
+import re
+import shutil
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from profiles import AUTHOR_070
+from profiles import AUTHOR_070, AUTHOR_360
+from launcher_sources import LauncherSources
+from car_menu_patch import patch as patch_car_menu
 
 root = Path(sys.argv[1])
-launcher = root / "smali/ru/drivedeck/launcher"
+profile = {"348": AUTHOR_070, "360": AUTHOR_360}[sys.argv[2]]
+launcher = LauncherSources(root, profile.upstream_code)
 resolver = "Lru/drivedeck/hsd/HSDHost;"
 
 
@@ -26,20 +31,23 @@ def method(source, sig, transform):
                 header + transform(source[start:end]) + ".end method")
 
 
+patch_car_menu(root, launcher, once, method)
+
+
 # The split divider and the dashboard grid use the same design-unit gutter.
 # Keep the dock, border, and the physical touch target independent of the visible gap.
 layout_settings = "Lru/drivedeck/hsd/ProjectionSettings;"
 gap_call = f"    invoke-static {{}}, {layout_settings}->paneGap()F\n"
-app_class = launcher / "DriveDeckApplication.smali"
+app_class = launcher.file("DriveDeckApplication.smali")
 app_super = "    invoke-super {p0}, Landroid/app/Application;->onCreate()V"
 app_class.write_text(once(app_class.read_text(), app_super, app_super +
     f"\n    invoke-static {{p0}}, {layout_settings}->initializeLayout(Landroid/content/Context;)V"))
-page_class = launcher / "a0.1.smali"
+page_class = launcher.file("a0.1.smali")
 page_super = "    invoke-direct {p0, p1}, Landroid/view/ViewGroup;-><init>(Landroid/content/Context;)V"
 page_class.write_text(once(page_class.read_text(), page_super, page_super +
     f"\n    invoke-static {{p0}}, {layout_settings}->observePaneSpacing(Landroid/view/View;)V"))
 
-split = launcher / "m2.1.smali"
+split = launcher.file("m2.1.smali")
 split_src = split.read_text()
 for signature, register in (("L(I)I", "v1"), ("onMeasure(II)V", "v10"),
                             ("onLayout(ZIIII)V", "v11"), ("y(Z)F", "v0")):
@@ -56,7 +64,7 @@ split_src = once(split_src, """    add-int/2addr v7, v3
     invoke-virtual {v14, v8, v9, v1, v7}, Landroid/view/View;->layout(IIII)V""")
 split.write_text(split_src)
 
-grid = launcher / "E9.smali"
+grid = launcher.file("E9.smali")
 # v2 also defines the outer dashboard inset. Keep it and derive the grid's
 # inter-cell interval separately for row height, card bounds and editor snapping.
 def grid_spacing(body):
@@ -68,7 +76,7 @@ def grid_spacing(body):
 
 grid.write_text(method(grid.read_text(), "public static q(Lru/drivedeck/launcher/S0;IIFFZZI)Lru/drivedeck/launcher/M0;",
     grid_spacing))
-grid_model = launcher / "M0.smali"
+grid_model = launcher.file("M0.smali")
 def snap_joined_edges(body):
     # Downstream views round the origin and width separately. Align each shared
     # boundary once, so neighboring cells never overlap or expose a pixel seam.
@@ -84,49 +92,56 @@ def snap_joined_edges(body):
 
 grid_model.write_text(method(grid_model.read_text(),
     "public final a(Lru/drivedeck/launcher/P0;)Lru/drivedeck/launcher/L0;", snap_joined_edges))
-preview = launcher / "h4.1.smali"
+preview = launcher.file("h4.1.smali")
 preview.write_text(once(preview.read_text(), "    const/high16 v17, 0x41400000    # 12.0f",
     gap_call + "    move-result v17"))
 
 # The renderer has one connection per process. Keep leases for different hosts isolated.
-main = launcher / "MainActivity.smali"
+main = launcher.file("MainActivity.smali")
 source = once(main.read_text(), ".class public final Lru/drivedeck/launcher/MainActivity;",
               ".class public Lru/drivedeck/launcher/MainActivity;")
-for event, arg, reg in [("onCreate", "Landroid/os/Bundle;", "v0"), ("onNewIntent", "Landroid/content/Intent;", "p1")]:
+# Do not borrow one of the upstream onCreate registers. Its value can remain
+# live across the super call after the author rebuilds with a different R8.
+for event, arg, invoke in [("onCreate", "Landroid/os/Bundle;", f"{{p0}}, {resolver}->attach(Landroid/app/Activity;)V"),
+                            ("onNewIntent", "Landroid/content/Intent;", f"{{p0, p1}}, {resolver}->attach(Landroid/app/Activity;Landroid/content/Intent;)V")]:
     call = f"    invoke-super {{p0, p1}}, Landroid/app/Activity;->{event}({arg})V"
-    obtain = "\n    invoke-virtual {p0}, Landroid/app/Activity;->getIntent()Landroid/content/Intent;\n    move-result-object v0" if event == "onCreate" else ""
-    source = once(source, call, call + obtain + f"\n    invoke-static {{p0, {reg}}}, {resolver}->attach(Landroid/app/Activity;Landroid/content/Intent;)V")
+    source = once(source, call, call + "\n    invoke-static " + invoke)
 
 # The upstream projection activity initially opens its cards page, which immediately
 # records "home" as the last page. Read its saved choice before that first write.
 # Explicit music, phone and native-split actions keep the upstream dispatch path.
 def restore_layout(body):
+    # Reserve scratch registers for the entire new branch. The upstream keeps a
+    # Handler and other objects live across its initial page creation.
+    body = once(body, "    .locals 10", "    .locals 13")
     cards = "    invoke-virtual {p0}, Lru/drivedeck/launcher/MainActivity;->d0()V"
-    body = once(body, cards, """    const/4 v8, 0x0
+    body = once(body, cards, """    const/4 v10, 0x0
     invoke-virtual {p0}, Landroid/app/Activity;->getIntent()Landroid/content/Intent;
-    move-result-object v3
-    invoke-virtual {v3}, Landroid/content/Intent;->getAction()Ljava/lang/String;
-    move-result-object v3
-    const-string v4, "android.intent.action.MAIN"
-    invoke-virtual {v4, v3}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
-    move-result v3
-    if-eqz v3, :hsd_cards
-    iget-object v3, p0, Lru/drivedeck/launcher/MainActivity;->e:Lru/drivedeck/launcher/n5;
-    invoke-virtual {v3}, Lru/drivedeck/launcher/n5;->C0()Z
-    move-result v4
-    if-eqz v4, :hsd_cards
-    invoke-virtual {v3}, Lru/drivedeck/launcher/n5;->V()Ljava/lang/String;
-    move-result-object v3
-    const-string v4, "split"
-    invoke-virtual {v4, v3}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
-    move-result v8
-    if-eqz v8, :hsd_cards
+    move-result-object v11
+    invoke-virtual {v11}, Landroid/content/Intent;->getAction()Ljava/lang/String;
+    move-result-object v11
+    const-string v12, "android.intent.action.MAIN"
+    invoke-virtual {v12, v11}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
+    move-result v11
+    if-eqz v11, :hsd_cards
+    iget-object v11, p0, Lru/drivedeck/launcher/MainActivity;->e:Lru/drivedeck/launcher/n5;
+    invoke-virtual {v11}, Lru/drivedeck/launcher/n5;->C0()Z
+    move-result v12
+    if-eqz v12, :hsd_cards
+    invoke-virtual {v11}, Lru/drivedeck/launcher/n5;->V()Ljava/lang/String;
+    move-result-object v11
+    const-string v12, "split"
+    invoke-virtual {v12, v11}, Ljava/lang/String;->equals(Ljava/lang/Object;)Z
+    move-result v10
+    if-eqz v10, :hsd_cards
     invoke-virtual {p0}, Lru/drivedeck/launcher/MainActivity;->f0()V
     goto :hsd_layout_ready
     :hsd_cards
 """ + cards + "\n    :hsd_layout_ready")
     native = "    invoke-direct {v2, p0, v0, v1}, Lru/drivedeck/launcher/r5;-><init>(Lru/drivedeck/launcher/MainActivity;ZZ)V"
-    return once(body, native, "    or-int/2addr v0, v8\n" + native)
+    if profile == AUTHOR_360:
+        native = native.replace("v0, v1}", "v0, v1, p1}").replace(";ZZ)V", ";ZZZ)V")
+    return once(body, native, "    or-int/2addr v0, v10\n" + native)
 
 source = method(source, "public final onCreate(Landroid/os/Bundle;)V", restore_layout)
 
@@ -148,14 +163,13 @@ source = method(source, "public final onResume()V", lambda body: once(body,
 
     invoke-virtual {v1, v2}, Landroid/view/Window;->addFlags(I)V""",
     f"    invoke-static {{p0}}, {awake}"))
-screen_events = launcher / "G5.smali"
+screen_events = launcher.file("G5.smali")
 screen_events.write_text(once(screen_events.read_text(), """    invoke-virtual {p1}, Landroid/app/Activity;->getWindow()Landroid/view/Window;
 
     move-result-object p2
 
     invoke-virtual {p2, v3}, Landroid/view/Window;->addFlags(I)V""", f"    invoke-static {{p1}}, {awake}"))
-main.write_text(source)
-(launcher / "HsdActivity.smali").write_text(""".class public final Lru/drivedeck/launcher/HsdActivity;
+entry = """.class public final Lru/drivedeck/launcher/HsdActivity;
 .super Lru/drivedeck/launcher/MainActivity;
 
 .method public constructor <init>()V
@@ -163,11 +177,101 @@ main.write_text(source)
     invoke-direct {p0}, Lru/drivedeck/launcher/MainActivity;-><init>()V
     return-void
 .end method
-""")
-bridge = launcher / "P1.smali"
+"""
+if profile == AUTHOR_360:
+    # Android can draw a projection while the phone owns the only input focus.
+    # Code 360 arms embedded pages on first window focus. Share that single
+    # readiness transition with the first visible traversal on the HSD display.
+    owner = "Lru/drivedeck/launcher/MainActivity;"
+    music_host = "Lru/drivedeck/hsd/ProjectionMusic;"
+    # Internal Music/Phone shortcuts must come back to the same launcher entry and process.
+    source = method(source, "public final I(Ljava/lang/String;)V", lambda body: once(body,
+        "    const-class v2, " + owner,
+        "    invoke-virtual {p0}, Ljava/lang/Object;->getClass()Ljava/lang/Class;\n    move-result-object v2"))
+    source = method(source, "public final N()V", lambda body: once(body,
+        "    invoke-virtual {v3, v0}, Landroid/app/Dialog;->setContentView(Landroid/view/View;)V",
+        f"    invoke-static {{v3, v0, p0}}, {music_host}->setMusicContent(Landroid/app/Dialog;Landroid/view/View;Landroid/app/Activity;)V"))
+    source = method(source, "public final onBackPressed()V", lambda body: once(body,
+        "    invoke-virtual {v2}, Landroid/view/View;->hasWindowFocus()Z",
+        f"    invoke-static {{v2}}, {music_host}->canHandleBack(Landroid/view/View;)Z"))
+    attach = f"    invoke-static {{p0, p1}}, {resolver}->attach(Landroid/app/Activity;Landroid/content/Intent;)V"
+    music_dialog = launcher.translate("Lru/drivedeck/launcher/h4;")
+    startup = "Lru/drivedeck/launcher/E9;"
+    source = method(source, "public final onNewIntent(Landroid/content/Intent;)V", lambda body: once(body, attach,
+        attach + f"\n    invoke-static {{}}, {music_host}->hasPendingStart()Z\n    move-result v0\n" +
+        f"    if-eqz v0, :hsd_music_checked\n    invoke-static {{p0}}, {startup}->N0(Landroid/content/Context;)V\n" +
+        f"    :hsd_music_checked\n    iget-object v0, p0, {owner}->j0:{music_dialog}\n" +
+        f"    invoke-static {{p0, p1, v0}}, {music_host}->returnToLauncher(Landroid/app/Activity;Landroid/content/Intent;Landroid/app/Dialog;)V"))
+
+    # The author's latch lives for the whole launcher process, which can survive
+    # multiple connections. Scope both first presentation and SCREEN_ON to the host session.
+    presented = launcher.file("c4.1.smali")
+    latch = f"    sget-boolean v2, {startup}->A:Z"
+    presented.write_text(once(presented.read_text(), latch, latch +
+        f"\n    invoke-static {{v2}}, {music_host}->alreadyRequested(Z)Z\n    move-result v2"))
+    scheduler = launcher.file("E9.smali")
+    enter = "    :cond_0\n    invoke-virtual {p0}, Landroid/content/Context;->getApplicationContext()Landroid/content/Context;"
+    scheduler.write_text(method(scheduler.read_text(), "public static N0(Landroid/content/Context;)V", lambda body:
+        once(body, enter, f"    :cond_0\n    invoke-static {{}}, {music_host}->claimResume()Z\n    move-result v0\n" +
+             "    if-eqz v0, :goto_0\n" + enter.split("\n", 1)[1])))
+    for name in ("home", "back"):
+        icon = Path(__file__).resolve().parents[2] / f"android/app/src/main/res/drawable/desktop_{name}.xml"
+        shutil.copyfile(icon, root / f"res/drawable/hsd_music_{name}.xml")
+    resume = launcher.file("e5.1.smali")
+    begin_resume = "    :cond_8\n    :goto_1\n"
+    resume.write_text(method(resume.read_text(), "public final run()V", lambda body: once(body, begin_resume,
+        begin_resume + f"""    invoke-static {{}}, {resolver}->isHsdProjection()Z
+    move-result v6
+    if-eqz v6, :hsd_original_resume
+    invoke-static {{v3, v5}}, {music_host}->resume(Landroid/content/Context;Ljava/lang/String;)V
+    return-void
+    :hsd_original_resume
+""")))
+    def share_first_presentation(body):
+        start = body.index(f"    iget-boolean p1, p0, {owner}->O:Z")
+        end = body.index("    :cond_5\n", start)
+        registers = {"p1": "v1", "v1": "v2"}
+        transition = re.sub(r"\b(p1|v1)\b", lambda m: registers[m[0]], body[start:end])
+        transition = transition.replace(":cond_5", ":done")
+        return (body[:start] + f"    invoke-virtual {{p0}}, {owner}->hsdMarkPresented()V\n\n" + body[end:],
+                ".method public final hsdMarkPresented()V\n    .locals 3\n    const/4 v0, 0x1\n" +
+                transition + "    :done\n    return-void\n.end method\n")
+    # Only move the verified upstream guard and its selected-page activation.
+    focus_signature = ".method public final onWindowFocusChanged(Z)V\n"
+    focus_start = source.index(focus_signature) + len(focus_signature)
+    focus_end = source.index(".end method", focus_start)
+    focus, mark_presented = share_first_presentation(source[focus_start:focus_end])
+    source = source[:focus_start] + focus + source[focus_end:] + "\n" + mark_presented
+
+    entry = entry.replace(".super " + owner, ".super " + owner +
+                          "\n.implements Landroid/view/ViewTreeObserver$OnPreDrawListener;")
+    observer = ("Lru/drivedeck/hsd/HostedDisplay;->observePresentation(Landroid/app/Activity;"
+                "Landroid/view/ViewTreeObserver$OnPreDrawListener;Z)V")
+    for event, attach in (("onAttachedToWindow", 1), ("onDetachedFromWindow", 0)):
+        inherited = f"    invoke-super {{p0}}, {owner}->{event}()V\n"
+        observe = f"    const/4 v0, {attach}\n    invoke-static {{p0, p0, v0}}, {observer}\n"
+        entry += f"\n.method public {event}()V\n    .locals 1\n"
+        entry += (inherited + observe if attach else observe + inherited) + "    return-void\n.end method\n"
+    entry += f"""
+.method public onPreDraw()Z
+    .locals 1
+    invoke-static {{p0}}, Lru/drivedeck/hsd/HostedDisplay;->isPresented(Landroid/app/Activity;)Z
+    move-result v0
+    if-eqz v0, :done
+    const/4 v0, 0x0
+    invoke-static {{p0, p0, v0}}, {observer}
+    invoke-virtual {{p0}}, {owner}->hsdMarkPresented()V
+    :done
+    const/4 v0, 0x1
+    return v0
+.end method
+"""
+main.write_text(source)
+launcher.file("HsdActivity.smali").write_text(entry)
+bridge = launcher.file("P1.smali")
 bridge.write_text(once(bridge.read_text(), "invoke-virtual {p0}, Landroid/app/Activity;->getDisplay()Landroid/view/Display;",
     "invoke-static {p0}, Lru/drivedeck/hsd/HostedDisplay;->of(Landroid/app/Activity;)Landroid/view/Display;"))
-guard = launcher / "E9.smali"
+guard = launcher.file("E9.smali")
 guard.write_text(method(guard.read_text(), "public static g(Lru/drivedeck/launcher/MainActivity;)Z",
                         lambda body: once(body, "const/16 v1, 0x21", "const/16 v1, 0x1d")))
 
@@ -185,7 +289,7 @@ def share_geometry(body):
 
 source = method(guard.read_text(), "public static " + geometry, share_geometry)
 guard.write_text(once(source, ".method public static " + geometry, ".method public static " + view_geometry))
-renderer = launcher / "H2.smali"
+renderer = launcher.file("H2.smali")
 def configure_tile(body):
     # onServiceConnected retries each pending tile with its real gateway capabilities.
     # A layout callback before that point must not reject QHD under the legacy limits.
@@ -205,7 +309,7 @@ renderer.write_text(method(renderer.read_text(), "public static y(Lru/drivedeck/
 # resume ticket, geometry ACK and live task query already guard the launch. Apply
 # that path to every app, and preserve any task still present (including external
 # activities), rather than treating two package names as the restoration policy.
-restore = launcher / "r2.1.smali"
+restore = launcher.file("r2.1.smali")
 restore.write_text(once(restore.read_text(), """    sget-object v3, Lc/a;->a:Ljava/util/Set;
 
     invoke-interface {v3, v2}, Ljava/util/Set;->contains(Ljava/lang/Object;)Z
@@ -215,7 +319,7 @@ restore.write_text(once(restore.read_text(), """    sget-object v3, Lc/a;->a:Lja
     if-eqz v3, :cond_1
 
 """, ""))
-restore_launch = launcher / "o2.1.smali"
+restore_launch = launcher.file("o2.1.smali")
 restore_launch.write_text(once(restore_launch.read_text(), """    if-ltz v1, :cond_7
 
     const/4 v4, 0x2
@@ -224,7 +328,7 @@ restore_launch.write_text(once(restore_launch.read_text(), """    if-ltz v1, :co
     move-result v1
     if-eqz v1, :cond_7"""))
 
-bind = launcher / "x1.1.smali"
+bind = launcher.file("x1.1.smali")
 source = bind.read_text()
 start = source.index('    const-string v3, "com.headswap.desk"')
 end = source.index('    const-string v2, "DriveDeckEmbed"', start)
@@ -239,7 +343,7 @@ start = source.index("    new-instance v4, Landroid/content/ComponentName;", sta
 end = source.index("    invoke-virtual {v1, v4}, Landroid/content/Intent;->setComponent", start)
 bind.write_text(source[:start] + "    move-object v4, v3\n\n" + source[end:])
 
-fullscreen = launcher / "S1.smali"
+fullscreen = launcher.file("S1.smali")
 source = method(fullscreen.read_text(), "public static d(Landroid/content/Context;)Z",
     lambda _: f"""    .locals 1
     invoke-static {{p0}}, {resolver}->rendererFullscreen(Landroid/content/Context;)Landroid/content/ComponentName;
@@ -268,17 +372,102 @@ source = once(source, admission, "    :goto_6\n" +
     "    new-instance v18, Lru/drivedeck/launcher/R1;")
 # After admission the upstream callback constructs its own intent. Resolve its destination
 # from the Activity's actual host as well, including on a device with both hosts installed.
-callback = launcher / "R1.smali"
+callback = launcher.file("R1.smali")
 body = once(callback.read_text(), "    sget-object v3, Lru/drivedeck/launcher/S1;->a:Landroid/content/ComponentName;",
     f"    invoke-static {{v2}}, {resolver}->rendererFullscreen(Landroid/content/Context;)Landroid/content/ComponentName;\n" +
     "    move-result-object v3\n    if-eqz v3, :cond_1")
 start_host = "    :try_start_0\n    invoke-static {v2, p1}, Lru/drivedeck/launcher/S1;->f("
-callback.write_text(once(body, start_host, f"    invoke-static {{v2, p1}}, {layout_settings}->addMenuRequest(Landroid/content/Context;Landroid/content/Intent;)V\n\n" + start_host))
+body = once(body, start_host, f"    invoke-static {{v2, p1}}, {layout_settings}->addMenuRequest(Landroid/content/Context;Landroid/content/Intent;)V\n\n" + start_host)
+# Direct fallback puts the player above DriveDeck on the parent display. Keep that display
+# usable while the gateway reconnects or when the host declines a child launch.
+def guard_direct_launch(body, anchor, context_reg, result_reg):
+    return once(body, anchor, f"""    invoke-static {{{context_reg}}}, {resolver}->keepLauncherOnUnavailableHost(Landroid/content/Context;)Z
+    move-result {result_reg}
+    if-eqz {result_reg}, :hsd_allow_direct
+    return-void
+    :hsd_allow_direct
+""" + anchor)
+callback.write_text(guard_direct_launch(body, "    :try_start_1\n    invoke-static {v2, v0}", "v2", "p1"))
+source = guard_direct_launch(source, "    invoke-virtual {v1, v7, v10}, Landroid/content/Context;->startActivity", "v1", "v0")
 # An unused static read in the app-picker only initialized the upstream fixed component.
 guard.write_text(once(guard.read_text(), "    sget-object p1, Lru/drivedeck/launcher/S1;->a:Landroid/content/ComponentName;\n", ""))
 source = method(source, "static constructor <clinit>()V", lambda _: "    .locals 0\n    return-void\n")
 source = once(source, ".field public static final a:Landroid/content/ComponentName;\n", "")
 fullscreen.write_text(source)
+
+# Use the explicit app-menu path when the card body is tapped. The upstream hit test
+# has already excluded its transport buttons and respected the tap-to-open preference.
+card = launcher.file("x4.1.smali")
+if profile == AUTHOR_360:
+    anchor = "    if-nez v10, :cond_8d\n\n    goto/16 :goto_4"
+    replacement = f"""    if-eqz v10, :goto_4
+    invoke-static {{}}, {resolver}->isHsdProjection()Z
+    move-result v10
+    if-eqz v10, :cond_8d
+    invoke-virtual {{v7}}, Lru/drivedeck/launcher/n5;->v0()Z
+    move-result v10
+    if-nez v10, :cond_8d
+    iget-object v10, v0, Lru/drivedeck/launcher/x4;->n1:Landroid/media/session/MediaController;
+    if-eqz v10, :hsd_selected_player
+    invoke-virtual {{v10}}, Landroid/media/session/MediaController;->getPackageName()Ljava/lang/String;
+    move-result-object v10
+    goto :hsd_open_player
+    :hsd_selected_player
+    invoke-virtual {{v7}}, Lru/drivedeck/launcher/n5;->z()Ljava/lang/String;
+    move-result-object v10
+    invoke-virtual {{v10}}, Ljava/lang/String;->isEmpty()Z
+    move-result v12
+    if-nez v12, :cond_8d
+    :hsd_open_player
+    iget-object v5, v5, Lru/drivedeck/launcher/V2;->b:Ljava/lang/Object;
+    check-cast v5, Lru/drivedeck/launcher/MainActivity;
+    const/4 v12, 0x0
+    invoke-virtual {{v5, v10, v12}}, Lru/drivedeck/launcher/MainActivity;->L(Ljava/lang/String;Z)Z
+    return v13"""
+else:
+    anchor = "    if-nez v6, :cond_7e\n\n    goto/16 :goto_2b"
+    replacement = f"""    if-eqz v6, :goto_2b
+    invoke-static {{}}, {resolver}->isHsdProjection()Z
+    move-result v6
+    if-eqz v6, :cond_7e
+    iget-object v6, v0, Lru/drivedeck/launcher/x4;->M1:Lru/drivedeck/launcher/n5;
+    invoke-virtual {{v6}}, Lru/drivedeck/launcher/n5;->v0()Z
+    move-result v6
+    if-nez v6, :cond_7e
+    iget-object v6, v0, Lru/drivedeck/launcher/x4;->o1:Landroid/media/session/MediaController;
+    if-eqz v6, :hsd_selected_player
+    invoke-virtual {{v6}}, Landroid/media/session/MediaController;->getPackageName()Ljava/lang/String;
+    move-result-object v6
+    goto :hsd_open_player
+    :hsd_selected_player
+    iget-object v6, v0, Lru/drivedeck/launcher/x4;->M1:Lru/drivedeck/launcher/n5;
+    invoke-virtual {{v6}}, Lru/drivedeck/launcher/n5;->z()Ljava/lang/String;
+    move-result-object v6
+    invoke-virtual {{v6}}, Ljava/lang/String;->isEmpty()Z
+    move-result v8
+    if-nez v8, :cond_7e
+    :hsd_open_player
+    iget-object v8, v0, Lru/drivedeck/launcher/x4;->e0:Lru/drivedeck/launcher/V2;
+    iget-object v8, v8, Lru/drivedeck/launcher/V2;->b:Ljava/lang/Object;
+    check-cast v8, Lru/drivedeck/launcher/MainActivity;
+    const/4 v9, 0x0
+    invoke-virtual {{v8, v6, v9}}, Lru/drivedeck/launcher/MainActivity;->L(Ljava/lang/String;Z)Z
+    return v5"""
+card.write_text(method(card.read_text(), "public final onTouchEvent(Landroid/view/MotionEvent;)Z",
+                       lambda body: once(body, anchor, replacement)))
+
+# A playback/metadata notification may update the selected player. It does not authorize
+# pausing every other Android session. Explicit media buttons and source selection remain upstream.
+watcher = launcher.file("c6.1.smali")
+anchor = "    :try_start_0\n    iget-object v0, v1, Lru/drivedeck/launcher/c6;->c:Landroid/media/session/MediaSessionManager;"
+def observe_without_pausing(body):
+    first = body.index(anchor)
+    last = body.index("    :cond_5\n", first)
+    if "Landroid/media/session/MediaController$TransportControls;->pause()V" not in body[first:last]:
+        raise ValueError("Unexpected playback observer")
+    return body[:first] + body[last:]
+
+watcher.write_text(method(watcher.read_text(), "public final b()V", observe_without_pausing))
 
 # The HeadSwap edition omits the rollback card. Its settings layout still tries to
 # distribute four children by position, so opening the dialog adds a null view.
@@ -311,8 +500,13 @@ def distribute_update_cards(body):
 
 """)
 
-settings = launcher / "N3.smali"
-source = method(settings.read_text(), "public final b0()V", distribute_update_cards)
+settings = launcher.file("N3.smali")
+source = settings.read_text()
+if profile == AUTHOR_070:
+    source = method(source, "public final b0()V", distribute_update_cards)
+else:
+    # The author now guards the absent rollback card in the update dialog.
+    assert "    if-eqz v6, :cond_3d\n\n    invoke-virtual {v0, v1, v6" in source
 
 def navigation_options(body):
     # Insert below the two native Dock behaviour switches, before transparency.
@@ -352,7 +546,7 @@ for key in ("headswap_fullscreen_back", "headswap_fullscreen_home", "hsd_fullscr
 schema_file.write_text(json.dumps(schema, ensure_ascii=False, separators=(",", ":")))
 
 # Upstream's app updates use its own signing key. HSD supplies the matching companion.
-updater = launcher / "Y9.smali"
+updater = launcher.file("Y9.smali")
 updater.write_text(method(updater.read_text(),
     "public static a(Landroid/content/Context;Lru/drivedeck/launcher/n5;ZLandroid/view/View;Lru/drivedeck/launcher/W9;)V",
     lambda _: f"""    .locals 1
@@ -391,8 +585,8 @@ for intent_filter in dedicated.findall("intent-filter"):
 app.append(dedicated)
 tree.write(manifest, encoding="utf-8", xml_declaration=True)
 yml = root / "apktool.yml"
-yml.write_text(once(yml.read_text(), f"versionCode: {AUTHOR_070.upstream_code}", f"versionCode: {AUTHOR_070.code}"))
+yml.write_text(once(yml.read_text(), f"versionCode: {profile.upstream_code}", f"versionCode: {profile.code}"))
 (root.parent / "patch-report.json").write_text(json.dumps({
-    "original_sha256": AUTHOR_070.original_sha256, "version_code": AUTHOR_070.code,
+    "original_sha256": profile.original_sha256, "version_code": profile.code,
     "renderer": "upstream HeadSwap edition", "entry": "ru.drivedeck.launcher.HsdActivity",
     "package": "ru.drivedeck.headswap", "min_hsd_sdk": 29}, indent=2))

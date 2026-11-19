@@ -57,14 +57,15 @@ internal object DesktopDisplayIsolation {
 internal class DesktopDisplayWakeLocks(private val context: Context) {
     private val locks = HashMap<Int, PowerManager.WakeLock>()
 
-    fun hold(displayId: Int) {
+    fun hold(displayId: Int, managedByVirtualDevice: Boolean) {
         release(displayId)
         val display = context.getSystemService(DisplayManager::class.java).getDisplay(displayId) ?: return
         val group = DesktopDisplayIsolation.groupId(display)
         val independent = DesktopDisplayIsolation.independent(display.flags, group)
         val separatePower = DesktopDisplayIsolation.hasSeparatePowerGroup(displayId, group)
-        AppLog.i("DESKTOP LOCK: display=$displayId group=$group separatePower=$separatePower independent=$independent flags=0x${display.flags.toString(16)}", false)
-        if (!separatePower) return
+        AppLog.i("DESKTOP LOCK: display=$displayId group=$group separatePower=$separatePower independent=$independent flags=0x${display.flags.toString(16)} virtualDevicePower=$managedByVirtualDevice", false)
+        // Our trusted VDM screens already have the virtual device's own no-idle-timeout policy.
+        if (managedByVirtualDevice || !separatePower) return
         try {
             val power = context.getSystemService(PowerManager::class.java)
             @Suppress("DEPRECATION")

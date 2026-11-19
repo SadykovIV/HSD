@@ -28,6 +28,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import com.hsd.universal.R
+import com.hsd.universal.CarMenuControl
 import com.hsd.universal.dex.DesktopBackSequence
 import com.hsd.universal.dex.DesktopModePolicy
 import com.hsd.universal.embed.EmbeddedGatewayPolicy
@@ -46,7 +47,6 @@ class DriveDeckFullscreenActivity : Activity() {
     private val screenBack = DesktopBackSequence()
     private val backBounds = Rect()
     private var leaving = false
-    private var target: ComponentName? = null
     private var parentProof: Any? = null
 
     private val parentId get() = hostDisplay?.displayId ?: -1
@@ -75,12 +75,9 @@ class DriveDeckFullscreenActivity : Activity() {
         }
         pane = DesktopAppPane(this, onOpened = { message.visibility = View.GONE }, onHome = ::goHome,
             onError = { error ->
-                if (tryNativeLaunch()) {
-                    Toast.makeText(this, getString(R.string.desktop_the_application_is_open_directly_on_the_head_unit), Toast.LENGTH_SHORT).show()
-                } else {
-                    Toast.makeText(this, error, Toast.LENGTH_SHORT).show()
-                    goHome()
-                }
+                com.hsd.universal.AppLog.i("DriveDeck fullscreen: returning to launcher · $error", false)
+                Toast.makeText(this, error, Toast.LENGTH_SHORT).show()
+                goHome()
             }, fullscreenDriveDeck = true)
         root.addView(pane.view, FrameLayout.LayoutParams(-1, -1))
         message = TextView(this).apply {
@@ -93,6 +90,11 @@ class DriveDeckFullscreenActivity : Activity() {
         back = button(getString(R.string.set_back), R.drawable.desktop_back, ::pressBack)
         menu = button(getString(R.string.desktop_drivedeck_menu), R.drawable.desktop_apps_menu, ::openAppMenu)
         home = button(getString(R.string.desktop_drivedeck_home), R.drawable.desktop_home, ::goHome)
+        val carMenu = button(getString(R.string.desktop_car_menu), R.drawable.desktop_car_menu) {
+            val proof = parentProof
+            if (!leaving && proof != null && EmbeddedSessionRegistry.isCurrentParent(parentId, proof))
+                CarMenuControl.request(this, parentId)
+        }
         val controls = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             dividerDrawable = android.graphics.drawable.ShapeDrawable().apply {
@@ -100,7 +102,7 @@ class DriveDeckFullscreenActivity : Activity() {
                 intrinsicHeight = dp(8)
             }
             showDividers = LinearLayout.SHOW_DIVIDER_MIDDLE
-            for (button in listOf(back, menu, home)) addView(button, dp(48), dp(48))
+            for (button in listOf(back, menu, home, carMenu)) addView(button, dp(48), dp(48))
         }
         root.addView(controls, FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM or Gravity.START).apply {
             marginStart = dp(12)
@@ -132,16 +134,11 @@ class DriveDeckFullscreenActivity : Activity() {
                 info.exported && info.enabled && info.applicationInfo.enabled &&
                 (info.permission == null || checkSelfPermission(info.permission) == android.content.pm.PackageManager.PERMISSION_GRANTED)
         } ?: run { goHome(); return }
-        target = component
         val backEnabled = intent.getBooleanExtra("back", false)
         val homeEnabled = intent.getBooleanExtra("home", false)
         val menuEnabled = intent.getBooleanExtra(ProjectionHost.APP_MENU, false)
-        val policy = config(component.packageName) ?: run { finish(); return }
-        if (!backEnabled && !homeEnabled && !menuEnabled && policy[1] == 0) {
-            // No overlay or app-specific rendering is needed on the parent display.
-            if (!tryNativeLaunch()) goHome()
-            return
-        }
+        if (config(component.packageName) == null) { finish(); return }
+        // Car-menu handoff remains available even when Android navigation controls are hidden.
         back.visibility = if (backEnabled) View.VISIBLE else View.GONE
         home.visibility = if (homeEnabled) View.VISIBLE else View.GONE
         menu.visibility = if (menuEnabled) View.VISIBLE else View.GONE
@@ -192,16 +189,6 @@ class DriveDeckFullscreenActivity : Activity() {
         val now = SystemClock.uptimeMillis()
         screenBack.down(now)
         if (screenBack.up(now)) goHome() else pane.back()
-    }
-
-    private fun tryNativeLaunch(): Boolean {
-        val component = target ?: return false
-        if (leaving || config() == null) return false
-        return runCatching {
-            startActivity(Intent.makeMainActivity(component), ActivityOptions.makeBasic().setLaunchDisplayId(parentId).toBundle())
-            leaving = true
-            finish()
-        }.isSuccess
     }
 
     private fun goHome() {

@@ -8,6 +8,16 @@ import org.junit.Test
 class ComponentCatalogTest {
     private val dd = DesktopComponent.DRIVEDECK
     private val sha = "a".repeat(64)
+
+    @Test fun playbackWarningEndsAtFirstFixedBuildWithoutBlockingTheOldComponent() {
+        assertTrue(357L >= dd.minCode)
+        assertTrue(dd.needsPlaybackUpdate(357L))
+        assertTrue(dd.needsPlaybackUpdate(358L))
+        assertFalse(dd.needsPlaybackUpdate(359L))
+        assertFalse(dd.needsPlaybackUpdate(362L))
+        assertFalse(dd.needsPlaybackUpdate(null))
+        assertFalse(DesktopComponent.CARBRIDGE.needsPlaybackUpdate(2L))
+    }
     private fun release(tag: String, code: Int, version: String = "0.6.7"): JSONObject {
         val name = "DriveDeck-HSD-$version-code$code.apk"
         val url = "https://github.com/${UpdateLogic.REPO}/releases/download/$tag/$name"

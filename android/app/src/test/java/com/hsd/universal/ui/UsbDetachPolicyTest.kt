@@ -6,6 +6,16 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class UsbDetachPolicyTest {
+    @Test fun samsungCanReturnAsConfiguredWithoutAnAccessoryFlag() {
+        val disconnected = UsbBusState(false, false, null)
+        val configured = UsbBusState(true, true, null)
+        assertTrue(configured.mayEnumerateAfter(disconnected, awaitingReconnect = true))
+        assertFalse(configured.mayEnumerateAfter(disconnected, awaitingReconnect = false))
+        assertFalse(configured.mayEnumerateAfter(configured, awaitingReconnect = true))
+        assertTrue(configured.copy(accessory = true).mayEnumerateAfter(configured, awaitingReconnect = false))
+        assertFalse(disconnected.mayEnumerateAfter(configured, awaitingReconnect = true))
+    }
+
     @Test fun waitingForAnAccessoryExplainsOnlyWhatTheSystemReported() {
         assertEquals(R.string.usb_wait_accessory, UsbBusState(null, null, null).waitingMessage())
         assertEquals(R.string.usb_wait_data, UsbBusState(false, false, true).waitingMessage())

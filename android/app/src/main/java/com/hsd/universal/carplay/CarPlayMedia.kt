@@ -127,21 +127,47 @@ internal class CarPlayAudio(
     val rate: Int,
     private val encoder: AutoAudioEncoder? = null,
     private val latencyMs: Long = 250L,
+    private val nowNanos: () -> Long = System::nanoTime,
+    private val log: (String) -> Unit = { AppLog.i(it, false) },
+    val channels: Int = 2,
+    private val encodedFrames: Int = 1024,
 ) {
-    private val pending = ByteArray(352 * 4)
+    private val bytesPerFrame = channels * 2
+    // A packet delayed locally may still arrive before its negotiated playout time.
+    // Reserve one wire packet for encoding and transit. This is an expiry, never a send delay.
+    val sendWindowUs: Long = (latencyMs * 1000L - (if (encoder == null) 352 else encodedFrames) * 1_000_000L / rate)
+        .coerceAtLeast(com.hsd.universal.AutoPcmQueue.DEFAULT_MAX_LATENESS_US)
+    private val pending = ByteArray(352 * bytesPerFrame)
     private var used = 0
-    private var counter = 0L
-    private var time = 0L
+    private var pendingPtsUs = 0L
+    @Volatile private var counter = 0L
+    private val timeline = CarPlayAudioTimeline(rate)
     private var syncAt = 0L
+    @Volatile private var syncPackets = 0L
+    @Volatile private var pcmBytes = 0L
+    @Volatile private var sentBytes = 0L
+    @Volatile private var lastPacketAt = 0L
+    @Volatile private var captureAgeUs = 0L
+    private var endPtsUs = 0L
+
+    // An approximate snapshot must remain available while send/codec is blocked:
+    // teardown logs it before closing the socket that releases the sender.
+    fun progressSummary(): String = "pcmBytes=$pcmBytes rtpPackets=$counter rtpBytes=$sentBytes sync=$syncPackets " +
+        "captureAgeMs=${captureAgeUs / 1000} lastSendAgeMs=${if (counter == 0L) -1 else (nowNanos() - lastPacketAt) / 1_000_000} " +
+        "skippedFrames=${timeline.skippedFrames} backwardsPts=${timeline.backwardsPts}"
 
     @Synchronized
     fun offer(pcm: ByteArray, ptsUs: Long = System.nanoTime() / 1000) {
+        require(channels in 1..2 && pcm.size % bytesPerFrame == 0) { "Incomplete PCM frame" }
+        pcmBytes += pcm.size
+        endPtsUs = ptsUs + pcm.size / bytesPerFrame * 1_000_000L / rate
         if (encoder != null) {
-            encoder.offer(pcm, 0, ptsUs, rate, false) { frame, _ -> send(frame, 1024) }
+            encoder.offer(pcm, 0, ptsUs, rate, false) { frame, encodedPts -> send(frame, encodedFrames, encodedPts) }
             return
         }
         var pos = 0
         while (pos < pcm.size) {
+            if (used == 0) pendingPtsUs = ptsUs + pos * 1_000_000L / (rate * bytesPerFrame.toLong())
             val n = minOf(pcm.size - pos, pending.size - used)
             pcm.copyInto(pending, used, pos, pos + n)
             used += n
@@ -152,19 +178,31 @@ internal class CarPlayAudio(
                 pending[i] = pending[i + 1]
                 pending[i + 1] = b
             }
-            send(pending, 352)
+            send(pending, 352, pendingPtsUs)
             used = 0
         }
     }
 
-    private fun send(payload: ByteArray, samples: Int) {
+    /** Finish a speech burst without carrying its partial PCM or codec delay into the next one. */
+    @Synchronized fun endSegment() {
+        if (encoder != null) {
+            encoder.finish(rate, false) { data, pts -> send(data, encodedFrames, pts) }
+            encoder.close()
+        } else if (used > 0) {
+            offer(ByteArray(pending.size - used), endPtsUs)
+        }
+        used = 0
+    }
+
+    private fun send(payload: ByteArray, samples: Int, ptsUs: Long) {
+        val position = timeline.next(ptsUs, samples)
         val h =
             ByteBuffer.allocate(12)
                 .apply {
                     put(0x80.toByte())
                     put(((if (counter == 0L) 0x80 else 0) or (streamType and 127)).toByte())
                     putShort(counter.toShort())
-                    putInt(time.toInt())
+                    putInt(position.rtp.toInt())
                     putInt(0)
                 }
                 .array()
@@ -174,21 +212,24 @@ internal class CarPlayAudio(
                 AirPlayCrypto.chachaSeal(key, nonce, payload, h.copyOfRange(4, 12)) +
                 nonce.copyOfRange(4, 12)
         udp.send(DatagramPacket(data, data.size, host, port))
-        val now = System.nanoTime()
+        val firstPacket = counter == 0L
+        counter++ // A successfully sent RTP nonce must never be reused if the sync send fails.
+        val now = nowNanos()
+        lastPacketAt = now
+        captureAgeUs = now / 1000 - position.ptsUs
+        sentBytes += data.size
         if (control in 1..65535 && (syncAt == 0L || now - syncAt >= 1_000_000_000)) {
             val sync =
                 AudioSyncPacket.build(
-                    (counter and 65535).toInt(),
-                    time,
-                    time + rate * latencyMs / 1000,
-                    TimingServer.ntpFromNanos(now),
+                    position.rtp,
+                    rate * latencyMs / 1000,
+                    TimingServer.ntpFromNanos(position.ptsUs * 1000),
                     syncAt == 0L,
                 )
             udp.send(DatagramPacket(sync, sync.size, host, control))
             syncAt = now
+            syncPackets++
         }
-        if (counter == 0L) AppLog.i("CarPlay audio: first RTP packet sent (${payload.size} B, ${samples} samples)", false)
-        counter++
-        time += samples
+        if (firstPacket) log("CarPlay audio: first RTP packet sent (${payload.size} B, ${samples} samples)")
     }
 }

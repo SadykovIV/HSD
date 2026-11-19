@@ -46,6 +46,7 @@ import com.hsd.universal.component.DesktopComponents
 import com.hsd.universal.component.PanelLaunchSession
 import com.hsd.universal.AppLog
 import com.hsd.universal.BridgeService
+import com.hsd.universal.CarMenuControl
 import com.hsd.universal.CarLifeState
 import com.hsd.universal.component.api.ProfileContract
 import com.hsd.universal.dex.DexPrefs
@@ -89,6 +90,7 @@ class AndroidDesktopActivity : Activity() {
         java.util.IdentityHashMap<AlertDialog, Boolean>())
     private lateinit var backButton: ImageButton
     private lateinit var homeButton: ImageButton
+    private lateinit var carMenuButton: ImageButton
     private val knobFocus = DesktopKnobFocus()
     private data class KnobTarget(val item: DesktopKnobFocus.Item, val select: () -> Unit, val click: () -> Unit)
     private val hardwareUi = object : DesktopHardwareUi.Sink {
@@ -350,6 +352,10 @@ class AndroidDesktopActivity : Activity() {
             if (ownsDisplay()) { autoOpenPanel = false; pane.home() }
         }
         sidebar.addView(homeButton, LinearLayout.LayoutParams(-1, buttonHeight))
+        carMenuButton = navButton(getString(R.string.desktop_car_menu), R.drawable.desktop_car_menu) {
+            if (ownsDisplay()) CarMenuControl.request(this, currentDisplayId())
+        }
+        sidebar.addView(carMenuButton, LinearLayout.LayoutParams(-1, buttonHeight))
         layout.addView(sidebar, LinearLayout.LayoutParams(railWidth, -1))
         workspace = FrameLayout(this)
         layout.addView(workspace, LinearLayout.LayoutParams(0, -1, 1f))
@@ -875,6 +881,7 @@ class AndroidDesktopActivity : Activity() {
         rows(rail, pinnedEntries, "rail:", 1)
         button("back", backButton)
         button("home", homeButton)
+        button("car", carMenuButton)
     }
 
     private fun paintKnob(view: View, id: String) {
@@ -894,6 +901,7 @@ class AndroidDesktopActivity : Activity() {
             paintKnob(rail.getChildAt(i), "rail:" + it.key)
         }
         paintKnob(panelButton, "panel"); paintKnob(backButton, "back"); paintKnob(homeButton, "home")
+        paintKnob(carMenuButton, "car")
     }
 
     /** Android-defined application categories, with explicit user choice if there is no default. */

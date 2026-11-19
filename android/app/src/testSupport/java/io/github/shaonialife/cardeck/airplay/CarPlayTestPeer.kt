@@ -117,20 +117,20 @@ internal class CarPlayTestPeer {
 
     private fun setupM6(tlv: Map<Int, ByteArray>): ByteArray {
         val encrypted = tlv[Tlv8.TYPE_ENCRYPTED_DATA] ?: return error(6)
-        val encryptionKey = hkdf("Pair-Setup-Encrypt-Salt", "Pair-Setup-Encrypt-Info")
+        val encryptionKey = hkdf(sessionKey, "Pair-Setup-Encrypt-Salt", "Pair-Setup-Encrypt-Info")
         val sub = Tlv8.decode(AirPlayCrypto.chachaOpen(encryptionKey, AirPlayCrypto.nonceLabel("PS-Msg05"), encrypted))
         val controllerId = sub[Tlv8.TYPE_IDENTIFIER] ?: return error(6)
         val controllerLtpk = sub[Tlv8.TYPE_PUBLIC_KEY] ?: return error(6)
         val controllerSignature = sub[Tlv8.TYPE_SIGNATURE] ?: return error(6)
 
-        val controllerSignKey = hkdf("Pair-Setup-Controller-Sign-Salt", "Pair-Setup-Controller-Sign-Info")
+        val controllerSignKey = hkdf(sessionKey, "Pair-Setup-Controller-Sign-Salt", "Pair-Setup-Controller-Sign-Info")
         if (!AirPlayCrypto.ed25519Verify(controllerLtpk, controllerSignKey + controllerId + controllerLtpk, controllerSignature)) {
             return error(6)
         }
         pairings[controllerId.toString(Charsets.UTF_8)] = controllerLtpk
 
         val accessoryId = pairingId.toByteArray(Charsets.UTF_8)
-        val accessorySignKey = hkdf("Pair-Setup-Accessory-Sign-Salt", "Pair-Setup-Accessory-Sign-Info")
+        val accessorySignKey = hkdf(sessionKey, "Pair-Setup-Accessory-Sign-Salt", "Pair-Setup-Accessory-Sign-Info")
         val signature = AirPlayCrypto.ed25519Sign(staticKey.privateKey, accessorySignKey + accessoryId + staticKey.publicKey)
         val subResponse =
             Tlv8.encode(
@@ -157,7 +157,7 @@ internal class CarPlayTestPeer {
         val pair = AirPlayCrypto.x25519Generate()
         pvEphemeralPublic = pair.publicKey
         pvShared = AirPlayCrypto.x25519Shared(pair.privateKey, clientEphemeral)
-        pvEncryptionKey = hkdf("Pair-Verify-Encrypt-Salt", "Pair-Verify-Encrypt-Info")
+        pvEncryptionKey = hkdf(pvShared, "Pair-Verify-Encrypt-Salt", "Pair-Verify-Encrypt-Info")
 
         val accessoryId = pairingId.toByteArray(Charsets.UTF_8)
         val signature =
@@ -198,18 +198,18 @@ internal class CarPlayTestPeer {
         if (!AirPlayCrypto.ed25519Verify(controllerLtpk, clientEphemeral + controllerId + pvEphemeralPublic, controllerSignature)) {
             return error(4)
         }
-        lastReadKey = hkdf("Control-Salt", "Control-Write-Encryption-Key")
-        lastWriteKey = hkdf("Control-Salt", "Control-Read-Encryption-Key")
+        lastReadKey = hkdf(pvShared, "Control-Salt", "Control-Write-Encryption-Key")
+        lastWriteKey = hkdf(pvShared, "Control-Salt", "Control-Read-Encryption-Key")
         return Tlv8.encode(listOf(Tlv8.Item(Tlv8.TYPE_STATE, byteArrayOf(4))))
     }
 
     private var pvClientEphemeral: ByteArray? = null
 
     private fun hkdf(
+        material: ByteArray,
         salt: String,
         info: String,
     ): ByteArray {
-        val material = if (pvShared.isNotEmpty()) pvShared else sessionKey
         return AirPlayCrypto.hkdfSha512(material, salt.toByteArray(), info.toByteArray())
     }
 

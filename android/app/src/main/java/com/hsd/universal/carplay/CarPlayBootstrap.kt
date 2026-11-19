@@ -27,7 +27,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
-import net.prototux.aare.aap.AapLog
+import com.hsd.universal.ProjectionWirelessLog
 import net.prototux.aare.aap.wireless.*
 import net.prototux.aare.transport.wireless.HeadUnitNetwork
 
@@ -154,7 +154,7 @@ internal class CarPlayBootstrap(
         }
         val link = candidate.link
         val deviceInfo = CarPlayDeviceInformation(connectedDeviceUuids.acquire(life))
-        val wifi = HeadUnitNetwork(context, AapLog.Stdout, 60_000, requireIpv4 = false)
+        val wifi = HeadUnitNetwork(context, ProjectionWirelessLog, 60_000, requireIpv4 = false)
         life.own(wifi::release)
         var stage = 0
         fun advance(next: Int) {
@@ -184,7 +184,8 @@ internal class CarPlayBootstrap(
                     else -> error("Неподдерживаемая защита сети CarPlay ($sec)")
                 }
             advance(R.string.carplay_stage_wifi)
-            val result = wifi.join(WifiCredentials(ssid, password, null, security, sec, null))
+            // iAP2 supplies the exact AP name even when the receiver suppresses it in beacons.
+            val result = wifi.join(WifiCredentials(ssid, password, null, security, sec, null), directedScan = true)
             if (result is JoinResult.Failed) error(if (result.status == WppStatus.PHONE_WIFI_DISABLED) result.message
                 else context.getString(R.string.projection_wifi_join_failed, result.message))
             val network = checkNotNull(wifi.network) { "Соединение с Wi-Fi магнитолы завершено" }
@@ -197,12 +198,32 @@ internal class CarPlayBootstrap(
         // IDs suffice to reconstruct the exchange. Control bodies contain private network credentials.
         val observed = mutableSetOf<Int>()
         fun send(id: Int, body: ByteArray = byteArrayOf()) {
-            check(link.sendControl(Iap2Csm.encode(id, body)))
+            check(link.sendControl(Iap2Csm.encode(id, body))) {
+                trace("control write failed · id=0x${id.toString(16)} · ${link.progressSummary()}")
+                context.getString(R.string.carplay_setup_closed, context.getString(stage))
+            }
             trace("iAP2 tx=0x${id.toString(16)}")
         }
         val exchange = AccessoryAuthExchange(auth, ::send, context.getString(R.string.carplay_invalid_accessory_signature))
-        trace("iAP2 link ready")
-        send(0x1d00)
+        var announced = false
+        fun advanceExchange() {
+            when (exchange.stage) {
+                AccessoryAuthExchange.Stage.IDLE -> Unit
+                AccessoryAuthExchange.Stage.IDENTIFICATION -> advance(R.string.carplay_stage_identification)
+                AccessoryAuthExchange.Stage.SERIAL, AccessoryAuthExchange.Stage.CERTIFICATE ->
+                    advance(R.string.carplay_stage_certificate)
+                AccessoryAuthExchange.Stage.SIGNATURE -> advance(R.string.carplay_stage_signature)
+                AccessoryAuthExchange.Stage.VERIFIED -> if (!announced) {
+                    announced = true
+                    trace("accessory verified and identified · requesting Wi-Fi session")
+                    advance(R.string.carplay_stage_credentials)
+                    checkNotNull(setup).announce(local, deviceInfo, android.os.SystemClock.elapsedRealtime(), ::send)
+                }
+            }
+        }
+        trace("iAP2 link ready · control v${link.negotiatedControlVersion}")
+        exchange.start(link.negotiatedControlVersion)
+        advanceExchange()
         val deadline = android.os.SystemClock.elapsedRealtime() + 110_000
         var nextProgress = android.os.SystemClock.elapsedRealtime() + 10_000
         while (!life.isClosed && android.os.SystemClock.elapsedRealtime() < deadline) {
@@ -223,21 +244,12 @@ internal class CarPlayBootstrap(
                             setup = CarPlayWirelessSetup(sends, receives)
                             fun ids(list: List<Int>) = list.distinct().take(64).joinToString(",") { it.toString(16) }.ifEmpty { "none" }
                             trace("identified · sends=${ids(sends)} · receives=${ids(receives)}")
-                            exchange.identified()
-                            advance(R.string.carplay_stage_certificate)
+                            exchange.identified(0xaa06 in sends)
+                            advanceExchange()
                         }
                         0xaa06, 0xaa01, 0xaa03 -> {
                             exchange.receive(frame.messageId, fields)
-                            when (frame.messageId) {
-                                0xaa06 -> if (exchange.stage == AccessoryAuthExchange.Stage.CERTIFICATE)
-                                    advance(R.string.carplay_stage_certificate)
-                                0xaa01 -> advance(R.string.carplay_stage_signature)
-                                0xaa03 -> {
-                                    trace("accessory verified · requesting Wi-Fi session")
-                                    advance(R.string.carplay_stage_credentials)
-                                    checkNotNull(setup).announce(local, deviceInfo, android.os.SystemClock.elapsedRealtime(), ::send)
-                                }
-                            }
+                            advanceExchange()
                         }
                         0x5703 -> {
                             check(exchange.stage == AccessoryAuthExchange.Stage.VERIFIED)
@@ -259,6 +271,13 @@ internal class CarPlayBootstrap(
                     }
                 }
             val now = android.os.SystemClock.elapsedRealtime()
+            if (exchange.responseTimedOut()) {
+                trace("timeout · auth=${exchange.stage} · ${link.progressSummary()}")
+                error(if (exchange.stage == AccessoryAuthExchange.Stage.SIGNATURE)
+                    context.getString(R.string.carplay_signature_timeout)
+                else context.getString(R.string.carplay_setup_timeout, context.getString(stage)))
+            }
+            advanceExchange()
             if (now >= nextProgress && exchange.stage != AccessoryAuthExchange.Stage.VERIFIED) {
                 trace("waiting · auth=${exchange.stage} · ${link.progressSummary()}")
                 nextProgress = now + 10_000
@@ -273,6 +292,7 @@ internal class CarPlayBootstrap(
                 return CarPlayEndpoint(net, target.first, target.second, local, remote, peerKey, deviceInfo)
         }
         val phase = context.getString(stage)
+        trace("setup ended · auth=${exchange.stage} · ${link.progressSummary()}")
         error(context.getString(if (link.isAlive || bonjour != null) R.string.carplay_setup_timeout else R.string.carplay_setup_closed, phase))
     }
 

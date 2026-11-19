@@ -1,5 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="carplay_renew_pairing">Повторить сопряжение CarPlay</string>
+    <string name="carplay_renew_confirm">Заново установить сопряжение CarPlay с %1$s? HSD сохранит прежний ключ до успешной проверки магнитолы при следующем подключении.</string>
+    <string name="carplay_renew_ready">Теперь запустите подключение к этой магнитоле.</string>
+    <string name="carplay_receiver_changed">Магнитола не подтвердила сохранённый ключ CarPlay. В разделе «Тип подключения» → CarPlay выберите ту же магнитолу и нажмите «Повторить сопряжение CarPlay».</string>
+    <string name="desktop_car_menu">Меню автомобиля</string>
     <string name="desktop_1_components">"1. Компоненты"</string>
     <string name="desktop_6_digit_code">"Код из 6 цифр"</string>
     <string name="desktop_a_new_version_is_available">"Доступна новая версия."</string>
@@ -28,7 +33,6 @@
     <string name="desktop_activation_setup_incomplete">"Настройка активации не завершена"</string>
     <string name="desktop_activation_status_and_code_entry_directly_in_the_notification">"Состояние активации и ввод кода прямо в уведомлении."</string>
     <string name="desktop_add_app">"Добавить приложение"</string>
-    <string name="desktop_additional_audio_delay_in_milliseconds">"Дополнительная задержка звука, миллисекунды"</string>
     <string name="desktop_additional_network_mode_adb_which_uses_debugging_connections_including">"Дополнительный сетевой режим ADB, который использует %1$s, будет отключён. Соединения отладки, в том числе компьютера и других приложений, могут прерваться. Настройка «Беспроводная отладка» Android сохранится. Для рабочего стола может потребоваться повторная активация по Wi-Fi."</string>
     <string name="desktop_adjust_app_dpi">"Исправить DPI приложения"</string>
     <string name="desktop_after_a_few_seconds_press_the_desired_button_again">"Через несколько секунд нажмите нужную кнопку ещё раз."</string>
@@ -60,7 +64,7 @@
     <string name="desktop_application_permissions_saved_click_re_activate_to_check_the">"Права приложения сохранены. Нажмите «Повторная активация», чтобы проверить соединение и подготовить независимый экран."</string>
     <string name="desktop_approximate_location">"Приблизительное местоположение"</string>
     <string name="desktop_apps">"Приложения"</string>
-    <string name="desktop_audio_sync">"Синхронизация звука"</string>
+    <string name="desktop_audio_sync">Настроить синхронизацию звука</string>
     <string name="desktop_audio_uses_the_phone_s_current_output">"Звук остаётся на обычном выходе телефона."</string>
     <string name="desktop_audio_uses_the_phone_s_current_output_such_as">"Звук остаётся на обычном выходе телефона, например Bluetooth автомобиля."</string>
     <string name="desktop_auto">"авто"</string>
@@ -173,7 +177,6 @@
     <string name="desktop_desktop_could_not_start">"Рабочий стол не запустился"</string>
     <string name="desktop_desktop_preparations_incomplete">"Подготовка рабочего стола не завершена"</string>
     <string name="desktop_desktop_profile">"Профиль рабочего стола"</string>
-    <string name="desktop_desktop_ready_for_setup">"Рабочий стол готов к настройке ✓"</string>
     <string name="desktop_desktop_unavailable">"Рабочий стол недоступен"</string>
     <string name="desktop_dex_by_adb_1280_720">" · DeX по ADB · 1280 × 720"</string>
     <string name="desktop_dex_over_adb_uses_1280_720_the_selected_dpi">"DeX по ADB использует 1280 × 720. Выбранный DPI применяется при следующем подключении."</string>
@@ -195,7 +198,6 @@
     <string name="desktop_enable_the_activation_channel">"Включите канал «Активация %1$s»."</string>
     <string name="desktop_enable_the_input_pairing_code_channel">"Включите канал «Ввод кода сопряжения»."</string>
     <string name="desktop_enabling_access">"Включаю доступ %1$s…"</string>
-    <string name="desktop_enter_0_to_2000_ms">"Введите от 0 до 2000 мс"</string>
     <string name="desktop_enter_a_port_from_1_to_65535">"Введите порт от 1 до 65535"</string>
     <string name="desktop_enter_address_and_ports_manually">"Ввести адрес и порты вручную"</string>
     <string name="desktop_enter_an_integer_from_1_to_20">"Введите целое число от 1 до 20"</string>
@@ -261,8 +263,7 @@
     <string name="desktop_how_to_turn_off_the_phone_screen">"Способ отключения экрана телефона"</string>
     <string name="desktop_how_to_turn_off_the_screen">"Способ отключения экрана"</string>
     <string name="desktop_hsd_certificate">"Сертификат HSD"</string>
-    <string name="desktop_hsd_creates_a_certificate_the_first_time_it_connects">В режиме «Автоматически» используется проверенный сертификат из HSD. Устанавливать Android Auto не требуется. Если установленный Android Auto содержит более свежий действующий сертификат, HSD может использовать его. Проверенные сертификаты также могут обновляться автоматически через интернет. При ручном выборе используется выбранный сертификат.</string>
-    <string name="aa_auto_identity_unavailable">Нет действующего сертификата для автоматического подключения Android Auto. Подключитесь к интернету, проверьте обновления сертификатов и дату на телефоне. Также можно выбрать сертификат в разделе «Сертификаты Android Auto».</string>
+    <string name="desktop_hsd_creates_a_certificate_the_first_time_it_connects">HSD создаёт профиль на этом телефоне. Если магнитола требует другой профиль, выберите его из хранилища Android.</string>
     <string name="aa_installed_identity_unavailable">Не удалось получить действующий сертификат из установленного Android Auto. Обновите Android Auto на телефоне и подключитесь снова. Другой сертификат можно выбрать в разделе «Сертификаты Android Auto».</string>
     <string name="desktop_hsd_sends_the_next_street_name_with_the_turn">"Вместе со стрелкой и расстоянием HSD передаёт название следующей улицы, если его указал навигатор. На совместимых приборных панелях и HUD название появляется во время ведения по маршруту."</string>
     <string name="desktop_i_m_checking_the_saved_connection_turn_on_wi">"Проверяю сохранённое подключение. Включите Wi-Fi и беспроводную отладку."</string>
@@ -305,9 +306,7 @@
     <string name="desktop_looking_for_pairing_dialog">"Ищу окно сопряжения…"</string>
     <string name="desktop_looking_for_phone">"Ищу телефон…"</string>
     <string name="desktop_main_app_code">"Основное приложение · %1$s (код %2$d)"</string>
-    <string name="desktop_manages">"Управляет %1$s"</string>
-    <string name="desktop_screen_control_phone">"Управляет телефон"</string>
-    <string name="desktop_managing_the_phone_display">"Управление дисплеем телефона"</string>
+    <string name="desktop_managing_the_phone_display">%1$s управляет экраном телефона</string>
     <string name="desktop_map_and_music_side_by_side_on_the_head">"Карта и плеер рядом на экране магнитолы."</string>
     <string name="desktop_mbit_s">"%1$d Мбит/с"</string>
     <string name="desktop_mbit_s_1041">"Мбит/с"</string>
@@ -372,7 +371,7 @@
     <string name="desktop_pair_a_new_head_unit">"Сопряжение с новой магнитолой"</string>
     <string name="desktop_pair_and_connect">"Сопрячь и подключить"</string>
     <string name="desktop_pair_dex_over_adb">"Сопряжение DeX по ADB"</string>
-    <string name="desktop_pair_over_bluetooth_and_project_over_wi_fi">"Сопряжение по Bluetooth, проекция по Wi-Fi"</string>
+    <string name="desktop_pair_over_bluetooth_and_project_over_wi_fi">Магнитола должна поддерживать беспроводной CarPlay. HSD использует Bluetooth для сопряжения и Wi-Fi для проекции. Подключение CarPlay только по USB пока недоступно.</string>
     <string name="desktop_pair_the_phone_with_the_head_unit_then_select">"Выполните сопряжение с магнитолой и вернитесь к её выбору."</string>
     <string name="desktop_paired_devices">"Сопряжённые устройства"</string>
     <string name="desktop_pairing_connection">"Сопряжение: %1$s\nПодключение: %2$s"</string>
@@ -391,7 +390,6 @@
     <string name="desktop_phone_certificate">"Сертификат телефона"</string>
     <string name="desktop_phone_not_found_yet">"Телефон пока не найден"</string>
     <string name="desktop_phone_s_locked_unlock_it_to_read_the_notifications">"Телефон заблокирован\nРазблокируйте его, чтобы прочитать уведомления."</string>
-    <string name="desktop_phone_screen_control">"Управление экраном телефона"</string>
     <string name="desktop_phone_screen_timer">"Таймер экрана телефона"</string>
     <string name="desktop_phone_status">"Состояние телефона"</string>
     <string name="desktop_phone_visible_select_it_on_the_head_unit_and">"Телефон виден %1$d с. Выберите его на магнитоле и подтвердите код сопряжения."</string>
@@ -479,8 +477,6 @@
     <string name="desktop_stopped">"Остановлено"</string>
     <string name="desktop_street_names_for_turns">"Названия улиц при манёврах"</string>
     <string name="desktop_switching_to">"Переключение на %1$s"</string>
-    <string name="desktop_synchronization_works_automatically_here_you_can_make_an_adjustment">"Синхронизация работает автоматически. После первого подключения %1$s здесь можно будет задать поправку для своей магнитолы."</string>
-    <string name="desktop_synchronizes_the_streams_automatically_if_the_sound_is_from">"%1$s\n\n%2$s синхронизирует потоки автоматически. Если звук из динамиков %3$s всё ещё опережает изображение, укажите на сколько: от 0 до 2000 мс. 0 — только автоматически. На Bluetooth эта поправка не действует."</string>
     <string name="desktop_tap_connect">"Нажмите «Подключить»."</string>
     <string name="desktop_tap_connect_to_retry_if_the_error_persists_send">"%1$s\n\nНажмите «Подключить», чтобы повторить. Если ошибка повторится, отправьте журнал."</string>
     <string name="desktop_tap_connect_to_retry_or_send_the_log">"Нажмите «Подключить», чтобы повторить, или отправьте журнал."</string>
@@ -489,7 +485,6 @@
     <string name="desktop_temporarily_disabled">"Временно отключена"</string>
     <string name="desktop_the_apk_is_downloaded_from_a_verified_component_repository">"APK загружается из проверенного репозитория компонента. Проверяются подпись и контрольная сумма. Установку подтверждает Android."</string>
     <string name="desktop_the_apk_system_installer_is_not_available">"Системный установщик APK недоступен."</string>
-    <string name="desktop_the_application_is_open_directly_on_the_head_unit">"Приложение открыто напрямую на магнитоле"</string>
     <string name="desktop_the_application_will_close_after_the_desktop_is_released">"Приложение закроется после освобождения рабочего стола.%1$s"</string>
     <string name="desktop_the_closure_of_additional_network_debugging_has_not_been">"Закрытие дополнительной сетевой отладки не подтверждено. "</string>
     <string name="desktop_the_code_is_entered_once_when_activated_again_it">"Код вводится один раз. При повторной активации %1$s использует сохранённое сопряжение."</string>
@@ -596,7 +591,7 @@
     <string name="desktop_we_need_the_first_connection">"Нужно первое подключение"</string>
     <string name="desktop_app_activation_required">"Нужна активация приложения"</string>
     <string name="desktop_we_need_to_update_access">"Нужно обновить доступ"</string>
-    <string name="desktop_when_the_control_is_turned_off_the_phone_controls">"Когда управление выключено, экраном управляет сам телефон. Когда включено, %1$s управляет гашением экрана при подключении к %2$s."</string>
+    <string name="desktop_phone_screen_owner_hint">Когда выключено, экран гаснет и блокируется по настройкам телефона.</string>
     <string name="desktop_wi_fi_direct_is_automatically_configured_via_bluetooth_if">"Wi-Fi Direct настраивается через Bluetooth автоматически. Если магнитола использует собственную точку доступа, укажите её сеть. Если она подключается к точке доступа телефона, включите её в настройках Android."</string>
     <string name="desktop_width_in_pixels">"Ширина, пиксели"</string>
     <string name="desktop_wireless_connection">"Беспроводное подключение"</string>
@@ -648,7 +643,6 @@
     <string name="desktop_android_has_not_launched_the_desktop_service">"Android не запустил службу рабочего стола"</string>
     <string name="desktop_android_has_not_launched_the_transmission_of_sound">"Android не запустил передачу звука"</string>
     <string name="desktop_android_has_stopped_service_open_up_and_re_activate">"Android остановил службу. Откройте %1$s и повторите активацию; сохранённое сопряжение осталось."</string>
-    <string name="desktop_android_sound_reading_error">"Ошибка чтения звука Android: %1$d"</string>
     <string name="desktop_attempt_to_activate_interrupted_or_expired_and_press_activate">"Попытка активации прервалась или истекла. Откройте %1$s и нажмите «Активировать» ещё раз."</string>
     <string name="desktop_audio_connection_closed">"Звук: соединение закрыто"</string>
     <string name="desktop_bluetooth_unavailable">"Bluetooth недоступен"</string>
@@ -882,6 +876,7 @@
     <string name="usb_grant_check_error">"Не удалось проверить разрешение USB. Переподключите кабель и нажмите «Подключить»"</string>
     <string name="aa_handshake_interrupted">Android Auto не завершил авторизацию (%1$s). %2$s</string>
     <string name="aa_usb_wait_version">USB подключён. Откройте Android Auto на магнитоле. HSD подключится, когда магнитола будет готова.</string>
+    <string name="aa_usb_closed_before_version">USB-соединение прервалось до запроса версии Android Auto от магнитолы (%1$s). Откройте Android Auto на магнитоле и подключите кабель повторно.</string>
     <string name="carplay_pairing_hint">Разрешите видимость телефона и добавьте его на магнитоле. Если список CarPlay пуст, откройте общий список устройств Bluetooth. После сопряжения выберите магнитолу в HSD.</string>
     <string name="carplay_pairing_failed">Не удалось открыть службу CarPlay. Проверьте Bluetooth и попробуйте снова.</string>
     <string name="carplay_pair_from_phone">Найти магнитолу с телефона</string>
@@ -890,6 +885,7 @@
     <string name="carplay_stage_certificate">получение сертификата магнитолы</string>
     <string name="carplay_invalid_accessory_signature">Магнитола передала недействительную подпись iAP2.</string>
     <string name="carplay_stage_signature">получение подписи магнитолы</string>
+    <string name="carplay_signature_timeout">Магнитола передала сертификат. За 30 секунд после запроса подпись не поступила.</string>
     <string name="carplay_stage_credentials">получение параметров Wi-Fi от магнитолы</string>
     <string name="carplay_stage_wifi">подключение к сети Wi-Fi магнитолы</string>
     <string name="carplay_stage_discovery">поиск службы CarPlay по Wi-Fi</string>
@@ -906,9 +902,16 @@
     <string name="projection_network_restricted">Android запретил HSD доступ к Wi-Fi магнитолы. Проверьте разрешения HSD и сетевые ограничения телефона, затем подключитесь снова.</string>
     <string name="projection_wifi_lost">Связь с сетью Wi-Fi магнитолы прервалась до запуска проекции.</string>
     <string name="projection_wifi_unavailable">Сеть Wi-Fi магнитолы недоступна. Включите проекцию на магнитоле и подтвердите подключение к её сети на телефоне.</string>
+    <string name="projection_wifi_not_found">Android не нашёл сеть Wi-Fi магнитолы.</string>
+    <string name="projection_wifi_no_response">Точка доступа Wi-Fi магнитолы не ответила.</string>
+    <string name="projection_wifi_association">Android не удалось установить связь с точкой доступа Wi-Fi магнитолы.</string>
+    <string name="projection_wifi_authentication">Не пройдена аутентификация в сети Wi-Fi магнитолы.</string>
+    <string name="projection_wifi_no_address">Android подключился к сети Wi-Fi магнитолы, но не получил IP-адрес.</string>
+    <string name="projection_wifi_declined">Подключение к сети Wi-Fi отклонено на телефоне.</string>
     <string name="aa_auth_certificate">Магнитола отклонила сертификат телефона (%1$s). Выберите подходящий сертификат в настройках Android Auto.</string>
     <string name="aa_auth_busy">Магнитола занята (%1$s). Завершите другой сеанс проекции и подключитесь снова.</string>
     <string name="aa_auth_rejected">Магнитола отклонила авторизацию Android Auto (%1$s).</string>
-    <string name="aa_auth_unspecified">Магнитола отклонила авторизацию Android Auto (%1$s). Этот код сам по себе не означает ошибку времени. Обновите HSD и выберите «Автоматически» в разделе «Сертификаты Android Auto».</string>
+    <string name="aa_auth_unspecified">Магнитола отклонила авторизацию Android Auto (%1$s). Выберите профиль телефона, который принимает ваша магнитола.</string>
     <string name="desktop_encoder_start_failure">Не удалось открыть %1$s при %2$d×%3$d, %4$d кадр/с. %5$s</string>
+    <string name="aa_wireless_receiver_busy">Магнитола сообщает, что проекция уже запущена. Выберите этот телефон в меню Android Auto на магнитоле.</string>
 </resources>

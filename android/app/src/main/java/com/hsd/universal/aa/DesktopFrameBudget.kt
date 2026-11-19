@@ -3,6 +3,11 @@ package com.hsd.universal.aa
 /** Compatibility budget derived from the reference native CarLife receiver's 600 KiB buffer. */
 internal object DesktopFrameBudget {
     const val MAX_ACCESS_UNIT_BYTES = 600 * 1024 - 12
+    /** At the measured output rate reserve at most two frame periods for a single IDR. */
+    fun interactiveIdrBytes(bytesPerSecond: Double, fps: Int): Int? {
+        if (!bytesPerSecond.isFinite() || bytesPerSecond <= 0 || fps <= 0) return null
+        return (2 * bytesPerSecond / fps).toInt().coerceIn(1, MAX_ACCESS_UNIT_BYTES)
+    }
     fun reducedBitrate(frameBytes: Int, currentBitrate: Int): Int? {
         if (frameBytes <= MAX_ACCESS_UNIT_BYTES) return null
         return maxOf(BitratePolicy.FLOOR_BPS,

@@ -45,12 +45,15 @@ class GlRelay(
     private val viewport: VideoViewport? = null,
     private val imageSink: ((Long) -> Unit)? = null,
     private val onImageError: (String) -> Unit = {},
+    encoderDelayFrames: Int = 0,
 ) {
     class SurfaceSize(actual: IntArray, width: Int, height: Int) :
         IllegalStateException("Encoder EGL surface is ${actual[0]}×${actual[1]}, requested ${width}×${height}")
     private val gate = FrameGate(targetFps, limitHighFps)
     private val sourceClock = if (preserveSourceTimestamps) SurfaceFrameClock() else null
-    private val thread = HandlerThread("aa-gl-relay")
+    private val encoderWindow = if (preserveSourceTimestamps && imageSink == null) EncoderFrameWindow(encoderDelayFrames) else null
+    private val backpressured = AtomicLong()
+    private val thread = HandlerThread("aa-gl-relay", android.os.Process.THREAD_PRIORITY_DISPLAY)
     private lateinit var handler: Handler
     private var display: EGLDisplay = EGL14.EGL_NO_DISPLAY
     private var context: EGLContext = EGL14.EGL_NO_CONTEXT
@@ -71,6 +74,11 @@ class GlRelay(
         position(0)
     }
     @Volatile private var haveFrame = false
+    private var pendingTexture = false
+    private var latchedChange = false
+    private var lastLatchNs = 0L
+    private val pendingTouchNs = AtomicLong(-1L)
+    fun onTouchDown() { pendingTouchNs.set(System.nanoTime()) }
 
     // переход заглушка -> AA (зум-растворение), только GL-нить
     private var introProgram = 0
@@ -107,6 +115,14 @@ class GlRelay(
     val sourceTimeFallbacks: Long get() = sourceClock?.fallbacks ?: 0
     val sourceTimeRejected: Long get() = sourceClock?.rejected ?: 0
     val sourceTimeClamps: Long get() = sourceClock?.monotonicClamps ?: 0
+    fun takePeakLatchAgeMs() = sourceClock?.takePeakLatchAgeMs() ?: 0
+    fun takeBackpressured() = backpressured.getAndSet(0)
+    val pendingEncoderAgeMs get() = encoderWindow?.oldestAgeMs(System.nanoTime())
+
+    fun onEncoded(ptsUs: Long) {
+        if (!released && encoderWindow?.completed(ptsUs, System.nanoTime(), gate.periodNs()) == true)
+            handler.post(pendingDraw)
+    }
 
     /** Целевая частота на лету, без пересоздания кодека. Любая нить. */
     fun setTargetFps(fps: Int) {
@@ -203,31 +219,65 @@ class GlRelay(
     /** Новая AA-сессия: старый кадр больше не повторять до первого нового. */
     fun clear() {
         haveFrame = false
+        latchedChange = false
     }
 
-    /** Кадр в энкодер только если гейт пускает; иначе он остаётся в текстуре (updateTexImage уже сделан) до следующей перерисовки. */
+    /** Acquire the latest desktop buffer when both a codec credit and an output slot are available. */
     private fun drawGated(fresh: Boolean = false): Boolean {
-        if (!gate.shouldEmit(SystemClock.elapsedRealtimeNanos())) {
+        val nowNs = System.nanoTime()
+        val touch = pendingTouchNs.get()
+        val recentTouch = touch >= 0 && nowNs - touch < 400_000_000L
+        if (recentTouch && pendingTexture) {
+            pendingTexture = false
+            if (latchTexture()) latchedChange = true
+        }
+        val afterTouch = recentTouch && latchedChange && (sourceClock?.pendingCaptureNs ?: -1L) >= touch
+        if (encoderWindow?.canSubmit(nowNs, gate.periodNs(), pendingTexture || latchedChange, afterTouch) == false) {
+            // An unconsumed Surface blocks the virtual display producer when its slots
+            // fill. Drain it at most once per display frame while the encoder is busy.
+            // Keep just the newest GL texture, without sending more work to the codec.
+            if (pendingTexture && nowNs - lastLatchNs >= 33_333_333L) {
+                pendingTexture = false
+                if (latchTexture()) latchedChange = true
+            }
+            skipped = true
+            if (fresh) backpressured.incrementAndGet()
+            return false
+        }
+        val slotDelay = gate.delayNs(SystemClock.elapsedRealtimeNanos())
+        if (slotDelay > 0) {
             skipped = true
             if (fresh) gated.incrementAndGet()      // повторные отказы tick-а одного кадра не считаем
             if (sourceClock != null) {
                 // A single touch can produce just one new buffer. Present it at the next
                 // FPS slot instead of waiting another whole period plus the idle ticker.
                 handler.removeCallbacks(pendingDraw)
-                handler.postDelayed(pendingDraw, (gate.delayNs(SystemClock.elapsedRealtimeNanos()) + 999_999) / 1_000_000)
+                handler.postDelayed(pendingDraw, (slotDelay + 999_999) / 1_000_000)
             }
             return false
         }
+        if (pendingTexture) {
+            pendingTexture = false
+            if (latchTexture()) latchedChange = true
+            if (!haveFrame) return false
+            if (!latchedChange && (SystemClock.elapsedRealtimeNanos() - lastDrawNs < idleRedrawMs * 1_000_000 ||
+                    encoderWindow?.canSubmit(System.nanoTime(), gate.periodNs(), fresh = false) == false)) return false
+        }
+        // Coalesced Surface callbacks may acquire the same buffer. Only consume a
+        // frame-rate slot when something will actually be presented to the encoder.
+        if (!gate.shouldEmit(SystemClock.elapsedRealtimeNanos())) { skipped = true; return false }
         val sourcePts = sourceClock?.presentationNs(System.nanoTime())
         if (sourceClock != null && sourcePts == null) return false
         skipped = false
         handler.removeCallbacks(pendingDraw)
-        draw(sourcePts)
+        draw(sourcePts, redraw = !latchedChange)
+        latchedChange = false
+        if (afterTouch) pendingTouchNs.compareAndSet(touch, -1L)
         return true
     }
 
     private val pendingDraw = Runnable {
-        if (!released && haveFrame && skipped) drawGated()
+        if (!released && (haveFrame || pendingTexture) && skipped) drawGated()
     }
 
     fun stop() {
@@ -303,28 +353,43 @@ class GlRelay(
     private fun onFrame() {
         if (released) return
         try {
-            val texture = st ?: return
+            if (sourceClock != null) {
+                // Coalesce callbacks before acquiring the newest queued buffer.
+                pendingTexture = true
+            } else if (!latchTexture()) return
+            lastFreshNs = SystemClock.elapsedRealtimeNanos()
+            drawGated(fresh = true)
+        } catch (t: RuntimeException) {
+            log("GlRelay.onFrame: ${t.javaClass.simpleName}: ${t.message}")
+        }
+    }
+
+    private fun latchTexture(): Boolean {
+        try {
+            val texture = st ?: return false
             texture.updateTexImage()
+            lastLatchNs = System.nanoTime()
             texture.getTransformMatrix(tm)
             sourceClock?.let { clock ->
                 val hadFallback = clock.fallbacks > 0
                 when (clock.latch(texture.timestamp, System.nanoTime())) {
-                    SurfaceFrameClock.Latch.REJECTED -> { haveFrame = false; return }
-                    SurfaceFrameClock.Latch.SAME_BUFFER -> { haveFrame = true; return }
+                    SurfaceFrameClock.Latch.REJECTED -> { haveFrame = false; return false }
+                    SurfaceFrameClock.Latch.SAME_BUFFER -> return false
                     SurfaceFrameClock.Latch.FRESH -> Unit
                 }
                 if (!hadFallback && clock.fallbacks > 0) log("GlRelay: native source timestamp unavailable; using arrival-time fallback")
             }
             haveFrame = true
             fresh.incrementAndGet()
-            lastFreshNs = SystemClock.elapsedRealtimeNanos()
-            drawGated(fresh = true)
-        } catch (t: Throwable) {
-            log("GlRelay.onFrame: ${t.javaClass.simpleName}: ${t.message}")
+            return true
+        } catch (failure: RuntimeException) {
+            haveFrame = false
+            log("GlRelay.latchTexture: ${failure.message}")
+            return false
         }
     }
 
-    private fun draw(sourcePts: Long?) {
+    private fun draw(sourcePts: Long?, redraw: Boolean) {
         val rect = viewport
         if (rect == null || rect.width == width && rect.height == height) GLES20.glViewport(0, 0, width, height)
         else {
@@ -379,6 +444,7 @@ class GlRelay(
             }
         }
         else {
+            encoderWindow?.submit(pts / 1000, System.nanoTime(), redraw)
             EGLExt.eglPresentationTimeANDROID(display, eglSurface, pts)
             EGL14.eglSwapBuffers(display, eglSurface)
         }

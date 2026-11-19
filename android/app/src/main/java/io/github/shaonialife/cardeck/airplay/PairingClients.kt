@@ -1,6 +1,18 @@
 package io.github.shaonialife.cardeck.airplay
 
 import java.io.IOException
+import java.net.ProtocolException
+
+internal class PairingIdentityMismatch : ProtocolException("AirPlay: неверная подпись Pair Verify")
+
+private fun Map<Int, ByteArray>.requireStep(exchange: String, step: Int) {
+    this[Tlv8.TYPE_ERROR]?.let { error ->
+        throw ProtocolException("$exchange M$step: error ${error.singleOrNull()?.toUByte() ?: "?"}")
+    }
+    if (this[Tlv8.TYPE_STATE]?.singleOrNull()?.toInt() != step) {
+        throw ProtocolException("$exchange: expected M$step")
+    }
+}
 
 /** TLV8 请求/应答传输抽象：真实实现走 RTSP POST，测试用 mock 接收端直连。 */
 fun interface TlvTransport {
@@ -42,6 +54,7 @@ class PairSetupClient(
                     ),
                 ),
             )
+        m2.requireStep("Pair Setup", 2)
         val salt = m2[Tlv8.TYPE_SALT] ?: throw IOException("pair-setup M2 缺少 salt")
         val serverPublic = m2[Tlv8.TYPE_PUBLIC_KEY] ?: throw IOException("pair-setup M2 缺少 publicKey")
         log("pair-setup: M2 收到 SRP 参数 salt=${salt.size}B B=${serverPublic.size}B")
@@ -62,6 +75,7 @@ class PairSetupClient(
                     ),
                 ),
             )
+        m4.requireStep("Pair Setup", 4)
         val serverProof = m4[Tlv8.TYPE_PROOF] ?: throw IOException("pair-setup M4 缺少 proof")
         if (!srp.serverProofValid(serverProof)) throw IOException("pair-setup: 服务器证明校验失败")
         val sessionKey = srp.sessionKey ?: throw IOException("pair-setup: 会话密钥缺失")
@@ -109,9 +123,7 @@ class PairSetupClient(
                     ),
                 ),
             )
-        if (m6[Tlv8.TYPE_STATE]?.firstOrNull()?.toInt() != 6) {
-            throw IOException("pair-setup M6 状态非 6：${m6[Tlv8.TYPE_ERROR]?.firstOrNull()}")
-        }
+        m6.requireStep("Pair Setup", 6)
         log("pair-setup: ✓ M6 完成，接收端已保存我们的长期公钥")
 
         // 解析 M6 加密信封里的接收端身份（完整性校验）
@@ -120,9 +132,9 @@ class PairSetupClient(
             Tlv8.decode(
                 AirPlayCrypto.chachaOpen(encryptionKey, AirPlayCrypto.nonceLabel("PS-Msg06"), encrypted),
             )
-        val receiverId = inner[Tlv8.TYPE_IDENTIFIER] ?: return null
-        val receiverKey = inner[Tlv8.TYPE_PUBLIC_KEY] ?: return null
-        val receiverSignature = inner[Tlv8.TYPE_SIGNATURE] ?: return null
+        val receiverId = inner[Tlv8.TYPE_IDENTIFIER] ?: throw ProtocolException("Pair Setup M6: missing receiver ID")
+        val receiverKey = inner[Tlv8.TYPE_PUBLIC_KEY] ?: throw ProtocolException("Pair Setup M6: missing receiver key")
+        val receiverSignature = inner[Tlv8.TYPE_SIGNATURE] ?: throw ProtocolException("Pair Setup M6: missing receiver signature")
         val accessorySignKey =
             AirPlayCrypto.hkdfSha512(
                 sessionKey,
@@ -139,7 +151,7 @@ class PairSetupClient(
             "pair-setup: 接收端身份 id=${receiverId.toString(Charsets.UTF_8)} " +
                 "pub=${receiverKey.toHexString().take(16)}… 签名校验=$valid",
         )
-        if (!valid) throw IOException("AirPlay: неверная подпись Pair Setup")
+        if (!valid) throw ProtocolException("AirPlay: неверная подпись Pair Setup")
         return ReceiverIdentity(receiverId.toString(Charsets.UTF_8), receiverKey)
     }
 
@@ -179,6 +191,7 @@ class PairVerifyClient(
                     ),
                 ),
             )
+        m2.requireStep("Pair Verify", 2)
         val receiverEphemeral = m2[Tlv8.TYPE_PUBLIC_KEY] ?: throw IOException("pair-verify M2 缺少 publicKey")
         val encrypted = m2[Tlv8.TYPE_ENCRYPTED_DATA] ?: throw IOException("pair-verify M2 缺少 encryptedData")
 
@@ -196,7 +209,7 @@ class PairVerifyClient(
         val receiverId = inner[Tlv8.TYPE_IDENTIFIER] ?: throw IOException("pair-verify M2 信封缺少 identifier")
         val receiverSignature = inner[Tlv8.TYPE_SIGNATURE] ?: throw IOException("pair-verify M2 信封缺少 signature")
 
-        // 用 mDNS/0x4301 提供的接收端静态公钥验证（有则验，无则跳过）
+        // Verify the receiver with the long-term key before sending controller proof.
         run {
             val valid =
                 AirPlayCrypto.ed25519Verify(
@@ -204,7 +217,7 @@ class PairVerifyClient(
                     receiverEphemeral + receiverId + ephemeral.publicKey,
                     receiverSignature,
                 )
-            if (!valid) throw IOException("AirPlay: неверная подпись Pair Verify")
+            if (!valid) throw PairingIdentityMismatch()
             log("pair-verify: 接收端签名校验（对照 pk）=$valid")
         }
 
@@ -237,9 +250,7 @@ class PairVerifyClient(
                     ),
                 ),
             )
-        if (m4[Tlv8.TYPE_STATE]?.firstOrNull()?.toInt() != 4) {
-            throw IOException("pair-verify M4 状态非 4：${m4[Tlv8.TYPE_ERROR]?.firstOrNull()}")
-        }
+        m4.requireStep("Pair Verify", 4)
         log("pair-verify: ✓ 完成，派生控制通道密钥")
 
         // 方向对照接收端实现：接收端 readKey="Control-Write-…"（即我们发出的方向）

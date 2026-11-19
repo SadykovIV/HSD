@@ -1,23 +1,29 @@
 package com.hsd.universal.dex
 
-import java.lang.reflect.Method
-
 /** Samsung's optional per-event marker leaves normal dispatch and its target application's tap handling intact. */
-internal class SamsungHuActivity(private val motionType: Class<*>, private val keyType: Class<*>) {
-    private val motion: Method? = find(motionType)
-    private val key: Method? = find(keyType)
+internal class SamsungHuActivity(motionType: Class<*>, keyType: Class<*>,
+    private val report: (String, Boolean) -> Unit = { _, _ -> }) {
+    private class Marker(val type: Class<*>, val label: String) {
+        val method = runCatching {
+            type.getMethod("semSetNonResetUserActivityTimeout").takeIf { it.returnType == Void.TYPE }
+        }.getOrNull()
+        var lastResult: Boolean? = null
+    }
+    private val motion = Marker(motionType, "motion")
+    private val key = Marker(keyType, "key")
 
-    fun mark(event: Any, displayId: Int, usbOutput: Boolean): Boolean {
-        if (!usbOutput || displayId <= 0) return false
+    fun mark(event: Any, displayId: Int): Boolean {
+        if (displayId <= 0) return false
         val marker = when {
-            motionType.isInstance(event) -> motion
-            keyType.isInstance(event) -> key
+            motion.type.isInstance(event) -> motion
+            key.type.isInstance(event) -> key
             else -> null
         } ?: return false
-        return runCatching { marker.invoke(event) }.isSuccess
+        val ok = marker.method?.let { runCatching { it.invoke(event) }.isSuccess } ?: false
+        if (marker.lastResult != ok) {
+            marker.lastResult = ok
+            report(marker.label, ok)
+        }
+        return ok
     }
-
-    private fun find(type: Class<*>): Method? = runCatching {
-        type.getMethod("semSetNonResetUserActivityTimeout").takeIf { it.returnType == Void.TYPE }
-    }.getOrNull()
 }

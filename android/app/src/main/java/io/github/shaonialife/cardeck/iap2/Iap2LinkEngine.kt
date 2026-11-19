@@ -26,7 +26,9 @@ class Iap2LinkEngine(
     private val maxOutgoing: Int = 4,
     private val retransmissionTimeoutMillis: Long = 4_000L,
     private val maxRetransmissions: Int = 4,
+    private val controlVersion: Int = 2,
 ) {
+    init { require(controlVersion in 1..2) }
     enum class State { IDLE, NEGOTIATING, NORMAL, DEAD }
 
     data class SessionDescriptor(
@@ -113,6 +115,7 @@ class Iap2LinkEngine(
 
     private var sentSequence = INITIAL_SEQUENCE
     private var lastSentAcknowledged: Int? = null
+    private var lastPeerAck: Int? = null
     private var lastReceivedInOrder = 0
 
     /**
@@ -126,6 +129,18 @@ class Iap2LinkEngine(
 
     /** 采纳的对端 sync 载荷（协商回显/诊断用）。 */
     private var adoptedSynchronization: SynchronizationPayload? = null
+
+    /** The control protocol governs authentication order independently of the link version. */
+    val negotiatedControlVersion: Int
+        get() = adoptedSynchronization?.sessions?.firstOrNull { it.kind == CONTROL_KIND }?.version
+            ?: controlVersion
+
+    private fun negotiateControlVersion(sync: SynchronizationPayload) = sync.copy(
+        sessions = sync.sessions.map {
+            if (it.kind == CONTROL_KIND && it.version in 1..2)
+                it.copy(version = minOf(it.version, controlVersion)) else it
+        },
+    )
 
     /**
      * 隧道（type-130）协商模式。DiPlay 的隧道链路引擎（Iap2LinkEngine.openTunnel，
@@ -157,6 +172,8 @@ class Iap2LinkEngine(
     var onFrameSent: ((control: Int, sequence: Int, ack: Int, sessionId: Int, size: Int) -> Unit)? = null
 
     private var unknownSessionDropped = 0
+    private var badHeaders = 0
+    private var badPayloads = 0
 
     private val unacknowledged = ArrayList<Packet>()
     private val sendBacklog = ArrayDeque<Packet>()
@@ -178,7 +195,10 @@ class Iap2LinkEngine(
     fun progressSummary(): String =
         "link=$state session=${controlSessionId()} queued=${sendBacklog.size} " +
             "unacked=${unacknowledged.map { it.sequence }} tx=$sentSequence " +
-            "ack=${lastSentAcknowledged ?: "none"} rx=$lastReceivedInOrder buffered=${receive.size}"
+            "peerAck=${lastPeerAck ?: "none"} windowAck=${lastSentAcknowledged ?: "none"} " +
+            "peerMaxRetries=${peerSynchronization?.maxRetransmissions ?: "unknown"} " +
+            "rx=$lastReceivedInOrder buffered=${receive.size} " +
+            "badHeaders=$badHeaders badPayloads=$badPayloads unknownSession=$unknownSessionDropped"
 
     /** 本引擎是否发起过 SYN（start=发起方；enterNegotiating/startResponder=响应方）。 */
     private var originatedSyn = false
@@ -354,6 +374,7 @@ class Iap2LinkEngine(
         if (receive.size < HEADER_BYTES) return false
         val header = receive.peek(HEADER_BYTES)
         if (!checksumValid(header)) {
+            badHeaders++
             receive.discard(1)
             return true
         }
@@ -366,7 +387,8 @@ class Iap2LinkEngine(
         val frame = receive.take(length)
         val payloadWithChecksum = frame.copyOfRange(HEADER_BYTES, length)
         if (payloadWithChecksum.isNotEmpty() && !checksumValid(payloadWithChecksum)) {
-            receive.discard(1)
+            // take(length) already consumed this frame. The next byte can start a valid retransmission.
+            badPayloads++
             return true
         }
         val payload =
@@ -400,7 +422,7 @@ class Iap2LinkEngine(
             return
         }
         if (control and CONTROL_SYNCHRONIZE != 0) {
-            val sync = SynchronizationPayload.decode(payload ?: ByteArray(0))
+            val sync = SynchronizationPayload.decode(payload ?: ByteArray(0))?.let(::negotiateControlVersion)
             // echoFirst 模式下即使本引擎已 NORMAL 也继续处理对端 SYN 重发：对端引擎
             // （DiPlay openTunnel）只从 TCP 读，若其 SYN 到达时我方隧道尚未建立，
             // 首次回显会走错通道；其 500ms 的 SYN 重发让我们在隧道就绪后补上回显
@@ -546,6 +568,7 @@ class Iap2LinkEngine(
         acknowledgement: Int,
         nowMillis: Long,
     ) {
+        lastPeerAck = acknowledgement
         completeNegotiationIfPending(nowMillis)
         lastSentAcknowledged = acknowledgement
         val window = (peerSynchronization?.maxOutgoing ?: maxOutgoing) + ACK_SLACK
@@ -629,7 +652,7 @@ class Iap2LinkEngine(
                 maxAcknowledgements = 3,
                 sessions =
                     listOf(
-                        SessionDescriptor(SESSION_CONTROL, 0, 2),
+                        SessionDescriptor(SESSION_CONTROL, 0, controlVersion),
                         SessionDescriptor(SESSION_EA, 2, 1),
                         SessionDescriptor(SESSION_FILE_TRANSFER, 1, 2),
                     ),

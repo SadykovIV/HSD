@@ -77,7 +77,7 @@ public final class ProjectionSettings {
     }
 
     public static boolean needsControls(boolean backOrHome, Context context) {
-        return backOrHome || navigationOption(layoutPreferences, MENU, context);
+        return backOrHome || navigationOption(layoutPreferences, MENU, context) || HSDHost.supportsCarMenu(context);
     }
 
     public static void addMenuRequest(Context context, Intent request) {

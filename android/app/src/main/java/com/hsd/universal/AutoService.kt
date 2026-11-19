@@ -4,7 +4,6 @@ import android.app.Notification
 import android.bluetooth.BluetoothManager
 import android.net.InetAddresses
 import android.net.wifi.WifiManager
-import net.prototux.aare.aap.AapLog
 import net.prototux.aare.aap.Transport
 import net.prototux.aare.aap.PhoneIdentity
 import net.prototux.aare.aap.wireless.WirelessBootstrap
@@ -49,6 +48,7 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
     private var generation = 0
     private var device: UsbAccessory? = null
     private var stopping = false
+    override fun carMenu() { if (!stopping) projection?.carMenu() }
     private var reconnectUntil = 0L
     private val carPlayRecovery = CarPlayRecovery()
     private var usbOpenRetries = 0
@@ -67,6 +67,13 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
     }
     private val detached = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
+            // The USB gadget can briefly disconnect while Android re-enumerates it as NCM.
+            if (route == ProjectionRoute.HICAR_USB && (projection as? HiCarProjection)?.usbNetworkReady == true &&
+                !isInitialStickyBroadcast && intent.action == UsbDetachPolicy.USB_STATE &&
+                !intent.getBooleanExtra("connected", true) && UsbDetachPolicy.cableConnected(context) != true) {
+                finish(service.getString(R.string.wl_usb_to_air_title))
+                return
+            }
             if (isInitialStickyBroadcast || device == null ||
                 intent.action == UsbDetachPolicy.USB_STATE && intent.getBooleanExtra("connected", true)) return
             val present = runCatching { usb.autoAccessory() != null }.getOrNull()
@@ -126,7 +133,7 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
         val mode = route
         CarLifeState.waitingForProjectionWifi = false
         CarLifeState.resetSession()
-        CarLifeState.wirelessSession = mode != ProjectionRoute.USB
+        CarLifeState.wirelessSession = !mode.wired
         try {
             service.startForeground(ID, notification(mode.label(service)))
             if (mode.usesHeadUnitHotspot) {
@@ -152,25 +159,37 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
         val lifetime = ProjectionResources()
         resources = lifetime
         val attached = device
+        val usbOpen = if (mode == ProjectionRoute.USB && attached != null) Actions.openingAuto(attached) else null
         worker.execute {
             try {
+                // A phone in LAN-server mode can wait indefinitely for the first connection.
+                if (mode != ProjectionRoute.LAN_SERVER && !mode.wired)
+                    ProjectionCpuLease.hold(this, lifetime)
                 val publish: (String) -> Unit = { message -> main.post { if (ticket == generation) update(message) } }
                 val ended: (String) -> Unit = { message -> main.post { if (ticket == generation) complete(message) } }
                 val ready: () -> Unit = {
                     main.post {
                         if (ticket == generation && !stopping && !CarLifeState.running) {
                             CarLifeState.running = true
-                            if (mode == ProjectionRoute.USB) Actions.onUsbSessionStarted(service)
+                            if (mode == ProjectionRoute.USB) {
+                                usbOpenRetries = 0
+                                Actions.onUsbSessionStarted(service)
+                            }
                         }
                     }
                 }
                 val session = if (mode == ProjectionRoute.CARPLAY) {
                     CarPlayProjection(this, lifetime, publish, ended, ready)
+                } else if (mode.family == ProjectionProtocol.HICAR) {
+                    HiCarProjection(this, lifetime, mode.wired, publish, ended, ready)
                 } else {
                     val identity = ProjectionIdentity(this)
                     val (transport, peer, phone) = openAuto(mode, attached, lifetime, identity)
                     lifetime.own(transport::close)
-                    AutoProjection(this, transport, phone, identity, peer, publish, ended, ready, ::canReopenUsb)
+                    if (mode == ProjectionRoute.LAN_SERVER) ProjectionCpuLease.hold(this, lifetime)
+                    usbOpen?.log("accessory open")
+                    AutoProjection(this, transport, phone, identity, peer, publish, ended, ready, ::canReopenUsb, usbOpen,
+                        onUsbNegotiation = { ProjectionCpuLease.hold(this, lifetime) })
                 }
                 main.post {
                     if (ticket == generation && !stopping) {
@@ -179,6 +198,7 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
                     } else lifetime.close()
                 }
             } catch (error: Exception) {
+                usbOpen?.log("open/setup failed: ${error.javaClass.simpleName} ${error.message.orEmpty()}")
                 val interruptedExchange = error is WirelessBootstrapException && error.interruptedExchange
                 val transient = interruptedExchange || error is java.io.IOException &&
                     error !is javax.net.ssl.SSLException && error !is ProjectionNetworkDenied
@@ -186,7 +206,10 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
                     if (ticket != generation) return@post
                     if (mode == ProjectionRoute.WIRELESS_AA && interruptedExchange && reconnectUntil == 0L)
                         reconnectUntil = android.os.SystemClock.elapsedRealtime() + 30_000L
-                    complete(service.getString(R.string.desktop_could_not_connect, error.message), transient)
+                    val detail = if (error is WirelessBootstrapException &&
+                        error.status == net.prototux.aare.aap.wireless.WppStatus.PROJECTION_ALREADY_STARTED)
+                        service.getString(R.string.aa_wireless_receiver_busy) else error.message
+                    complete(service.getString(R.string.desktop_could_not_connect, detail), transient)
                 }
             }
         }
@@ -230,7 +253,7 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
                 val phone = identity.phone(peer)
                 val options = WirelessConnector.Options(bootstrap = WirelessBootstrap.Options(
                     instanceId = ProjectionDescription.instanceId(this), deviceName = android.os.Build.MODEL))
-                val attempt = WirelessConnector(this, protocolLog, options).Attempt(bluetooth.getRemoteDevice(address))
+                val attempt = WirelessConnector(this, ProjectionWirelessLog, options).Attempt(bluetooth.getRemoteDevice(address))
                 lifetime.own(attempt::abort)
                 AutoConnection(attempt.run(), peer, phone)
             }
@@ -274,7 +297,7 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
     }
     private fun canReopenUsb(): Boolean {
         val attached = device ?: return false
-        return route == ProjectionRoute.USB && !stopping && usbOpenRetries < 2 &&
+        return route == ProjectionRoute.USB && !stopping && usbOpenRetries < USB_RETRY_DELAYS_MS.size &&
             runCatching { usb.hasPermission(attached) && usb.autoAccessory() == attached }.getOrDefault(false)
     }
     private fun complete(message: String, connectError: Boolean = false) {
@@ -298,10 +321,10 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
             projection = null
             CarLifeState.running = false
             retryPending = true
-            usbOpenRetries++
+            val delay = USB_RETRY_DELAYS_MS[usbOpenRetries++]
             AppLog.i("Android Auto USB · reopening attached accessory · attempt=$usbOpenRetries", false)
             update(service.getString(if (lost) R.string.aa_usb_recovering else R.string.desktop_usb_is_not_ready_retrying_android_auto_negotiation))
-            main.postDelayed(reconnect, usbOpenRetries * 750L)
+            main.postDelayed(reconnect, delay)
             return
         }
         if (route == ProjectionRoute.USB) {
@@ -367,11 +390,7 @@ private class AutoEndpoint(private val service: Service, private val route: Proj
     }
 
     companion object {
-        private val protocolLog = object : AapLog {
-            override fun i(msg: String) { android.util.Log.i("HsdWireless", msg) }
-            override fun w(msg: String, t: Throwable?) { android.util.Log.w("HsdWireless", msg, t) }
-            override fun e(msg: String, t: Throwable?) { android.util.Log.e("HsdWireless", msg, t) }
-        }
+        private val USB_RETRY_DELAYS_MS = longArrayOf(750, 1500, 3000, 6000, 10000)
         private const val CHANNEL = "wired"
         private const val ID = 210
     }

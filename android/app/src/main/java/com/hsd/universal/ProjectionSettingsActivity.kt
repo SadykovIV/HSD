@@ -149,10 +149,13 @@ internal class ProjectionSettingsActivity : Activity() {
                 choice(carLife, ProjectionRoute.CARLIFE_WIFI, getString(R.string.desktop_project_over_wi_fi_or_wi_fi_direct))
                 val cp = ui.section(content, "CarPlay")
                 choice(cp, ProjectionRoute.CARPLAY, getString(R.string.desktop_pair_over_bluetooth_and_project_over_wi_fi))
+                val hicar = ui.section(content, "Huawei HiCar")
+                choice(hicar, ProjectionRoute.HICAR, getString(R.string.hicar_experimental))
+                choice(hicar, ProjectionRoute.HICAR_USB, getString(R.string.hicar_usb_experimental))
                 val lanGroup = ui.section(content, getString(R.string.desktop_android_auto_over_lan))
                 choice(lanGroup, ProjectionRoute.LAN_SERVER, getString(R.string.desktop_the_head_unit_connects_to_the_phone_on_port))
                 choice(lanGroup, ProjectionRoute.LAN_CLIENT, getString(R.string.desktop_the_phone_connects_to_the_head_unit_s_ip))
-                ui.navigation(ui.section(content), getString(R.string.desktop_android_auto_certificates), phoneCertificateLabel()) {
+                ui.navigation(ui.section(content), getString(R.string.desktop_android_auto_certificates), identities.defaultAlias?.takeIf { it.isNotEmpty() } ?: getString(R.string.desktop_hsd_certificate)) {
                     open(Page.CERTIFICATES)
                 }
             }
@@ -181,6 +184,7 @@ internal class ProjectionSettingsActivity : Activity() {
                 }
             }
             ProjectionRoute.USB -> ui.text(card, getString(R.string.desktop_open_android_auto_on_a_head_unit_and_connect))
+            ProjectionRoute.HICAR_USB -> ui.text(card, getString(R.string.hicar_usb_experimental))
             ProjectionRoute.LAN_SERVER, ProjectionRoute.LAN_CLIENT -> {
                 ui.text(card, if (route == ProjectionRoute.LAN_SERVER)
                     getString(R.string.desktop_connect_the_devices_to_the_same_network_on_the)
@@ -192,10 +196,16 @@ internal class ProjectionSettingsActivity : Activity() {
                 addressField = field(card, getString(R.string.desktop_head_unit_ip_address), lan)
                 if (route == ProjectionRoute.LAN_CLIENT) portField = field(card, getString(R.string.desktop_head_unit_port), port, true)
             }
-            ProjectionRoute.WIRELESS_AA, ProjectionRoute.CARPLAY -> {
+            ProjectionRoute.WIRELESS_AA, ProjectionRoute.CARPLAY, ProjectionRoute.HICAR -> {
                 ui.text(card, getString(R.string.desktop_turn_on_the_wireless_select_a_head_unit_select, route.protocol))
                 ui.navigation(card, getString(R.string.mock_bt_headunit), peerName.ifBlank { peer.ifBlank { getString(R.string.desktop_select_bluetooth_device) } }) {
                     withPermissions("pick")
+                }
+                if (route == ProjectionRoute.HICAR) {
+                    ui.text(card, getString(R.string.hicar_experimental))
+                    ui.button(card, getString(R.string.hicar_pin_button)) {
+                        startActivity(Intent(this, com.hsd.universal.hicar.HiCarPinActivity::class.java))
+                    }
                 }
                 if (route == ProjectionRoute.CARPLAY) {
                     ui.navigation(card, getString(R.string.desktop_pair_a_new_head_unit), getString(R.string.carplay_pairing_hint)) {
@@ -204,13 +214,24 @@ internal class ProjectionSettingsActivity : Activity() {
                     ui.navigation(card, getString(R.string.carplay_pair_from_phone), getString(R.string.carplay_pair_from_phone_hint)) {
                         withPermissions("searchHeadUnit")
                     }
-                    val bonds = getSharedPreferences("carplay-identities", MODE_PRIVATE)
-                    if (peer.isNotEmpty() && bonds.contains("peer.$peer"))
+                    val pairing = com.hsd.universal.carplay.CarPlayReceiverPairing
+                    if (peer.isNotEmpty() && pairing.known(this, peer)) {
+                        ui.button(card, getString(R.string.carplay_renew_pairing)) {
+                            val selectedPeer = peer
+                            AlertDialog.Builder(this).setTitle(R.string.carplay_renew_pairing)
+                                .setMessage(getString(R.string.carplay_renew_confirm, peerName.ifBlank { selectedPeer }))
+                                .setNegativeButton(R.string.mock_cancel, null)
+                                .setPositiveButton(R.string.carplay_renew_pairing) { _, _ ->
+                                    pairing.requestRenewal(this, selectedPeer)
+                                    Toast.makeText(this, R.string.carplay_renew_ready, Toast.LENGTH_LONG).show()
+                                }.show()
+                        }
                         ui.button(card, getString(R.string.desktop_forget_carplay_pairing)) {
                             AlertDialog.Builder(this).setTitle(getString(R.string.desktop_forget_this_carplay_pairing))
                                 .setMessage(peerName.ifBlank { peer }).setNegativeButton(getString(R.string.mock_cancel), null)
-                                .setPositiveButton(getString(R.string.desktop_forget)) { _, _ -> bonds.edit().remove("peer.$peer").apply(); capture(); render() }.show()
+                                .setPositiveButton(getString(R.string.desktop_forget)) { _, _ -> pairing.forget(this, peer); capture(); render() }.show()
                         }
+                    }
                 } else ui.navigation(card, getString(R.string.desktop_bluetooth_settings), getString(R.string.desktop_pair_a_new_head_unit)) {
                     startActivity(Intent(Settings.ACTION_BLUETOOTH_SETTINGS))
                 }
@@ -234,34 +255,7 @@ internal class ProjectionSettingsActivity : Activity() {
     private fun certificates() {
         val phone = ui.section(content, getString(R.string.desktop_phone_certificate))
         ui.text(phone, getString(R.string.desktop_hsd_creates_a_certificate_the_first_time_it_connects))
-        ui.navigation(phone, getString(R.string.desktop_select_certificate), phoneCertificateLabel()) { chooseIdentity(null) }
-        ui.toggle(phone, getString(R.string.aa_identity_auto_update), AaIdentityUpdates.enabled(this)) {
-            AaIdentityUpdates.enable(this, it)
-        }
-        ui.text(phone, getString(R.string.aa_identity_update_description))
-        val checkStatus = ui.text(phone, "")
-        fun showStatus() {
-            val time = AaIdentityUpdates.lastCheck(this)
-            checkStatus.text = if (time == 0L) getString(R.string.aa_identity_not_checked)
-                else getString(if (AaIdentityUpdates.lastSucceeded(this)) R.string.aa_identity_check_ok else R.string.aa_identity_check_failed,
-                    DateFormat.getDateTimeInstance().format(Date(time)))
-        }
-        showStatus()
-        val app = applicationContext
-        val button = ui.button(phone, getString(R.string.aa_identity_check_now)) {}
-        button.setOnClickListener {
-            button.isEnabled = false
-            checkStatus.setText(R.string.aa_identity_checking)
-            Thread({
-                val ok = AaIdentityUpdates.refresh(app, force = true, waitForRunning = true)
-                runOnUiThread {
-                    if (!isFinishing && !isDestroyed && page == Page.CERTIFICATES) {
-                        button.isEnabled = true
-                        if (ok) showStatus() else checkStatus.setText(R.string.aa_identity_update_unavailable)
-                    }
-                }
-            }, "HSD-AA-identity-manual").start()
-        }
+        ui.navigation(phone, getString(R.string.desktop_select_certificate), identities.defaultAlias?.takeIf { it.isNotEmpty() } ?: getString(R.string.desktop_hsd_certificate)) { chooseIdentity(null) }
         val receivers = ui.section(content, getString(R.string.desktop_head_unit_3d48))
         val ids = identities.receiverIds()
         if (ids.isEmpty()) ui.text(receivers, getString(R.string.desktop_after_the_first_connection_the_radio_will_appear_here))
@@ -270,12 +264,6 @@ internal class ProjectionSettingsActivity : Activity() {
             receiver = id
             open(Page.RECEIVER)
         }
-    }
-
-    private fun phoneCertificateLabel() = when (val alias = identities.defaultAlias) {
-        null -> getString(R.string.desktop_automatic)
-        "" -> getString(R.string.desktop_hsd_certificate)
-        else -> alias
     }
 
     private fun receiverOptions() {
@@ -327,18 +315,26 @@ internal class ProjectionSettingsActivity : Activity() {
 
     private fun chooseIdentity(id: String?) {
         val alias = if (id == null) identities.defaultAlias else identities.assignedAlias(id)
-        val labels = if (id == null) arrayOf(getString(R.string.desktop_automatic), getString(R.string.desktop_hsd_certificate), getString(R.string.desktop_select_from_android_storage))
-            else arrayOf(getString(R.string.desktop_general_settings), getString(R.string.desktop_hsd_certificate), getString(R.string.desktop_select_from_android_storage))
         fun select(value: String?) {
             if (id == null) identities.selectDefault(value) else identities.select(id, value)
             render()
         }
-        val selected = when (alias) { null -> 0; "" -> 1; else -> labels.lastIndex }
+        val labels = buildList {
+            if (id != null) add(getString(R.string.desktop_general_settings))
+            add(getString(R.string.desktop_hsd_certificate))
+            add(getString(R.string.desktop_select_from_android_storage))
+        }.toTypedArray()
+        val local = labels.lastIndex - 1
+        val selected = when {
+            !alias.isNullOrEmpty() -> labels.lastIndex
+            id != null && alias == null -> 0
+            else -> local
+        }
         AlertDialog.Builder(this).setTitle(getString(R.string.desktop_phone_certificate)).setSingleChoiceItems(labels, selected) { dialog, which ->
             dialog.dismiss()
             when {
-                which == 0 -> select(null)
-                which < labels.lastIndex -> select("")
+                which == local -> select("")
+                which < local -> select(null)
                 else -> KeyChain.choosePrivateKeyAlias(this, { result ->
                     runOnUiThread {
                         if (result != null) {
@@ -363,9 +359,9 @@ internal class ProjectionSettingsActivity : Activity() {
                 }
                 return@buildList
             }
-            if (!route.wired && Build.VERSION.SDK_INT >= 37) add(Manifest.permission.ACCESS_LOCAL_NETWORK)
+            if (route.usesLocalNetwork && Build.VERSION.SDK_INT >= 37) add(Manifest.permission.ACCESS_LOCAL_NETWORK)
             if (route == ProjectionRoute.CARLIFE_WIFI) addAll(com.hsd.universal.link.car.WirelessCarLife.missingPermissions(this@ProjectionSettingsActivity))
-            if (route == ProjectionRoute.WIRELESS_AA || route == ProjectionRoute.CARPLAY) {
+            if (route == ProjectionRoute.WIRELESS_AA || route == ProjectionRoute.CARPLAY || route == ProjectionRoute.HICAR) {
                 if (android.os.Build.VERSION.SDK_INT >= 31) add(Manifest.permission.BLUETOOTH_CONNECT)
                 if (android.os.Build.VERSION.SDK_INT >= 33) add(Manifest.permission.NEARBY_WIFI_DEVICES)
                 if ((!askedForLocation || android.os.Build.VERSION.SDK_INT < 33) &&
@@ -501,7 +497,7 @@ internal class ProjectionSettingsActivity : Activity() {
                 edit.putInt("lanPort", parsed)
             }
         }
-        if (route == ProjectionRoute.WIRELESS_AA || route == ProjectionRoute.CARPLAY) {
+        if (route == ProjectionRoute.WIRELESS_AA || route == ProjectionRoute.CARPLAY || route == ProjectionRoute.HICAR) {
             if (peer.isEmpty()) { pickBondedDevice(); return }
             edit.putString("bluetoothPeer", peer).putString("bluetoothPeerName", peerName)
         }

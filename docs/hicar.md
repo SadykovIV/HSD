@@ -1,0 +1,16 @@
+# Huawei HiCar в HSD
+
+В настройках подключения есть два экспериментальных режима Huawei HiCar: Bluetooth и Wi‑Fi, USB (NCM). Оба используют выбранный в HSD профиль рабочего стола. Выход на первый кадр происходит после согласования параметров дисплея и команды запуска от ГУ.
+
+- **Bluetooth и Wi‑Fi.** Сначала сопрягите магнитолу в системных настройках Bluetooth и выберите её в HSD. Откройте HiCar на ГУ и нажмите «Подключить». При первичном сопряжении HSD предлагает ввести код с экрана автомобиля. При повторном соединении HiChain проверяет сохранённые ключи обеих сторон. Код не хранится в настройках.
+- **USB (NCM).** В настройках подключения сохраните «Huawei HiCar · USB (NCM)», на экране ГУ откройте проводной HiCar и в HSD нажмите «Подключить». HSD ждёт до 12 секунд появления IPv4 на USB, затем ищет объявление Nearby через mDNS. Первичный код сопряжения поступает по кабелю. Если ГУ объявила Baidu CarLife или Android Auto, HSD сохраняет выбор HiCar и показывает, какой аксессуар обнаружен. При возврате к CarLife или Android Auto их обычное USB-подключение снова доступно.
+
+В описании Huawei магнитола сначала проверяет USB-идентификатор производителя телефона. Для распознанных устройств Huawei и Honor она запрашивает переход в NCM. Магнитола, которая на Samsung или Pixel предлагает только Baidu CarLife, может остановиться до создания USB-сети. У HSD подтверждён обмен с испытательным приёмником, в том числе на физическом Samsung с заранее включённым NCM. Совместимость конкретного штатного ГУ зависит от этого первого шага. [Проводное соединение Huawei HiCar](https://developer.huawei.com/consumer/cn/doc/HiCar-Guides/wired-connection-process-0000001050002451/)
+
+После сопряжения Nearby открывает канал DMSDP. HiSight согласует разрешение и частоту, затем HSD отправляет H.264 и принимает касания. Музыка и подсказки идут по общему потоку AAC. У видео, звука и ввода отдельные сокеты. Ограничение кадров, настройка синхронизации и выбор рабочего стола берутся из HSD.
+
+Реализация опирается на открытые реализации протокола и OpenHarmony DeviceAuth. Отдельный приёмник используется в тестах HSD. [CarLink](https://github.com/Aki894/CarLink/tree/6210b2fcfdcaa7da334683f09b15d51369eef440), [hicar-android-receiver](https://github.com/huducat586/hicar-android-receiver/tree/a93b36ff5c705d4825c3c5a8d6fdb6fa605739ce), [OpenHarmony DeviceAuth](https://github.com/openharmony/security_deviceauth/tree/552edb521d0bd7c17f2dab2791e7cdc3de284405).
+
+В пользовательском образе VW MEI3 MU0411 библиотека `libauthagent` подтверждает формат `L_1.0`, а `tsd.sal.app` объявляет `com.huawei.nearby.usb.nsd` с атрибутом `ncm.ip`. [Кабельное соединение Huawei HiCar](https://developer.huawei.com/consumer/cn/doc/HiCar-Guides/wired-connection-process-0000001050002451/), [объявление адреса через mDNS](https://developer.huawei.com/consumer/cn/doc/HiCar-Guides/broadcast-ip-port-via-mdns-0000001059290770/).
+
+При обычной сборке Gradle загружает исходники зависимостей по файлу `vendor/hicar-auth/dependency-lock.json` и проверяет SHA‑256. Перед первой сборкой с `--offline` запустите из корня HSD `python3 tools/hicar-auth/build.py --fetch-only`. Лицензии входят в APK. Тестовый приёмник собирается только для проверок, а `tools/qa/matrix_hsd_083.py` в рабочей папке проекта запускает сценарий `hicar` на эмуляторах.

@@ -1,6 +1,7 @@
 # Generated output and local tooling
 **/build/
 **/.cxx/
+/android/.hicar-native/
 .gradle/
 .kotlin/
 .idea/

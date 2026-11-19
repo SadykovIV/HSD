@@ -9,7 +9,8 @@ class ProjectionRouteTest {
         for (route in ProjectionRoute.entries) assertEquals(route, ProjectionRoute.restore(route.name))
         assertEquals(ProjectionRoute.USB, ProjectionRoute.restore(null))
         assertEquals(ProjectionRoute.USB, ProjectionRoute.restore("unknown"))
-        assertEquals(setOf(ProjectionRoute.CARLIFE_USB, ProjectionRoute.USB), ProjectionRoute.entries.filter { it.wired }.toSet())
+        assertEquals(setOf(ProjectionRoute.CARLIFE_USB, ProjectionRoute.USB, ProjectionRoute.HICAR_USB),
+            ProjectionRoute.entries.filter { it.wired }.toSet())
         assertEquals(setOf(ProjectionRoute.CARLIFE_USB, ProjectionRoute.CARLIFE_WIFI), ProjectionRoute.entries.filter { it.carLife }.toSet())
     }
 
@@ -23,8 +24,9 @@ class ProjectionRouteTest {
     }
 
     @Test fun onlyHeadUnitHotspotTransportsWaitForThePhoneWifiRadio() {
-        assertEquals(setOf(ProjectionRoute.CARPLAY, ProjectionRoute.WIRELESS_AA),
+        assertEquals(setOf(ProjectionRoute.CARPLAY, ProjectionRoute.WIRELESS_AA, ProjectionRoute.HICAR),
             ProjectionRoute.entries.filter { it.usesHeadUnitHotspot }.toSet())
+        assertTrue(ProjectionRoute.HICAR_USB.usesLocalNetwork)
         for (state in listOf(android.net.wifi.WifiManager.WIFI_STATE_DISABLED, android.net.wifi.WifiManager.WIFI_STATE_DISABLING))
             assertEquals(ProjectionWifi.OFF, ProjectionWifi.of(state))
         assertTrue(ProjectionWifi.of(android.net.wifi.WifiManager.WIFI_STATE_ENABLING).needsEnable)

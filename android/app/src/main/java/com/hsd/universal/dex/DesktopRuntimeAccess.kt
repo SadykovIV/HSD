@@ -19,8 +19,9 @@ internal interface DesktopRuntimeAccess {
     fun registerChildDisplay(parentId: Int, owned: OwnedDesktopDisplay, token: IBinder, width: Int, height: Int, fullscreen: Boolean) {}
     fun resizeRegisteredDisplay(id: Int, token: IBinder, width: Int, height: Int) {}
     fun unregisterDisplay(id: Int, token: IBinder) {}
+    fun finishTouches(id: Int) {}
     fun eligible(id: Int): Boolean = false
-    fun launchDesktop(mode: Int, id: Int): Unit = unsupported()
+    fun launchDesktop(mode: Int, id: Int, sessionId: Long): Unit = unsupported()
     fun launchChild(parentId: Int, id: Int, packageName: String, className: String, desktopPane: Boolean): Unit = unsupported()
     fun setPhonePanelOff(parentId: Int, off: Boolean): Unit = unsupported()
     fun primaryPanelState(): Int = unsupported()

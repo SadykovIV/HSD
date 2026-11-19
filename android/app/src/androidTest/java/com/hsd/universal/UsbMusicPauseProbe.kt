@@ -19,6 +19,13 @@ import java.util.concurrent.atomic.AtomicInteger
 
 /** Real Android media routing and player. Only the USB cable state is supplied by the fixture. */
 internal class UsbMusicPauseProbe(private val instrumentation: Instrumentation) {
+    fun checkDisconnects() {
+        run()
+        run(wireless = true)
+        run(wireless = true, explicitStop = true)
+        run(wireless = true, serviceDestroyed = true)
+    }
+
     fun run(wireless: Boolean = false, explicitStop: Boolean = false, serviceDestroyed: Boolean = false) {
         val app = instrumentation.targetContext
         var cable = true
@@ -61,7 +68,7 @@ internal class UsbMusicPauseProbe(private val instrumentation: Instrumentation) 
             track.play()
             session.setPlaybackState(playback(PlaybackState.STATE_PLAYING))
             instrumentation.runOnMainSync {
-                DesktopMusicPlayback.attach(context, service, owner, !wireless, { true }, { true }, { true })
+                DesktopMusicPlayback.attach(context, service, owner, !wireless, { true }, { true })
                 DesktopMusicPlayback.outputLost(service, owner, true, false)
                 DesktopMusicPlayback.outputLost(service, Any(), true, true)
                 DesktopMusicPlayback.physicalDetach(service)

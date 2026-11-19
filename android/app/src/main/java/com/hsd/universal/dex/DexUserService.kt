@@ -75,6 +75,7 @@ class DexUserService private constructor(private val context: Context, private v
 
     private class Session(val epoch: Long, val surface: Surface, val token: IBinder, val death: IBinder.DeathRecipient,
         val density: Int, val desktopMode: Int, val width: Int, val height: Int) {
+        val startedAtNs = SystemClock.elapsedRealtimeNanos()
         var display: OwnedDesktopDisplay? = null
         var linked = false
         val children = LinkedHashMap<IBinder, ChildSession>()
@@ -327,10 +328,10 @@ class DexUserService private constructor(private val context: Context, private v
         ensureActive(active.epoch)
         active.hardwareTarget = active.token
         val id = checkNotNull(active.display).display.displayId
-        if (delegated) checkNotNull(runtime).launchDesktop(active.desktopMode, id)
+        if (delegated) checkNotNull(runtime).launchDesktop(active.desktopMode, id, active.startedAtNs)
         // am runs as the shell UID. The public companion entry selects our signed host
         // from the launch extras; the dedicated entry requires the HSD application UID.
-        else command(active.epoch, *DesktopModePolicy.homeCommand(active.desktopMode, id, context.packageName))
+        else command(active.epoch, *DesktopModePolicy.homeCommand(active.desktopMode, id, context.packageName, sessionId = active.startedAtNs))
         ensureActive(active.epoch)
     }
 
@@ -839,6 +840,9 @@ class DexUserService private constructor(private val context: Context, private v
             // All consumers remain retained until one native family handoff is ACKed.
             // Releasing children individually can wait on a sibling's unfinished app
             // transition during Stop, even though every member is being retired.
+            for (owned in lease.children.values.mapNotNull { it.display } + listOfNotNull(lease.display)) {
+                if (owned.display.isValid) runtime?.finishTouches(owned.display.displayId)
+            }
             lease.display?.family?.close()
             for (child in lease.children.values.toList()) releaseChild(lease, child)
             lease.display?.display?.displayId?.let { unregisterInputDisplay(it, lease.token) }
@@ -993,6 +997,10 @@ class DexUserService private constructor(private val context: Context, private v
         private val inputManager: Any
         private val input: Method
         private val displayEvents = DisplayEventAccess()
+        private val touches by lazy { ProjectionTouchDispatcher({ id, event ->
+            displayEvents.targetProjectionDisplay(event, id)
+            input.invoke(inputManager, event, 0) == true
+        }, { Log.i(TAG, "DESKTOP INPUT: $it") }) }
         private val setActionButton: Method
         private val taskQuery: Pair<Any, Method>? by lazy {
             runCatching {
@@ -1058,14 +1066,23 @@ class DexUserService private constructor(private val context: Context, private v
 
         private val displayLocks = HashMap<Int, DexWakeLease>()
 
-        override fun registerParentDisplay(owned: OwnedDesktopDisplay, token: IBinder, width: Int, height: Int) { enableLocalIme(owned.display.displayId); holdDisplay(owned.display.displayId) }
-        override fun registerChildDisplay(parentId: Int, owned: OwnedDesktopDisplay, token: IBinder, width: Int, height: Int, fullscreen: Boolean) {
-            enableLocalIme(owned.display.displayId); holdDisplay(owned.display.displayId)
+        override fun registerParentDisplay(owned: OwnedDesktopDisplay, token: IBinder, width: Int, height: Int) {
+            enableLocalIme(owned.display.displayId)
+            holdDisplay(owned)
         }
-        override fun unregisterDisplay(id: Int, token: IBinder) { displayLocks.remove(id)?.let { runCatching { it.release() } } }
+        override fun registerChildDisplay(parentId: Int, owned: OwnedDesktopDisplay, token: IBinder, width: Int, height: Int, fullscreen: Boolean) {
+            enableLocalIme(owned.display.displayId)
+            holdDisplay(owned)
+        }
+        override fun finishTouches(id: Int) = touches.finish(id)
+        override fun unregisterDisplay(id: Int, token: IBinder) {
+            touches.forget(id)
+            displayLocks.remove(id)?.let { runCatching { it.release() } }
+        }
 
-        private fun holdDisplay(id: Int) {
-            if (android.os.Build.VERSION.SDK_INT < 31) return
+        private fun holdDisplay(owned: OwnedDesktopDisplay) {
+            if (android.os.Build.VERSION.SDK_INT < 31 || owned.family != null) return
+            val id = owned.display.displayId
             try {
                 val global = Class.forName("android.hardware.display.DisplayManagerGlobal")
                 val manager = global.getMethod("getInstance").invoke(null)
@@ -1192,11 +1209,15 @@ class DexUserService private constructor(private val context: Context, private v
 
         override fun inject(event: InputEvent, id: Int, actionButton: Int) {
             check(id > 0) { "Ввод на основной экран запрещён" }
+            if (event is MotionEvent && event.source == InputDevice.SOURCE_TOUCHSCREEN && actionButton == 0) {
+                touches.dispatch(id, event)
+                return
+            }
             if (actionButton != 0) {
                 check(event is MotionEvent) { "Кнопка указателя требует события мыши" }
                 setActionButton.invoke(event, actionButton)
             }
-            displayEvents.setDisplayId(event, id)
+            displayEvents.targetProjectionDisplay(event, id)
             // ASYNC avoids waiting for another app's UI thread; the queue itself remains ordered.
             check(input.invoke(inputManager, event, 0) == true) { "One UI отклонил ввод на экран DeX" }
         }

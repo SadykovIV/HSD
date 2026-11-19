@@ -1,5 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="carplay_renew_pairing">Pair this head unit again</string>
+    <string name="carplay_renew_confirm">Start a new CarPlay pairing with %1$s? HSD will keep its current key until the receiver completes verification on the next connection.</string>
+    <string name="carplay_renew_ready">Start the next connection with this head unit.</string>
+    <string name="carplay_receiver_changed">The head unit could not confirm its saved CarPlay key. In Connection type → CarPlay, select the same head unit and choose “Pair this head unit again”.</string>
+    <string name="desktop_car_menu">Car menu</string>
     <string name="desktop_1_components">"1. Components"</string>
     <string name="desktop_6_digit_code">"6-digit code"</string>
     <string name="desktop_a_new_version_is_available">"A new version is available."</string>
@@ -28,7 +33,6 @@
     <string name="desktop_activation_setup_incomplete">"Activation setup incomplete"</string>
     <string name="desktop_activation_status_and_code_entry_directly_in_the_notification">"Activation status and code entry directly in the notification."</string>
     <string name="desktop_add_app">"Add app"</string>
-    <string name="desktop_additional_audio_delay_in_milliseconds">"Additional audio delay in milliseconds"</string>
     <string name="desktop_additional_network_mode_adb_which_uses_debugging_connections_including">"The extra ADB network mode used by %1$s will be turned off. This may disconnect debugging sessions on your computer and in other apps. Android will keep your Wireless debugging settings. You may need to activate the desktop over Wi-Fi again."</string>
     <string name="desktop_adjust_app_dpi">"Adjust app DPI"</string>
     <string name="desktop_after_a_few_seconds_press_the_desired_button_again">"After a few seconds, press the desired button again."</string>
@@ -60,7 +64,7 @@
     <string name="desktop_application_permissions_saved_click_re_activate_to_check_the">"App permissions are saved. Tap Reactivate to check the connection and prepare the independent display."</string>
     <string name="desktop_approximate_location">"Approximate location"</string>
     <string name="desktop_apps">"Apps"</string>
-    <string name="desktop_audio_sync">"Audio sync"</string>
+    <string name="desktop_audio_sync">Adjust audio timing</string>
     <string name="desktop_audio_uses_the_phone_s_current_output">"Audio uses the phone’s current output."</string>
     <string name="desktop_audio_uses_the_phone_s_current_output_such_as">"Audio uses the phone’s current output, such as Bluetooth."</string>
     <string name="desktop_auto">"auto"</string>
@@ -173,7 +177,6 @@
     <string name="desktop_desktop_could_not_start">"Desktop could not start"</string>
     <string name="desktop_desktop_preparations_incomplete">"Desktop setup incomplete"</string>
     <string name="desktop_desktop_profile">"Desktop profile"</string>
-    <string name="desktop_desktop_ready_for_setup">"Desktop ready for setup ✓"</string>
     <string name="desktop_desktop_unavailable">"Desktop unavailable"</string>
     <string name="desktop_dex_by_adb_1280_720">" · DeX over ADB · 1280 × 720"</string>
     <string name="desktop_dex_over_adb_uses_1280_720_the_selected_dpi">"DeX over ADB uses 1280×720. The selected DPI is applied on the next connection."</string>
@@ -214,7 +217,6 @@
     <string name="desktop_enable_the_activation_channel">"Turn on the %1$s activation notification channel."</string>
     <string name="desktop_enable_the_input_pairing_code_channel">"Turn on the pairing code notification channel."</string>
     <string name="desktop_enabling_access">"Enabling %1$s access…"</string>
-    <string name="desktop_enter_0_to_2000_ms">"Enter 0 to 2000 ms"</string>
     <string name="desktop_enter_a_port_from_1_to_65535">"Enter a port from 1 to 65535"</string>
     <string name="desktop_enter_address_and_ports_manually">"Enter address and ports manually"</string>
     <string name="desktop_enter_an_integer_from_1_to_20">"Enter an integer from 1 to 20"</string>
@@ -280,8 +282,7 @@
     <string name="desktop_how_to_turn_off_the_phone_screen">"How to turn off the phone screen"</string>
     <string name="desktop_how_to_turn_off_the_screen">"Screen-off method"</string>
     <string name="desktop_hsd_certificate">"HSD Certificate"</string>
-    <string name="desktop_hsd_creates_a_certificate_the_first_time_it_connects">Automatic uses a verified certificate included with HSD. Android Auto does not need to be installed. A newer valid certificate from installed Android Auto can also be used. Verified certificates can also be updated automatically over the Internet. A manual selection uses the certificate you selected.</string>
-    <string name="aa_auto_identity_unavailable">No valid automatic Android Auto certificate is available. Connect to the Internet, check certificates for updates and check the phone date. You can also select a certificate under Android Auto certificates.</string>
+    <string name="desktop_hsd_creates_a_certificate_the_first_time_it_connects">HSD creates a phone identity on this device. If your head unit requires a different profile, select one from Android storage.</string>
     <string name="aa_installed_identity_unavailable">Could not obtain a valid certificate from installed Android Auto. Update Android Auto on this phone and reconnect. You can choose a different certificate under Android Auto certificates.</string>
     <string name="desktop_hsd_sends_the_next_street_name_with_the_turn">"HSD sends the next street name with the turn arrow and distance when the navigation app provides it."</string>
     <string name="desktop_i_m_checking_the_saved_connection_turn_on_wi">"Checking the saved connection. Turn on Wi-Fi and Wireless debugging."</string>
@@ -324,9 +325,7 @@
     <string name="desktop_looking_for_pairing_dialog">"Looking for pairing dialog…"</string>
     <string name="desktop_looking_for_phone">"Looking for phone…"</string>
     <string name="desktop_main_app_code">"Main app · %1$s (build %2$d)"</string>
-    <string name="desktop_manages">"Controlled by %1$s"</string>
-    <string name="desktop_screen_control_phone">"Manages the phone"</string>
-    <string name="desktop_managing_the_phone_display">"Phone screen control"</string>
+    <string name="desktop_managing_the_phone_display">%1$s manages the phone screen</string>
     <string name="desktop_map_and_music_side_by_side_on_the_head">"Map and music side by side on the head unit."</string>
     <string name="desktop_mbit_s">"%1$d Mbit/s"</string>
     <string name="desktop_mbit_s_1041">"Mbit/s"</string>
@@ -391,7 +390,7 @@
     <string name="desktop_pair_a_new_head_unit">"Pair a new head unit"</string>
     <string name="desktop_pair_and_connect">"Pair and connect"</string>
     <string name="desktop_pair_dex_over_adb">"Pair DeX over ADB"</string>
-    <string name="desktop_pair_over_bluetooth_and_project_over_wi_fi">"Pair over Bluetooth and project over Wi-Fi"</string>
+    <string name="desktop_pair_over_bluetooth_and_project_over_wi_fi">Requires wireless CarPlay on the head unit. HSD pairs over Bluetooth and projects over Wi-Fi. USB-only CarPlay is unsupported.</string>
     <string name="desktop_pair_the_phone_with_the_head_unit_then_select">"Pair the phone with the head unit, then select it here."</string>
     <string name="desktop_paired_devices">"Paired devices"</string>
     <string name="desktop_pairing_connection">"Pairing: %1$s. Connection: %2$s"</string>
@@ -410,7 +409,6 @@
     <string name="desktop_phone_certificate">"Phone certificate"</string>
     <string name="desktop_phone_not_found_yet">"Phone not found yet"</string>
     <string name="desktop_phone_s_locked_unlock_it_to_read_the_notifications">"Phone locked\nUnlock your phone to read notifications."</string>
-    <string name="desktop_phone_screen_control">"Phone screen control"</string>
     <string name="desktop_phone_screen_timer">"Phone screen timer"</string>
     <string name="desktop_phone_status">"Phone status"</string>
     <string name="desktop_phone_visible_select_it_on_the_head_unit_and">"Your phone is discoverable for %1$d seconds. Select it on the head unit and confirm the pairing code."</string>
@@ -498,8 +496,6 @@
     <string name="desktop_stopped">"Stopped"</string>
     <string name="desktop_street_names_for_turns">"Street names for turns"</string>
     <string name="desktop_switching_to">"Switching to %1$s"</string>
-    <string name="desktop_synchronization_works_automatically_here_you_can_make_an_adjustment">"Audio sync is automatic. After the first connection to %1$s, you can adjust the delay for your head unit here."</string>
-    <string name="desktop_synchronizes_the_streams_automatically_if_the_sound_is_from">"%1$s\n\n%2$s synchronizes audio and video automatically. If sound from the %3$s speakers still leads the picture, enter a delay from 0 to 2000 ms. Set 0 for automatic sync only. The adjustment applies to projection audio and has no effect on Bluetooth audio."</string>
     <string name="desktop_tap_connect">"Tap Connect."</string>
     <string name="desktop_tap_connect_to_retry_if_the_error_persists_send">"%1$s\n\nTap Connect to retry. If the error persists, send the log."</string>
     <string name="desktop_tap_connect_to_retry_or_send_the_log">"Tap Connect to retry, or send the log."</string>
@@ -508,7 +504,6 @@
     <string name="desktop_temporarily_disabled">"Temporarily disabled"</string>
     <string name="desktop_the_apk_is_downloaded_from_a_verified_component_repository">"HSD downloads the APK from the component repository and verifies its signature and checksum. Android asks you to confirm installation."</string>
     <string name="desktop_the_apk_system_installer_is_not_available">"The APK system installer is not available."</string>
-    <string name="desktop_the_application_is_open_directly_on_the_head_unit">"The application is open directly on the head unit"</string>
     <string name="desktop_the_application_will_close_after_the_desktop_is_released">"The app will close after releasing the desktop.%1$s"</string>
     <string name="desktop_the_closure_of_additional_network_debugging_has_not_been">"Could not confirm that extra network debugging was turned off. "</string>
     <string name="desktop_the_code_is_entered_once_when_activated_again_it">"Enter the code once. %1$s reuses the saved pairing when you activate again."</string>
@@ -615,7 +610,7 @@
     <string name="desktop_we_need_the_first_connection">"First connection required"</string>
     <string name="desktop_app_activation_required">"App activation required"</string>
     <string name="desktop_we_need_to_update_access">"Access needs to be updated"</string>
-    <string name="desktop_when_the_control_is_turned_off_the_phone_controls">"When screen control is off, the phone manages its own display. When enabled, %1$s controls screen dimming while connected to %2$s."</string>
+    <string name="desktop_phone_screen_owner_hint">When off, the phone uses its usual screen timeout and lock settings.</string>
     <string name="desktop_wi_fi_direct_is_automatically_configured_via_bluetooth_if">"HSD negotiates Wi-Fi Direct over Bluetooth. If the head unit creates a hotspot, enter its network details. If it connects to your phone’s hotspot, enable it in Android settings."</string>
     <string name="desktop_width_in_pixels">"Width in pixels"</string>
     <string name="desktop_wireless_connection">"Wireless connection"</string>
@@ -667,7 +662,6 @@
     <string name="desktop_android_has_not_launched_the_desktop_service">"Android has not launched the desktop service"</string>
     <string name="desktop_android_has_not_launched_the_transmission_of_sound">"Android could not start audio capture"</string>
     <string name="desktop_android_has_stopped_service_open_up_and_re_activate">"Android stopped the service. Open %1$s and reactivate using the saved pairing."</string>
-    <string name="desktop_android_sound_reading_error">"Android Sound Reading Error: %1$d"</string>
     <string name="desktop_attempt_to_activate_interrupted_or_expired_and_press_activate">"Activation was interrupted or timed out. Open %1$s and tap Activate again."</string>
     <string name="desktop_audio_connection_closed">"Audio connection closed"</string>
     <string name="desktop_bluetooth_unavailable">"Bluetooth unavailable"</string>
@@ -882,6 +876,7 @@
     <string name="usb_grant_check_error">"Could not verify USB permission. Reconnect the cable and tap Connect."</string>
     <string name="aa_handshake_interrupted">Android Auto could not finish authentication (%1$s). %2$s</string>
     <string name="aa_usb_wait_version">USB is connected. Open Android Auto on the head unit. HSD will connect when the head unit is ready.</string>
+    <string name="aa_usb_closed_before_version">The USB connection closed before the head unit requested the Android Auto version (%1$s). Open Android Auto on the head unit and reconnect the cable.</string>
     <string name="carplay_pairing_hint">Allow Bluetooth discovery, then add the phone in the car. If the CarPlay list is empty, try the car’s list of all Bluetooth devices. After pairing, select the head unit in HSD.</string>
     <string name="carplay_pairing_failed">Could not open the CarPlay Bluetooth service. Check Bluetooth and try again.</string>
     <string name="carplay_pair_from_phone">Find the head unit from the phone</string>
@@ -890,6 +885,7 @@
     <string name="carplay_stage_certificate">accessory certificate</string>
     <string name="carplay_invalid_accessory_signature">The head unit supplied an invalid iAP2 signature.</string>
     <string name="carplay_stage_signature">accessory signature</string>
+    <string name="carplay_signature_timeout">The head unit sent its certificate. It did not return a signature within 30 seconds of the request.</string>
     <string name="carplay_stage_credentials">Wi-Fi settings from the head unit</string>
     <string name="carplay_stage_wifi">joining the head unit’s Wi-Fi</string>
     <string name="carplay_stage_discovery">CarPlay service discovery on Wi-Fi</string>
@@ -906,9 +902,16 @@
     <string name="projection_network_restricted">Android denied HSD access to the head unit’s Wi-Fi. Check the app’s network permissions and network restrictions on the phone, then reconnect.</string>
     <string name="projection_wifi_lost">The connection to the head unit’s Wi-Fi ended before projection could start.</string>
     <string name="projection_wifi_unavailable">The head unit’s Wi-Fi is unavailable. Check that the head unit is ready and accept the Wi-Fi connection on the phone.</string>
+    <string name="projection_wifi_not_found">Android could not find the head unit’s Wi-Fi network.</string>
+    <string name="projection_wifi_no_response">The head unit’s Wi-Fi access point did not respond.</string>
+    <string name="projection_wifi_association">Android could not associate with the head unit’s Wi-Fi access point.</string>
+    <string name="projection_wifi_authentication">Wi-Fi authentication with the head unit failed.</string>
+    <string name="projection_wifi_no_address">Android joined the Wi-Fi network but could not obtain a local IP address.</string>
+    <string name="projection_wifi_declined">The Wi-Fi connection was declined on the phone.</string>
     <string name="aa_auth_certificate">The head unit rejected the phone certificate (%1$s). Select a certificate it accepts in Android Auto certificates.</string>
     <string name="aa_auth_busy">The head unit is busy (%1$s). End the other projection session and reconnect.</string>
     <string name="aa_auth_rejected">The head unit declined Android Auto authorization (%1$s).</string>
-    <string name="aa_auth_unspecified">The head unit declined Android Auto authorization (%1$s). This code alone does not mean the clock is wrong. Update HSD and choose Automatic under Android Auto certificates.</string>
+    <string name="aa_auth_unspecified">The head unit declined Android Auto authorization (%1$s). Select a phone profile accepted by your head unit.</string>
     <string name="desktop_encoder_start_failure">Could not start %1$s at %2$d×%3$d, %4$d fps. %5$s</string>
+    <string name="aa_wireless_receiver_busy">The head unit reports an active projection session. Select this phone in the head unit’s Android Auto menu.</string>
 </resources>

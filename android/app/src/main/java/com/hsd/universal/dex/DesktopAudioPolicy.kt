@@ -39,6 +39,7 @@ internal class DesktopPcmFrames {
         require(length in 0..input.size)
         val total = tailBytes + length
         val complete = total - total % DesktopAudioPolicy.BYTES_PER_FRAME
+        if (tailBytes == 0 && complete == length) return input.copyOf(length)
         val joined = ByteArray(total)
         tail.copyInto(joined, endIndex = tailBytes)
         input.copyInto(joined, destinationOffset = tailBytes, endIndex = length)

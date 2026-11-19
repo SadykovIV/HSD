@@ -4,6 +4,13 @@ import android.content.Context
 import android.content.Intent
 import android.net.wifi.WifiManager
 import android.provider.Settings
+import net.prototux.aare.aap.AapLog
+
+internal object ProjectionWirelessLog : AapLog {
+    override fun i(msg: String) = AppLog.i(msg, false)
+    override fun w(msg: String, t: Throwable?) = AppLog.i("Wireless: $msg" + (t?.let { " (${it.javaClass.simpleName})" } ?: ""), false)
+    override fun e(msg: String, t: Throwable?) = AppLog.i("Wireless error: $msg" + (t?.let { " (${it.javaClass.simpleName})" } ?: ""), false)
+}
 
 /** State of the phone's Wi-Fi radio, independent of association, internet and the default network. */
 internal enum class ProjectionWifi {

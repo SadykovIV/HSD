@@ -4,12 +4,11 @@
 | --- | --- |
 | [HeadSwap](https://github.com/YegorkaPomidorka/headswap) by YegorkaPomidorka | Baidu CarLife implementation and reference head unit. Реализация Baidu CarLife и эталонное головное устройство. |
 | [DriveDeck](https://github.com/RotkivKiv/DriveDeck-Updates) by RotKivKiv | The car launcher. The companion adapts the author's HeadSwap edition of DriveDeck for use on an external display. |
-| [AARE](https://github.com/prototux/AARE) by prototux and contributors | Android Auto transport and session implementation; installed-APK identity format and key derivation from `extract_key.py`. |
+| [AARE](https://github.com/prototux/AARE) by prototux and contributors | Android Auto transport and session implementation. |
 | [aasdk](https://github.com/opencardev/aasdk) by Michal Szwaj, f1x.studio and OpenCarDev contributors | Android Auto message definitions. |
 | [CarDeck](https://github.com/shaonialife/cardeck) by lizhihua and [Apple Security](https://github.com/apple-oss-distributions/Security) | CarPlay link and AirPlay implementations, and public accessory certificate authorities. |
 | [scrcpy](https://github.com/Genymobile/scrcpy), [Kadb](https://github.com/flyfishxu/Kadb) and [Shizuku](https://github.com/RikkaApps/Shizuku-API) | Display streaming, the ADB client and Shizuku access. |
 | [LocalDex](https://github.com/sam1am/localdex) by sam1am | Technical reference for per-display window handling on Samsung devices. |
-| Mgears MStick | Technical reference for autonomous Android Auto credentials and their update lifecycle. HSD verifies credentials from its [public update package](https://api.mgears.io/v1/mgears/api/mgears_aa_key.json), including optional automatic renewal from rc4; no MStick executable code is included. |
 | [CatPlay](https://github.com/catplay-labs/catplay) | Protocol reference for the separate AirPlay control-request and event-response channels. |
 | [Golos Text](https://github.com/googlefonts/golos-text) and [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) | Typefaces used in the app. |
 

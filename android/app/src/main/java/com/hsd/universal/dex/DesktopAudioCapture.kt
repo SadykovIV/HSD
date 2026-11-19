@@ -33,6 +33,8 @@ object DesktopAudioState {
     @Volatile var error: String? = null
     @Volatile var pcmBytes = 0L
     @Volatile var nonSilentBuffers = 0L
+    /** Enabled only for an in-process continuity measurement with a known test signal. */
+    @Volatile internal var nativeMediaMeter: PcmContinuityMeter? = null
 }
 
 /** Main-process owner. PCM exists only in memory; the existing CarLife queue enforces backpressure. */
@@ -42,17 +44,21 @@ class DesktopAudioCapture(context: Context) {
     private var core: AaBridgeCore? = null
     private var usb = false
     private var canCaptureOutput: (() -> Boolean)? = null
+    private var output: CapturedPlaybackSink? = null
     private var closed = false
     private var failed = false
-    private var worker: Capture? = null
+    @Volatile private var worker: Capture? = null
     private var audioMode: DesktopAudioModeObserver? = null
     @Volatile var hasForwardedAudio = false
         private set
     private val sessions = DesktopAudioSessionGate()
     private var generation = 0L
-    private class Capture(val core: AaBridgeCore, val generation: Long, val interruption: DesktopAudioInterruption) {
+    private class Capture(val core: AaBridgeCore, val sink: CapturedPlaybackSink, val generation: Long, val interruption: DesktopAudioInterruption) {
         val cancelled = AtomicBoolean()
+        val overrun = AtomicBoolean()
     }
+
+    internal fun takeOverrun(): Boolean = worker?.overrun?.getAndSet(false) == true
 
     private val tick = object : Runnable {
         override fun run() {
@@ -63,11 +69,13 @@ class DesktopAudioCapture(context: Context) {
     }
 
     /** Called only for a live transport, never for the desktop's disconnected grace period. */
-    fun attach(value: AaBridgeCore, isUsb: Boolean, restartAfterCalls: Boolean = false, canCapture: () -> Boolean) {
+    fun attach(value: AaBridgeCore, isUsb: Boolean, restartAfterCalls: Boolean = false,
+               sink: CapturedPlaybackSink = CarlifeCapturedPlaybackSink(value), canCapture: () -> Boolean) {
         check(Looper.myLooper() == Looper.getMainLooper())
         detach()
         generation = sessions.next()
         core = value
+        output = sink
         usb = isUsb
         canCaptureOutput = canCapture
         // CarLife needs an explicit media lifecycle across HFP calls. AA owns focus through
@@ -88,6 +96,7 @@ class DesktopAudioCapture(context: Context) {
         sessions.next() // old callbacks must not PAUSE/STOP a newly attached CarLife link
         core?.usbAudioEnabled = false
         core = null
+        output = null
         canCaptureOutput = null
         usb = false
         hasForwardedAudio = false
@@ -129,7 +138,7 @@ class DesktopAudioCapture(context: Context) {
                 else -> R.string.desktop_audio_connection_closed
             }
         } else if (worker == null && !failed) {
-            val capture = Capture(current, generation, audioMode?.interruption ?: DesktopAudioInterruption())
+            val capture = Capture(current, checkNotNull(output), generation, audioMode?.interruption ?: DesktopAudioInterruption())
             worker = capture
             DesktopAudioState.error = null
             DesktopAudioState.pcmBytes = 0
@@ -150,49 +159,68 @@ class DesktopAudioCapture(context: Context) {
 
     private fun runCapture(capture: Capture) {
         var mix: RegisteredPlaybackMix? = null
-        val started = ArrayList<AudioRecord>()
+        var captureReader: PlaybackCaptureReader? = null
         var streamStarted = false
         var failure: Throwable? = null
+        val prefs = DexPrefs(context)
+        fun closeRoutes() {
+            try { captureReader?.close() } finally {
+                captureReader = null
+                mix?.close()
+                mix = null
+            }
+        }
+        fun openRoutes() {
+            val routes = RegisteredPlaybackMix.open(context)
+            mix = routes
+            for (record in routes.records) {
+                record.startRecording()
+                check(record.recordingState == AudioRecord.RECORDSTATE_RECORDING) {
+                    context.getString(R.string.desktop_android_has_not_launched_the_transmission_of_sound)
+                }
+            }
+            captureReader = PlaybackCaptureReader(routes) { capture.overrun.set(true) }
+            AppLog.i("DESKTOP AUDIO: ${routes.records.size} LOOP_BACK routes; 48000 Hz stereo16")
+        }
         try {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO)
             // AudioService propagates new delegated grants to its native permission cache asynchronously.
             for (attempt in 0..2) {
                 if (capture.cancelled.get()) return
-                try { mix = RegisteredPlaybackMix.open(context); break }
-                catch (error: Exception) { if (attempt == 2) throw error; Thread.sleep(150) }
+                try { openRoutes(); break }
+                catch (error: Exception) { closeRoutes(); if (attempt == 2) throw error; Thread.sleep(150) }
             }
-            val routes = checkNotNull(mix)
             if (capture.cancelled.get()) return
-            routes.records.forEach { audio ->
-                audio.startRecording()
-                started.add(audio)
-                check(audio.recordingState == AudioRecord.RECORDSTATE_RECORDING) { context.getString(R.string.desktop_android_has_not_launched_the_transmission_of_sound) }
-            }
             main.post { if (worker === capture && !capture.cancelled.get()) {
                 DesktopAudioState.running = true
                 DesktopAudioState.statusRes = R.string.desktop_sound_i_m_waiting_for_music_or_a_hint
             } }
-            AppLog.i("DESKTOP AUDIO: ${routes.records.size} disjoint LOOP_BACK routes; independent music/navigation gains; PCM 48000 Hz stereo16 started")
             var nextReport = SystemClock.elapsedRealtime() + 10_000L
             var intervalPeak = 0
             var reportedSignal = false
             var intervalHadSignal = false
-            val reader = PlaybackCaptureReader(routes)
-            val prefs = DexPrefs(context)
+            val navigationGate = NavigationPlaybackGate()
+            var splitLogged: Boolean? = null
             var boundary = capture.interruption.state.boundary
             var resumeAfterCall = false
             while (!capture.cancelled.get()) {
+                val splitNavigation = prefs.separateNavigationAudio
+                val music = prefs.musicVolume
+                val navigation = prefs.navigationVolume
+                val routes = checkNotNull(mix)
+                val reader = checkNotNull(captureReader)
                 val mode = capture.interruption.state
                 if (mode.boundary != boundary) {
                     boundary = mode.boundary
                     reader.discard()
                     if (streamStarted) sessions.runIfCurrent(capture.generation) {
-                        if (!capture.cancelled.get()) capture.core.onCapturedAudioPause()
+                        if (!capture.cancelled.get()) capture.sink.pause()
                     }
                     streamStarted = false
+                    navigationGate.reset()
                     resumeAfterCall = true
                 }
-                val captured = reader.read(prefs.musicVolume, prefs.navigationVolume)
+                val captured = reader.read(music, navigation)
                 val now = SystemClock.elapsedRealtime()
                 if (now >= nextReport) {
                     AppLog.i("DESKTOP AUDIO: PCM bytes=${DesktopAudioState.pcmBytes} " +
@@ -203,7 +231,7 @@ class DesktopAudioCapture(context: Context) {
                     intervalPeak = 0
                     nextReport = now + 10_000L
                 }
-                if (captured == null) { Thread.sleep(5); continue }
+                if (captured == null) continue
                 val pcm = captured.pcm
                 if (pcm.isEmpty() || capture.cancelled.get()) continue
                 DesktopAudioState.pcmBytes += pcm.size
@@ -230,13 +258,23 @@ class DesktopAudioCapture(context: Context) {
                 sessions.runIfCurrent(capture.generation) {
                     if (!capture.cancelled.get()) {
                         if (!streamStarted) {
-                            if (resumeAfterCall) capture.core.onCapturedAudioResume()
-                            else capture.core.onAudioStart(DesktopAudioPolicy.MEDIA_CHANNEL)
+                            capture.sink.start(resumeAfterCall)
                             streamStarted = true
                             resumeAfterCall = false
                         }
-                        capture.core.onAudioData(DesktopAudioPolicy.MEDIA_CHANNEL, pcm, capturedAtUs)
-                        if (peak > 0) hasForwardedAudio = true
+                        val separate = splitNavigation && capture.sink.separateNavigationAvailable
+                        if (splitLogged != separate) {
+                            splitLogged = separate
+                            AppLog.i("DESKTOP AUDIO routing: ${if (separate) "separate navigation" else "mixed"} requested=$splitNavigation", false)
+                        }
+                        val navigationActive = separate && navigationGate.update(captured.navigation, capturedAtUs, routes.navigationState())
+                        if (!separate) navigationGate.reset()
+                        capture.sink.navigation(captured.navigation, capturedAtUs, navigationActive)
+                        // A late or refused packet on a negotiated guidance stream belongs to
+                        // that stream. Moving it to MEDIA would change both volume and focus.
+                        val media = if (separate) captured.music else pcm
+                        val accepted = capture.sink.media(media, capturedAtUs)
+                        if (peak > 0 && accepted) hasForwardedAudio = true
                     }
                 }
             }
@@ -246,11 +284,9 @@ class DesktopAudioCapture(context: Context) {
                 AppLog.e("DESKTOP AUDIO: playback unavailable; desktop remains active", failure)
             }
         } finally {
-            // Stop rerouting output before notifying CarLife; never retain capture during USB grace.
-            started.forEach { audio -> runCatching { audio.stop() } }
-            runCatching { mix?.close() }.onFailure { AppLog.e("DESKTOP AUDIO: unable to release playback route", it) }
+            runCatching { closeRoutes() }.onFailure { AppLog.e("DESKTOP AUDIO: unable to release playback route", it) }
             if (streamStarted) runCatching { sessions.runIfCurrent(capture.generation) {
-                capture.core.onAudioStop(DesktopAudioPolicy.MEDIA_CHANNEL)
+                capture.sink.stop()
             } }
             val error = failure
             main.post {

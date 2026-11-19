@@ -53,6 +53,9 @@ internal class ProjectionScreenCase(
                 "hd-margins-60" -> ProjectionScreenCase(
                     listOf(config(2, 60).toBuilder().setHeightMargin(32).setDensity(229).build(), config(1, 60)),
                     listOf(0, 1), 0, 1280, 688)
+                "fhd-margins-60" -> ProjectionScreenCase(
+                    listOf(config(3, 60).toBuilder().setHeightMargin(90).setDensity(176).build(),
+                        config(2, 60), config(1, 60)), listOf(0, 1, 2), 0, 1920, 990)
                 "subset" -> ProjectionScreenCase(listOf(config(1), config(6), hd), listOf(1), 1, 720, 1280)
                 "fps" -> ProjectionScreenCase(listOf(config(3,60), config(3)), listOf(0,1), 1, 1920, 1080)
                 "invalid" -> ProjectionScreenCase(listOf(hd), listOf(9), -1, 0, 0, 1280, 720)

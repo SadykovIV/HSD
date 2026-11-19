@@ -72,6 +72,9 @@ interface CarTransport {
     /** Сообщений в очереди, где стоит канал chan (у потока одна общая очередь на все каналы). */
     fun queueSize(chan: Int): Int
 
+    /** Data on other channels must not suppress this channel's PCM. */
+    fun channelBacklogged(chan: Int, limit: Int): Boolean = queueSize(chan) > limit
+
     /**
      * Выбросить из очереди ещё не записанные inner канала chan, для которых [pred] истинен; сколько выброшено.
      * Видео-счётчики не трогает (звук туда не входит). По умолчанию ничего не чистит.
@@ -88,6 +91,7 @@ interface CarTransport {
 
     /** Скорость слива видео, байт/с (0 = ещё не измерена). */
     val drainBytesPerSec: Double
+    val availableVideoBytesPerSec: Double get() = drainBytesPerSec
 }
 
 /** Only PCM DATA packets are allowed to expire, independent of a caller's chosen channel. */

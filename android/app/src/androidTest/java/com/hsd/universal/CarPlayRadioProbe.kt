@@ -4,7 +4,10 @@ import android.annotation.SuppressLint
 import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.net.ConnectivityManager
+import android.net.LinkProperties
+import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.Bundle
@@ -66,14 +69,18 @@ internal class CarPlayRadioProbe(private val context: Context, private val args:
                 .putString("localBluetoothAddress", oldLocal)
                 .commit()
         }
-        val endpoint =
-            CarPlayBootstrap(
+        val bootstrap = CarPlayBootstrap(
                     context,
                     life,
                     { android.util.Log.i("CarPlayRadioQA", it) },
                     AccessoryAuthentication(listOf(root)),
                 )
-                .connect()
+        if (args.getString("signature") == "silent") {
+            val error = runCatching { bootstrap.connect() }.exceptionOrNull()
+            check(error?.message == context.getString(R.string.carplay_signature_timeout)) { "Expected signature timeout, got $error" }
+            return Bundle().apply { putString("CarPlay_bootstrap", "Missing signature explicitly reported") }
+        }
+        val endpoint = bootstrap.connect()
         val payload = ByteArray(32).also { SecureRandom().nextBytes(it) }
         endpoint.network.socketFactory.createSocket().use { socket ->
             socket.soTimeout = 8000
@@ -100,7 +107,7 @@ internal class CarPlayRadioProbe(private val context: Context, private val args:
                 UUID.fromString("00000000-deca-fade-deca-deafdecacaff"),
             )
         if (listen != null) life.own(listen::close)
-        val addr = receiverWifiAddress()
+        val (wifi, addr) = receiverFixtureWifi(context, life)
         val ip =
             ServerSocket(0, 1, addr).also {
                 life.own(it::close)
@@ -112,9 +119,11 @@ internal class CarPlayRadioProbe(private val context: Context, private val args:
             .also { outgoing -> life.own(outgoing::close); outgoing.connect() }
         life.own(socket::close)
         check(socket.remoteDevice.address == arg("peer"))
+        val controlVersion = if (args.getString("capabilities") == "reported-reconnect") 1 else 2
         val channel =
             Iap2LinkChannel(
-                StreamDuplexStream(socket.inputStream, socket.outputStream, socket::close)
+                StreamDuplexStream(socket.inputStream, socket.outputStream, socket::close),
+                controlVersion = controlVersion,
             )
         life.own(channel::close)
         check(channel.awaitReady(10_000)) { "Receiver iAP2 link timed out" }
@@ -124,7 +133,8 @@ internal class CarPlayRadioProbe(private val context: Context, private val args:
         val response = if (wifiConfigOnly) 0x5703 else 0x4301
         val sparse = args.getString("capabilities") == "incomplete"
         val reported = args.getString("capabilities")
-        val serialFirst = args.getString("certificate") == "serial"
+        val silentSerial = args.getString("certificate") == "silent-serial"
+        val serialFirst = silentSerial || args.getString("certificate") == "serial" || reported == "reported-first"
         val expectedDeviceUpdates = setOf(0x4e09, 0x4e0a, 0x4e0b, 0x4e0c, 0x4e0d, 0x4e0e)
         val deviceUpdates = mutableSetOf<Int>()
         val signer = KeyFactory.getInstance("EC").generatePrivate(PKCS8EncodedKeySpec(data("key")))
@@ -134,11 +144,14 @@ internal class CarPlayRadioProbe(private val context: Context, private val args:
         var receivedId = false
         var serialSent = false
         var firstConfigSeen = false
+        var identified = false
+        var challengeAt = 0L
         val deadline = SystemClock.elapsedRealtime() + 45_000
         while (channel.isAlive && SystemClock.elapsedRealtime() < deadline) {
             val bytes = channel.recvControl(250) ?: continue
             for (frame in parser.offer(bytes)) when (frame.messageId) {
                 0x1d00 -> {
+                    check(controlVersion != 1 || accepted) { "Control v1 identification arrived before authentication" }
                     val sends = mutableListOf<Int>()
                     if (!sparse) sends.add(response)
                     if (serialFirst) sends.add(0xaa06)
@@ -153,16 +166,25 @@ internal class CarPlayRadioProbe(private val context: Context, private val args:
                         else expectedDeviceUpdates.toIntArray() + if (reported == "reported-first") intArrayOf(0x5702) else intArrayOf()
                     send(0x1d01, Iap2Csm.u16List(6, declaredSends) + Iap2Csm.u16List(7, declaredReceives))
                 }
+                0x1d02 -> identified = true
                 0xaa00 -> if (serialFirst && !serialSent) {
-                    check(frame.body.isEmpty())
+                    check(frame.body.contentEquals(Iap2Csm.param(0, byteArrayOf()))) {
+                        "Advertised certificate serial must be requested with empty parameter 0"
+                    }
                     serialSent = true
-                    repeat(2) { send(0xaa06, Iap2Csm.param(0, byteArrayOf(1, 2, 3))) }
+                    if (!silentSerial) repeat(2) { send(0xaa06, Iap2Csm.param(0, byteArrayOf(1, 2, 3))) }
                 } else {
                     check(frame.body.isEmpty())
                     send(0xaa01, Iap2Csm.param(0, data("chain")))
                 }
                 0xaa02 -> {
                     val digest = Iap2Csm.parseParams(frame.body).single { it.id == 0 }.value
+                    check(digest.size == 32)
+                    if (args.getString("signature") == "silent") {
+                        check(challengeAt == 0L)
+                        challengeAt = SystemClock.elapsedRealtime()
+                        continue
+                    }
                     val signature =
                         Signature.getInstance("NONEwithECDSA").run {
                             initSign(signer)
@@ -171,7 +193,7 @@ internal class CarPlayRadioProbe(private val context: Context, private val args:
                         }
                     send(0xaa03, Iap2Csm.param(0, signature))
                 }
-                0xaa05 -> accepted = true
+                0xaa05 -> { check(args.getString("signature") != "silent"); accepted = true }
                 in expectedDeviceUpdates -> {
                     check(accepted)
                     deviceUpdates.add(frame.messageId)
@@ -180,7 +202,7 @@ internal class CarPlayRadioProbe(private val context: Context, private val args:
                 }
                 0xaa04 -> error("Phone rejected accessory signature")
                 request -> {
-                    check(accepted && receivedId) { "Wi-Fi request arrived before the authenticated phone identifier" }
+                    check(accepted && identified && receivedId) { "Wi-Fi request arrived before authentication and identification" }
                     check(deviceUpdates == expectedDeviceUpdates)
                     if (sparse && !wifiConfigOnly) check(firstConfigSeen)
                     val useDiscovery = wifiConfigOnly || initiates
@@ -202,7 +224,7 @@ internal class CarPlayRadioProbe(private val context: Context, private val args:
                         // endpoint is only published over Bonjour once the radio handoff is over.
                         SystemClock.sleep(300)
                         channel.close()
-                        publishEndpoint(ip.localPort, life)
+                        publishEndpoint(wifi, ip.localPort, life)
                     }
                     ip.accept().use { client ->
                         client.soTimeout = 8000
@@ -224,51 +246,71 @@ internal class CarPlayRadioProbe(private val context: Context, private val args:
                 0x5702 -> firstConfigSeen = true
             }
         }
+        if (args.getString("signature") == "silent" && challengeAt > 0 && !channel.isAlive && !accepted) {
+            val elapsed = SystemClock.elapsedRealtime() - challengeAt
+            check(elapsed in 28_000..38_000) { "Unexpected signature wait ${elapsed}ms" }
+            return Bundle().apply { putString("CarPlay_receiver", "No Wi-Fi or authentication success; session closed after ${elapsed}ms") }
+        }
         error("Receiver did not complete Bluetooth bootstrap")
     }
 
-    @Suppress("DEPRECATION")
-    private fun receiverWifiAddress(): Inet4Address {
-        val connectivity = context.getSystemService(ConnectivityManager::class.java)
-        val deadline = SystemClock.elapsedRealtime() + 30_000
-        while (SystemClock.elapsedRealtime() < deadline) {
-            for (network in connectivity.allNetworks) {
-                if (connectivity.getNetworkCapabilities(network)
-                        ?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) != true) continue
-                val address = connectivity.getLinkProperties(network)?.linkAddresses
-                    ?.map { it.address }?.filterIsInstance<Inet4Address>()?.firstOrNull()
-                if (address != null) return address
-            }
-            Thread.sleep(50)
-        }
-        error("Receiver fixture needs an assigned Wi-Fi IPv4 address before accepting iAP2")
-    }
 
     @Suppress("DEPRECATION")
-    private fun publishEndpoint(port: Int, life: ProjectionResources) {
+    private fun publishEndpoint(wifi: Network, port: Int, life: ProjectionResources) {
         val connectivity = context.getSystemService(ConnectivityManager::class.java)
-        val wifi = connectivity.allNetworks.first {
-            connectivity.getNetworkCapabilities(it)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true
+        check(connectivity.getNetworkCapabilities(wifi)?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true) {
+            "Receiver fixture lost its Wi-Fi network before Bonjour publication"
         }
         val nsd = context.getSystemService(NsdManager::class.java)
         val registered = CompletableFuture<Unit>()
+        val unregistered = CompletableFuture<Unit>()
         val listener = object : NsdManager.RegistrationListener {
             override fun onServiceRegistered(info: NsdServiceInfo) { registered.complete(Unit) }
             override fun onRegistrationFailed(info: NsdServiceInfo, code: Int) {
                 registered.completeExceptionally(IllegalStateException("Bonjour registration failed ($code)"))
             }
-            override fun onServiceUnregistered(info: NsdServiceInfo) {}
-            override fun onUnregistrationFailed(info: NsdServiceInfo, code: Int) {}
+            override fun onServiceUnregistered(info: NsdServiceInfo) { unregistered.complete(Unit) }
+            override fun onUnregistrationFailed(info: NsdServiceInfo, code: Int) {
+                unregistered.completeExceptionally(IllegalStateException("Bonjour unregistration failed ($code)"))
+            }
         }
         val service = NsdServiceInfo().also {
-            it.serviceName = "HSD QA receiver"
+            // Each scenario owns a fresh listener/port. Do not reuse another scenario's
+            // cached DNS-SD instance while its asynchronous goodbye is still in flight.
+            it.serviceName = "HSD QA receiver $port"
             it.serviceType = "_airplay._tcp"
             it.network = wifi
             it.port = port
             it.setAttribute("features", "0x0,0x20")
         }
         nsd.registerService(service, NsdManager.PROTOCOL_DNS_SD, listener)
-        life.own { nsd.unregisterService(listener) }
-        registered.get(8, TimeUnit.SECONDS)
+        life.own {
+            nsd.unregisterService(listener)
+            unregistered.get(5, TimeUnit.SECONDS)
+        }
+        // Android's advertiser may still be probing its hostname on a freshly booted
+        // emulator. This only bounds fixture publication, not HSD's connection timeout.
+        registered.get(30, TimeUnit.SECONDS)
     }
+}
+
+internal fun receiverFixtureWifi(context: Context, life: ProjectionResources): Pair<Network, Inet4Address> {
+    val connectivity = context.getSystemService(ConnectivityManager::class.java)
+    val ready = CompletableFuture<Pair<Network, Inet4Address>>()
+    val callback = object : ConnectivityManager.NetworkCallback() {
+        override fun onLinkPropertiesChanged(network: Network, properties: LinkProperties) {
+            properties.linkAddresses.map { it.address }.filterIsInstance<Inet4Address>()
+                .firstOrNull()?.let { ready.complete(network to it) }
+        }
+        override fun onUnavailable() {
+            ready.completeExceptionally(IllegalStateException("Receiver fixture Wi-Fi unavailable"))
+        }
+    }
+    // Unlike a physical HU/AP, this receiver is an Android client. Keep its Wi-Fi
+    // requested even when Android selects cellular as the default Internet network.
+    val request = NetworkRequest.Builder().addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
+        .removeCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET).build()
+    connectivity.requestNetwork(request, callback, 30_000)
+    life.own { connectivity.unregisterNetworkCallback(callback) }
+    return ready.get(35, TimeUnit.SECONDS)
 }

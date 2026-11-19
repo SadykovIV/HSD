@@ -53,6 +53,20 @@ class VideoPacingTest {
         assertEquals(100_000.0, m.bytesPerSec, 5_000.0)
     }
 
+    @Test fun sparseDesktopDoesNotLoseBulkCapacityToUnrelatedAudioWrites() {
+        val meter = DrainMeter()
+        meter.onWrite(0, false, 100, 0)
+        repeat(4) { slot ->
+            meter.onWrite(slot * 250L + 100, true, 40_000, 20_000_000)
+            meter.onWrite(slot * 250L + 250, false, 80_000, 40_000_000)
+        }
+        assertEquals(666_667.0, meter.bytesPerSec, 1.0)
+        assertEquals(1_680_000.0, meter.availableVideoBytesPerSec, 1.0)
+        // Tiny idle/keepalive pictures cannot override the estimate for a full access unit.
+        repeat(10) { meter.onWrite(1100L + 100 * it, true, 100, 6_000_000) }
+        assertEquals(1_680_000.0, meter.availableVideoBytesPerSec, 1.0)
+    }
+
     @Test
     fun drainMeterIgnoresWindowsWithoutVideoOrBusyTime() {
         val m = DrainMeter()

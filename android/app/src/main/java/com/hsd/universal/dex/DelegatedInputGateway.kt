@@ -1,7 +1,6 @@
 package com.hsd.universal.dex
 
 import com.hsd.universal.BuildConfig
-
 import com.hsd.universal.DesktopTransport
 
 import android.app.ActivityManager
@@ -33,13 +32,10 @@ internal class DelegatedInputGateway(context: Context,
     private val inputManager = checkNotNull(context.getSystemService(InputManager::class.java))
     private val inject by lazy { InputManager::class.java.getMethod("injectInputEvent", InputEvent::class.java, Int::class.javaPrimitiveType) }
     private val displayEvents = DisplayEventAccess()
-    // The Samsung firmware groups CarLife and the internal display together. Tag only
-    // the events this gateway has validated and will inject into the active USB desktop.
-    private val huActivity = if (android.os.Build.MANUFACTURER.equals("samsung", true) &&
-        DexPrefs(this.context).desktopPanelControl &&
-        this.context.checkSelfPermission(PhonePowerActivity.PERMISSION) == android.content.pm.PackageManager.PERMISSION_GRANTED)
-        SamsungHuActivity(MotionEvent::class.java, KeyEvent::class.java) else null
-    private var reportedActivityMarker = false
+    private val touches = ProjectionTouchDispatcher({ id, event ->
+        displayEvents.targetProjectionDisplay(event, id)
+        inject.invoke(inputManager, event, 0) == true
+    }, { AppLog.i("DESKTOP INPUT: $it", false) })
     @Volatile private var vdmSession: IVdmDesktopSession? = null
     @Volatile var nativeProducerLifetime: IBinder? = null
         private set
@@ -65,6 +61,7 @@ internal class DelegatedInputGateway(context: Context,
         activeGateway.set(this)
     }
     @Synchronized fun deactivate() {
+        registry.registeredDisplayIds().forEach { finishTouch(it) }
         displayWakeLocks.close()
         presentations.clear()
         imeRoutes.clear()
@@ -97,7 +94,7 @@ internal class DelegatedInputGateway(context: Context,
         panelParent = entry
         DexState.independentPhoneLock = displays.getDisplay(displayId)?.let(DesktopDisplayIsolation::confirmedIndependence)
         registerIme(entry)
-        displayWakeLocks.hold(displayId)
+        displayWakeLocks.hold(displayId, managedByVirtualDevice = vdmSession != null)
         liveDisplayIds = registry.registeredDisplayIds()
     }
 
@@ -123,7 +120,7 @@ internal class DelegatedInputGateway(context: Context,
         registry.registerChild(parentId, displayId, token, width, height, fullscreen)
         if (presentation != null) presentations[displayId] = presentation
         registerIme(registry.requireDisplay(displayId, token))
-        displayWakeLocks.hold(displayId)
+        displayWakeLocks.hold(displayId, managedByVirtualDevice = vdmSession != null)
         liveDisplayIds = registry.registeredDisplayIds()
     }
 
@@ -199,6 +196,10 @@ internal class DelegatedInputGateway(context: Context,
     @Synchronized override fun unregisterDisplay(displayId: Int, token: IBinder) {
         requireCaller() // Cleanup remains possible after activation has ended.
         val owned = runCatching { registry.requireDisplay(displayId, token) }.getOrNull()
+        if (owned != null) {
+            if (owned.parent == null) registry.registeredDisplayIds().forEach { finishTouch(it) }
+            else finishTouch(displayId)
+        }
         if (owned != null) imeRoutes.unregister(owned)
         if (owned?.parent == null && owned != null) {
             panelParent = null
@@ -240,16 +241,20 @@ internal class DelegatedInputGateway(context: Context,
                     event.action in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP))
                 else -> error("Недопустимый тип ввода")
             }
-            displayEvents.setDisplayId(event, displayId)
-            if (huActivity != null && DelegatedPanelAccess.outputIsFresh()) {
-                val marked = huActivity.mark(event, displayId, usbOutput = true)
-                if (!reportedActivityMarker) {
-                    reportedActivityMarker = true
-                    android.util.Log.i("${BuildConfig.BRAND}Input", "Samsung USB user-activity suppression available=$marked")
-                }
+            if (event is MotionEvent && event.source == InputDevice.SOURCE_TOUCHSCREEN) {
+                touches.dispatch(displayId, event)
+            } else {
+                displayEvents.targetProjectionDisplay(event, displayId)
+                check(inject.invoke(inputManager, event, 0) == true) { "Android отклонил ввод на отдельный экран" }
             }
-            check(inject.invoke(inputManager, event, 0) == true) { "Android отклонил ввод на отдельный экран" }
         } finally { (event as? MotionEvent)?.recycle() }
+    }
+
+    private fun finishTouch(id: Int) {
+        // Numeric display IDs can be reused. Cleanup may only address the still-owned display.
+        if (runCatching { check(DelegatedDesktopAccess.isReady(context)); requireOwnedDisplay(id) }.isSuccess)
+            touches.finish(id)
+        else touches.forget(id)
     }
 
     @Suppress("DEPRECATION")

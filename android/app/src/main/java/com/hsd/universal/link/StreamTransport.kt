@@ -1,6 +1,8 @@
 package com.hsd.universal.link
 
+import android.os.Build
 import android.os.ParcelFileDescriptor
+import android.os.Process
 import android.os.SystemClock
 import com.hsd.universal.AppLog
 import com.hsd.universal.Ch
@@ -69,7 +71,15 @@ class StreamTransport(
     override val videoQueueAgeMs: Long get() = maxOf(videoWriteAgeMs,
         queue.asSequence().filter { it.chan == Ch.VIDEO }.maxOfOrNull { it.congestionAgeMs(clock()) } ?: 0)
     override val drainBytesPerSec: Double get() = drain.bytesPerSec
+    override val availableVideoBytesPerSec: Double get() = drain.availableVideoBytesPerSec
     override fun queueSize(chan: Int): Int = queue.size
+
+    override fun channelBacklogged(chan: Int, limit: Int): Boolean {
+        if (queue.size <= limit) return false
+        var count = 0
+        for (packet in queue) if (packet.chan == chan && ++count > limit) return true
+        return false
+    }
 
     override fun dropQueued(chan: Int, pred: (ByteArray) -> Boolean): Int {
         var n = 0
@@ -139,8 +149,6 @@ class StreamTransport(
                 }
                 lastRxMs = clock()
                 rx += n
-                // A raw read can start in the middle of PCM; never dump an unclassified buffer.
-                AppLog.detail("RAW rx read=$n bytes")
                 try {
                     parser.feed(buf, 0, n) { chan, inner -> assembler.feed(chan, inner, sink) }
                 } catch (e: ProtocolDesync) {
@@ -159,6 +167,15 @@ class StreamTransport(
     }
 
     private fun writeLoop(onWritten: (Int, ByteArray) -> Unit, onClosed: (String) -> Unit) {
+        // Display priority reduced long PCM gaps on Android 17. On Android 14 the producer
+        // missed deadlines with this setting during large video writes. The idle writer blocks in take().
+        if (Build.VERSION.SDK_INT == 37) {
+            try {
+                Process.setThreadPriority(Process.THREAD_PRIORITY_DISPLAY)
+            } catch (_: SecurityException) {
+                // Keep the normal scheduler when a device restricts priority changes.
+            }
+        }
         try {
             while (!closed.get()) {
                 val o = queue.take()
@@ -175,10 +192,9 @@ class StreamTransport(
                 if (video) videoWriteStartedMs = clock()
                 // заголовок отдельным write, тело следом кусками <= 16384 (спека §1.4); Mobis CCNC - тело одним write, как Baidu
                 val t0 = System.nanoTime()
-                val parts = if (wholeWrites) Wire.writeWhole(o.chan, o.inner) else Wire.writeSequence(o.chan, o.inner)
                 try {
                     endpointIo {
-                        for (part in parts) output.write(part)
+                        Wire.writeBulk(o.chan, o.inner, wholeWrites, output::write)
                         output.flush()
                     }
                 } finally {
@@ -188,8 +204,8 @@ class StreamTransport(
                         videoFrames.decrementAndGet()
                     }
                 }
-                if (o.lastFragment) o.frame?.written()
                 drain.onWrite(clock(), video, o.inner.size, System.nanoTime() - t0)
+                if (o.lastFragment) o.frame?.written()
                 onWritten(o.chan, o.inner)
             }
         } catch (_: InterruptedException) {

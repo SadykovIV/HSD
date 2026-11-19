@@ -4,6 +4,32 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DesktopAudioClockTest {
+    @Test fun producerTimebaseChangeDoesNotLeaveAContinuousFrameCounterPermanentlyLate() {
+        val clock = DesktopAudioClock(bufferCapacityFrames = 3072)
+        clock.read(960, 1_000_000, 3072, 990_000)
+        // A submix can pause/restart its producer without resetting the frame counter.
+        // The fresh producer timestamp locates the new ring; the previous sample origin
+        // must not leave this stem behind the other, continuously advancing mixer route.
+        assertEquals(1_906_000L, clock.read(960, 2_000_000, 4032, 1_990_000))
+        assertEquals(1_926_000L, clock.read(960, 2_020_000, 4992, 2_010_000))
+    }
+
+    @Test fun delayedReaderDoesNotInsertGapsWhenProducerHasNotAdvanced() {
+        val clock = DesktopAudioClock(bufferCapacityFrames = 3072)
+        val first = clock.read(960, 1_000_000, 3072, 990_000)
+        // The producer has stopped with three blocks in its ring. Delayed reads do
+        // not imply that any of those samples were overwritten. Their age must stay
+        // visible to the output queue instead of being reset to the polling time.
+        assertEquals(first + 20_000, clock.read(960, 1_100_000, 3072, 990_000))
+        assertEquals(0L, clock.discontinuityUs)
+        assertEquals(first + 40_000, clock.read(960, 1_200_000, 3072, 990_000))
+        assertEquals(0L, clock.discontinuityUs)
+        // A later producer advance really can overwrite the remaining ring.
+        val recovered = clock.read(960, 2_000_000, 51_072, 1_990_000)
+        assertTrue(recovered >= 1_906_000)
+        assertTrue(clock.discontinuityUs > 0)
+    }
+
     @Test fun mixerCorrectionAndClockShareOneOriginAcrossSilentPrefillAndPlayback() {
         val clock = DesktopAudioClock(bufferCapacityFrames = 3072)
         val mixer = PlaybackVolumeMixer(listOf(false))

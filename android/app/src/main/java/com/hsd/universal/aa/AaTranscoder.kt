@@ -93,7 +93,9 @@ class AaTranscoder(
     private val winDecoded = AtomicLong()
     private val winOut = AtomicLong()
     private val peakFrameLatencyUs = AtomicLong()
-    override fun takeFrameLatencyMs() = peakFrameLatencyUs.getAndSet(0) / 1000.0
+    override fun takeFrameLatencyMs() = maxOf(peakFrameLatencyUs.getAndSet(0) / 1000.0, pendingEncoderAgeMs ?: 0.0)
+    override val pendingEncoderAgeMs get() = relay?.pendingEncoderAgeMs
+    override fun onDesktopTouchDown() { relay?.onTouchDown() }
     private val winDrop = AtomicLong()
     private val winDecLatUs = AtomicLong()
     private val winEncLatUs = AtomicLong()
@@ -135,6 +137,15 @@ class AaTranscoder(
             try {
                 if (attempt > 0) c.reset()
                 val requested = format(level)
+                if (directSurface && attempt == 0) {
+                    requested.setFloat(MediaFormat.KEY_OPERATING_RATE, maxOf(fps, capabilityFps).toFloat())
+                }
+                if (directSurface && attempt == 0 && c.codecInfo.isSoftwareOnly) {
+                    // Software motion estimation competes with the UI thread. Use the
+                    // advertised real-time end of its range; later formats retain defaults.
+                    c.codecInfo.getCapabilitiesForType(encoderMime).encoderCapabilities?.complexityRange
+                        ?.takeIf { it.lower < it.upper }?.let { requested.setInteger(MediaFormat.KEY_COMPLEXITY, it.lower) }
+                }
                 if (imageInput) {
                     val yuv = MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible
                     require(yuv in c.codecInfo.getCapabilitiesForType(encoderMime).colorFormats) {
@@ -196,9 +207,11 @@ class AaTranscoder(
             // декодер -> GL-реле -> Surface энкодера: реле перерисовывает последний кадр на статике (>= 10 fps)
             try {
                 val image = if (imageInput) CodecImageInput(c, width, height) else null
+                val encoderDelay = if (directSurface) runCatching { c.outputFormat.getInteger(MediaFormat.KEY_LATENCY) }.getOrDefault(0) else 0
                 relay = GlRelay(surface, width, height, REDRAW_IDLE_MS, log, srcWidth, srcHeight, crop, target,
                     limitHighFps = directSurface, preserveSourceTimestamps = directSurface, viewport = viewport,
-                    imageSink = image?.let { it::submit }, onImageError = out::onTranscodeError).also { it.start() }
+                    imageSink = image?.let { it::submit }, onImageError = out::onTranscodeError,
+                    encoderDelayFrames = encoderDelay).also { it.start() }
             } catch (e: Exception) {
                 if (e is GlRelay.SurfaceSize && !imageInput) {
                     stop()
@@ -556,6 +569,7 @@ class AaTranscoder(
     // ---------------- выход энкодера ----------------
 
     private fun encodeLoop(c: MediaCodec) {
+        if (directSurface) android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_DISPLAY)
         val info = MediaCodec.BufferInfo()
         val units = EncoderAccessUnits(hevc, out::onEncoderConfig)
         try {
@@ -583,6 +597,7 @@ class AaTranscoder(
                     } finally { c.releaseOutputBuffer(idx, false) }
                     val data = arr?.let { units.frame(it, info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG != 0) }
                     if (data != null) {
+                        relay?.onEncoded(info.presentationTimeUs)
                         val lat = System.nanoTime() - info.presentationTimeUs * 1000
                         if (lat in 0..30_000_000_000L) {
                             winEncLatUs.addAndGet(lat / 1000)
@@ -638,7 +653,7 @@ class AaTranscoder(
         val queueNote = if (threaded) ", очередь кормления макс ${queue.resetMaxPending()}" else ""
         if (directSurface) return "Surface: одно кодирование за %.1f с, выход энкодера %d (%.1f fps), повторов GL %d, задержано гейтом fps %d, потеряно %d; возраст кадра на выходе %.1f мс"
             .format(sec, outN, outN / sec, repeats, gatedWin, drop, encMs) +
-            "; sourcePTS fallback=${r?.sourceTimeFallbacks ?: 0} rejected=${r?.sourceTimeRejected ?: 0} monotonic=${r?.sourceTimeClamps ?: 0}"
+            "; sourcePTS fallback=${r?.sourceTimeFallbacks ?: 0} rejected=${r?.sourceTimeRejected ?: 0} monotonic=${r?.sourceTimeClamps ?: 0} latchAgeMaxMs=${r?.takePeakLatchAgeMs() ?: 0} encoderBusyFrames=${r?.takeBackpressured() ?: 0}"
         return ("транскод за %.1f с: вход AA %d, декодировано %d, выход энкодера %d (%.1f fps), повторов (перерисовок GL) %d, задержано гейтом fps %d, потеряно %d; задержка декодер %.1f мс + энкодер %.1f мс = %.1f мс"
             .format(sec, inN, dec, outN, outN / sec, repeats, gatedWin, drop, decMs, encMs, decMs + encMs)) + queueNote
     }

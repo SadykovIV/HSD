@@ -13,6 +13,13 @@ enum class DesktopComponent(val title: String, val pkg: String, val assetPrefix:
     CARBRIDGE("CarBridge · ${BuildConfig.BRAND}", PublishedDesktop.CARBRIDGE, "CarBridge-", "v", 2L,
         "kukulkanod-source/CarBridge-0.52-HeadSwap-profile",
         "4cb7c733435e69d2da1056711aa97021dfd5fd0235863cf76dc96c3406887d52");
+
+    fun needsPlaybackUpdate(code: Long?) =
+        this == DRIVEDECK && code != null && code < FIRST_DRIVEDECK_WITH_PASSIVE_MEDIA_OBSERVER
+
+    companion object {
+        const val FIRST_DRIVEDECK_WITH_PASSIVE_MEDIA_OBSERVER = 359L
+    }
 }
 
 data class ComponentAsset(val component: DesktopComponent, val version: String, val code: Long, val url: String,

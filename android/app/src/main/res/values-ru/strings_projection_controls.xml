@@ -1,12 +1,27 @@
 <resources>
+    <string name="usb_reconnect_waiting">Ожидание магнитолы</string>
+    <string name="activation_interrupted_by_cleanup">Android завершил HSD при очистке приложений. Доступ к рабочему столу прервался. Включите его снова выбранным способом.</string>
+    <string name="activation_session_ended">Доступ к рабочему столу завершён. Включите его снова на телефоне или с компьютера.</string>
+    <string name="drivedeck_update_button">Обновить DriveDeck</string>
+    <string name="drivedeck_playback_update">Обновите DriveDeck до сборки 359 или новее, чтобы лаунчер перестал ставить другие плееры на паузу.</string>
+    <string name="drivedeck_playback_local_apk">Опубликованная сборка вышла до исправления пауз. Нажмите «Установить из файла» и выберите APK DriveDeck из комплекта HSD со сборкой 359 или новее.</string>
+    <string name="audio_timing_defaults">Общая поправка для магнитол</string>
+    <string name="audio_timing_unnamed_receiver">Магнитола</string>
+    <string name="audio_timing_question">Включите видео с речью или хлопком. Когда слышен звук в динамиках магнитолы?</string>
+    <string name="audio_timing_matches">Звук и изображение совпадают</string>
+    <string name="audio_timing_early">Сначала слышу звук, потом вижу движение</string>
+    <string name="audio_timing_late">Сначала вижу движение, потом слышу звук</string>
+    <string name="audio_timing_amount">Разница в миллисекундах (1–%1$d)</string>
+    <string name="audio_timing_auto_help">HSD выравнивает потоки автоматически. Ручная поправка равна нулю.</string>
+    <string name="audio_timing_early_help">HSD задержит звук на указанное время. Если хлопок слышен на 0,2 секунды раньше, введите 200.</string>
+    <string name="audio_timing_late_help">HSD сократит ожидание звука вплоть до немедленной отправки. Для опоздания на 0,1 секунды введите 100. Дополнительная задержка самой магнитолы может остаться.</string>
+    <string name="audio_timing_applies">Поправка действует со следующего подключения Android Auto или CarLife при передаче звука через HSD. При прямом воспроизведении по Bluetooth задержкой управляет магнитола.</string>
+    <string name="audio_timing_enable_save">Включить и сохранить</string>
     <string name="desktop_fps_limit">Ограничение кадров в секунду</string>
     <string name="desktop_fps_limit_value">Ограничение FPS: %1$s</string>
     <string name="desktop_fps_limit_help">Ограничивает реальную частоту видеопотока. Магнитола, соединение или нагрев телефона могут снизить её дополнительно. Применяется при следующем подключении.</string>
     <string name="desktop_av_sync_enabled">Синхронизировать звук с видео</string>
     <string name="desktop_av_sync_help">Выравнивает звук по видео в CarLife и Android Auto. Выключите, чтобы убрать дополнительное ожидание синхронизации; звук тогда может опережать картинку. Применяется при следующем подключении.</string>
-    <string name="desktop_av_sync_disabled">Синхронизация звука с видео выключена. Сохранённая поправка задержки будет применяться после её включения.</string>
-    <string name="desktop_system_sleep">Выключение и блокировка по настройкам Android</string>
-    <string name="desktop_system_sleep_help">HSD не удерживает экран телефона включённым: выключением и блокировкой управляет Android. На некоторых версиях Android касания магнитолы также продлевают таймер. Ручное гашение панели остаётся отдельным действием и не блокирует телефон.</string>
     <string name="usb_background_setup">Откройте HSD, чтобы завершить или восстановить активацию. При готовом доступе USB запускается в фоне.</string>
     <string name="usb_background_permission">Откройте HSD, чтобы разрешить доступ к USB.</string>
 </resources>

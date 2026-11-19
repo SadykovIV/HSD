@@ -10,11 +10,14 @@ internal class SurfaceFrameClock {
     enum class Latch { FRESH, SAME_BUFFER, REJECTED }
     private var lastSourceNs: Long? = null
     private var pendingNs: Long? = null
+    val pendingCaptureNs get() = pendingNs
     private var repeatAllowed = false
     private var lastOutputNs: Long? = null
     @Volatile var fallbacks = 0L; private set
     @Volatile var rejected = 0L; private set
     @Volatile var monotonicClamps = 0L; private set
+    private val peakLatchAgeNs = java.util.concurrent.atomic.AtomicLong()
+    fun takePeakLatchAgeMs() = peakLatchAgeNs.getAndSet(0) / 1_000_000
 
     /** REJECTED disables redraw of this texture until a valid current buffer is latched. */
     fun latch(sourceNs: Long, nowNs: Long): Latch {
@@ -33,6 +36,7 @@ internal class SurfaceFrameClock {
             return Latch.REJECTED
         }
         pendingNs = if (valid) {
+            peakLatchAgeNs.accumulateAndGet(nowNs - sourceNs, ::maxOf)
             lastSourceNs = sourceNs
             minOf(sourceNs, nowNs)
         } else {

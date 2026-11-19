@@ -6,6 +6,16 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DesktopFrameBudgetTest {
+    @Test fun measuredLinkCostLimitsFutureIdrBurstsAndRecoversOnCalmFrames() {
+        assertNull(DesktopFrameBudget.interactiveIdrBytes(0.0, 30))
+        val budget = DesktopFrameBudget.interactiveIdrBytes(2_550.0 * 1024, 30)!!
+        val ceiling = IdrBitrateCeiling(8_000_000)
+        assertEquals(174080, budget)
+        assertEquals(4_200_000, ceiling.onKeyFrame(441320, budget, 6_000_000))
+        repeat(IdrBitrateCeiling.CALM_COUNT) { ceiling.onKeyFrame(70_000, budget) }
+        assertTrue(ceiling.current > 4_200_000)
+        assertEquals(DesktopFrameBudget.MAX_ACCESS_UNIT_BYTES, DesktopFrameBudget.interactiveIdrBytes(50e6, 30))
+    }
     @Test fun oversizeIdrReducesRateBeforeTransportReceivesIt() {
         assertNull(DesktopFrameBudget.reducedBitrate(512 * 1024, 8_000_000))
         assertTrue(DesktopFrameBudget.reducedBitrate(800 * 1024, 8_000_000)!! < 6_000_000)

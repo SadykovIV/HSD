@@ -91,7 +91,8 @@ object DesktopModePolicy {
     }
 
     /** Every launch names the owned secondary display; no default-display or phone-HOME fallback. */
-    fun homeCommand(mode: Int, displayId: Int, appPackage: String, driveDeck: String = DRIVEDECK_HOME_CLASS): Array<String> {
+    fun homeCommand(mode: Int, displayId: Int, appPackage: String, driveDeck: String = DRIVEDECK_HOME_CLASS,
+                    sessionId: Long = 0): Array<String> {
         requireMode(mode)
         require(displayId > 0) { "Запуск рабочего стола на основном экране запрещён" }
         require(appPackage.matches(Regex("[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z][a-zA-Z0-9_]*)+"))) {
@@ -106,6 +107,7 @@ object DesktopModePolicy {
                 "--windowingMode", "1", "-f", "0x34000000", // NEW_TASK | CLEAR_TOP | SINGLE_TOP
                 "-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER",
                 "--es", ProjectionHost.PACKAGE, appPackage, "--ei", ProjectionHost.DISPLAY, displayId.toString(),
+                "--el", ProjectionHost.SESSION, sessionId.toString(),
                 "-n", "$DRIVEDECK_PACKAGE/$driveDeck",
             )
             else -> common + arrayOf(

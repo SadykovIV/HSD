@@ -112,7 +112,8 @@ class DelegatedDesktopInstrumentation : Instrumentation() {
             val permissions = mutableListOf(DelegatedDesktopAccess.ADD_TRUSTED_DISPLAY,
                 DelegatedDesktopAccess.INJECT_EVENTS, DelegatedDesktopAccess.REAL_GET_TASKS,
                 DelegatedDesktopAccess.MEDIA_CONTENT_CONTROL, ShellDisplayIme.PERMISSION,
-                DelegatedDesktopAccess.ADD_ALWAYS_UNLOCKED_DISPLAY)
+                DelegatedDesktopAccess.ADD_ALWAYS_UNLOCKED_DISPLAY,
+                "android.permission.LOCAL_MAC_ADDRESS")
             if (requestHudApi && CarLifeForegroundGuidance.requestedForActivation(context)) {
                 permissions.add(CarLifeForegroundGuidance.TASK_ASSIST_PERMISSION)
             }
@@ -189,6 +190,7 @@ class DelegatedDesktopInstrumentation : Instrumentation() {
                 } catch (error: Throwable) { recoveryFile.failWrite(output); throw error }
             } catch (_: Exception) { AppLog.i("ACTIVATION: не удалось сохранить данные восстановления клавиатуры", false) }
             ready = true
+            com.hsd.universal.CrashLog.activationReady()
             requests.startWatching()
             writeHeartbeat(true)
             PhoneActivationStatus.clearPriorFailure(context)

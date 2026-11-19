@@ -4,6 +4,36 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class PcmGainTest {
+    @Test fun scratchAndSharedBuffersMatchTheFrameWiseReferenceAcrossPacketBoundaries() {
+        for (rate in listOf(16000, 44100, 48000)) for (channels in 1..2) {
+            val shared = PcmGain()
+            val scratch = PcmGain()
+            var level = 1.0
+            for (target in listOf(0.2, 0.0, 0.0, 1.0, 0.75)) {
+                shared.target = target
+                scratch.target = target
+                for (frames in listOf(7, 241, 960, 0)) {
+                    val input = ByteArray(frames * channels * 2) { (it * 31 + frames).toByte() }
+                    val original = input.copyOf()
+                    val expected = input.copyOf()
+                    for (frame in 0 until frames) {
+                        val step = 1.0 / (rate * 0.02)
+                        level = if (level < target) minOf(target, level + step) else maxOf(target, level - step)
+                        for (ch in 0 until channels) {
+                            val offset = (frame * channels + ch) * 2
+                            val value = (sample(input, offset) * level).toInt()
+                            expected[offset] = value.toByte()
+                            expected[offset + 1] = (value shr 8).toByte()
+                        }
+                    }
+                    assertArrayEquals(expected, shared.apply(input, rate, channels))
+                    assertArrayEquals(original, input)
+                    scratch.applyInPlace(input, rate, channels)
+                    assertArrayEquals(expected, input)
+                }
+            }
+        }
+    }
     private fun tone(frames: Int) = ByteArray(frames * 4).also { bytes ->
         for (i in bytes.indices step 4) {
             bytes[i] = 0x10; bytes[i + 1] = 0x27 // 10000

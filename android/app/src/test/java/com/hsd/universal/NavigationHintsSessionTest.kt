@@ -16,6 +16,33 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class NavigationHintsSessionTest {
+    @Test fun carMenuUsesNativeDesktopCommandAndKeepsSessionForResume() {
+        val peer = WirePeer()
+        val bridge = AaBridgeCore(log = { _, _ -> })
+        var closed = false
+        val session = CarLifeSession(peer, SessionConfig(), bridge, onClosed = { closed = true })
+        try {
+            session.start()
+            session.hidePlaceholder()
+            peer.sink(Ch.CMD, Wire.cmdInner(Msg.VIDEO_ENCODER_START, byteArrayOf()))
+            assertTrue(bridge.isCarlifeStarted)
+            session.goToDesktop()
+            val command = peer.until(0x10021, Msg.MD_EXIT)
+            assertTrue(command.body.isEmpty())
+            assertFalse(closed)
+            peer.sink(Ch.CMD, Wire.cmdInner(Msg.VIDEO_ENCODER_PAUSE, byteArrayOf()))
+            assertFalse(session.sendVideoAt(byteArrayOf(0, 0, 0, 1, 0x65), 1L))
+            peer.sink(Ch.CMD, Wire.cmdInner(Msg.VIDEO_ENCODER_START, byteArrayOf()))
+            assertTrue(bridge.isCarlifeStarted)
+            assertFalse(closed)
+            session.goToDesktop()
+            peer.until(0x10021, Msg.MD_EXIT)
+        } finally { session.close("test complete") }
+        peer.sent.clear()
+        session.goToDesktop()
+        assertTrue(peer.sent.isEmpty())
+    }
+
     private class WirePeer : CarTransport {
         override val caps = TransportCaps.USB_AOA
         override val label = "test CarLife HU"

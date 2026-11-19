@@ -61,20 +61,29 @@ internal class CarPlayIapChannel(
                 val exchange = AccessoryAuthExchange(auth, ::tx, context.getString(com.hsd.universal.R.string.carplay_invalid_accessory_signature))
                 var receives = emptyList<Int>()
                 val descriptors = mutableMapOf<String, ByteArray>()
-                tx(0x1d00)
+                var published = false
+                fun publishWhenReady() {
+                    if (!published && exchange.stage == AccessoryAuthExchange.Stage.VERIFIED) {
+                        published = true
+                        device.publish(receives, send = ::tx)
+                    }
+                }
+                exchange.start(channel.negotiatedControlVersion)
                 while (channel.isAlive) {
-                    val bytes = channel.recvControl(500) ?: continue
-                    for (frame in parser.offer(bytes)) {
+                    val bytes = channel.recvControl(500)
+                    if (bytes != null) for (frame in parser.offer(bytes)) {
                         val fields = Iap2Csm.parseParams(frame.body)
                         fun param(id: Int) = fields.firstOrNull { it.id == id }?.value
                         when (frame.messageId) {
                             0x1d01 -> {
                                 receives = fields.filter { it.id == 7 }.flatMap { it.asU16List() }
-                                exchange.identified()
+                                val sends = fields.filter { it.id == 6 }.flatMap { it.asU16List() }
+                                exchange.identified(0xaa06 in sends)
+                                publishWhenReady()
                             }
                             0xaa06, 0xaa01, 0xaa03 -> {
                                 exchange.receive(frame.messageId, fields)
-                                if (frame.messageId == 0xaa03) device.publish(receives, send = ::tx)
+                                publishWhenReady()
                             }
                             0x6800 ->
                                 if (exchange.stage == AccessoryAuthExchange.Stage.VERIFIED) {
@@ -101,6 +110,11 @@ internal class CarPlayIapChannel(
                                     }
                                 }
                         }
+                    }
+                    check(!exchange.responseTimedOut()) {
+                        if (exchange.stage == AccessoryAuthExchange.Stage.SIGNATURE)
+                            context.getString(com.hsd.universal.R.string.carplay_signature_timeout)
+                        else context.getString(com.hsd.universal.R.string.carplay_setup_timeout, exchange.stage.name)
                     }
                 }
             } catch (e: Exception) {

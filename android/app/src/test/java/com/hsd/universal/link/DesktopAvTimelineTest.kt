@@ -4,6 +4,92 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DesktopAvTimelineTest {
+    @Test fun steadyLowLatencyShrinksTheColdOffsetWithoutDroppingPcmOrChangingItsOrder() {
+        var now = 2_000_000L
+        val heard = mutableListOf<Int>()
+        val t = DesktopAvTimeline({ now }) { _, bytes, _ -> heard += bytes[0].toInt() and 255 }
+        t.reset(true)
+        t.frame(now - 100_000, true, 30)!!.apply { assertTrue(begin()); written() }
+        repeat(8) {
+            now += 33_333
+            t.frame(now - 100_000, false, 30)!!.apply { assertTrue(begin()); written() }
+        }
+        val lagBefore = Regex("audioTargetMs=(\\d+)").find(t.diagnostics())!!.groupValues[1].toInt()
+        assertEquals(100, lagBefore)
+        repeat(150) { seq ->
+            now += 33_333
+            assertTrue(t.pcm(3, byteArrayOf(seq.toByte()), now))
+            val frame = t.frame(now - 10_000, false, 30, idleWireAtOutput = true)!!
+            assertTrue(frame.begin()); frame.written()
+        }
+        val result = t.diagnostics()
+        assertTrue(result, Regex("audioTargetMs=(\\d+)").find(result)!!.groupValues[1].toInt() in 55..75)
+        assertTrue(result, result.contains("stalePcm=0"))
+        now += 100_000
+        t.drainDueAudio()
+        assertEquals((0 until 150).toList(), heard)
+    }
+
+    @Test fun completePictureIsDueAlongsidePcmIncludingItsTransferTime() {
+        var now = 1_000_000L
+        val t = DesktopAvTimeline({ now }) { _, _, _ -> }
+        t.reset(true)
+        t.frame(now - 30_000, true, 30)!!.apply { assertTrue(begin()); written() }
+        val frame = t.frame(now, false, 30, transferUs = 20_000)!!
+        assertEquals(10_000L, frame.readyInUs())
+        now += 10_000
+        assertEquals(0L, frame.readyInUs())
+        assertTrue(frame.begin())
+        now += 20_000
+        frame.written()
+        assertTrue(t.diagnostics().contains("audioTargetMs=30"))
+    }
+
+    @Test fun newestCodecReferenceCanRecoverAfterAColdStallOnAnEmptyLink() {
+        var now = 1_000_000L
+        val t = DesktopAvTimeline({ now }) { _, _, _ -> }
+        t.reset(true)
+        t.frame(now, true, 30)!!.apply { assertTrue(begin()); written() }
+        now += 1_000_000
+        t.frame(now - 800_000, false, 30, idleWireAtOutput = true)!!.apply { assertTrue(begin()); written() }
+        assertNull(t.frame(now - 700_000, false, 30)) // Congested producers retain the usual admission deadline.
+    }
+
+    @Test fun expensiveLivePFrameOnAnIdleLinkDoesNotCostTheNextGop() {
+        var now = 1_000_000L
+        val t = DesktopAvTimeline({ now }, { 0 }) { _, _, _ -> }
+        t.reset(true)
+        t.frame(now, true, 30)!!.apply { assertTrue(begin()); written() }
+        now += 350_000
+        t.frame(now - 270_000, false, 30, idleWireAtOutput = true)!!.apply {
+            assertTrue(begin()); written()
+        }
+        val waiting = t.frame(now - 200_000, false, 30, idleWireAtOutput = true)!!
+        now += 100_000
+        assertFalse(waiting.begin())
+        assertNull(t.frame(now, false, 30, idleWireAtOutput = true))
+    }
+
+    @Test fun hearingSoundLateReducesOnlyTheAudioWait() {
+        for ((ms, expectedUs) in listOf(-200 to 0L, -10 to 10_000L, 0 to 20_000L, 100 to 120_000L)) {
+            var now = 2_000_000L
+            val sent = mutableListOf<Long>()
+            val t = DesktopAvTimeline({ now }, { ms }) { _, _, _ -> sent += now }
+            t.reset(true)
+            t.frame(now - 20_000, true, 30)!!.apply { assertTrue(begin()); written() }
+            val capture = now
+            assertTrue(t.pcm(3, byteArrayOf(1), capture))
+            if (expectedUs > 0) {
+                now += expectedUs - 1
+                t.drainDueAudio()
+                assertTrue(sent.isEmpty())
+                now++
+                t.drainDueAudio()
+            }
+            assertEquals(listOf(capture + expectedUs), sent)
+            assertEquals(20_000L, t.frame(now, false, 30)!!.readyInUs())
+        }
+    }
     @Test fun disabledAlignmentDoesNotWaitForVideoOrReceiverTrimButKeepsReferenceProtection() {
         var now = 1_000_000L
         val heard = mutableListOf<Int>()
@@ -46,6 +132,10 @@ class DesktopAvTimelineTest {
         val t = DesktopAvTimeline({ now }) { _, _, _ -> sent += now }
         t.reset(true)
         t.frame(now - 210_000, true, 30)!!.apply { assertTrue(begin()); written() }
+        repeat(9) {
+            now += 33_333
+            t.frame(now - 210_000, false, 30)!!.apply { assertEquals(0L, readyInUs()); assertTrue(begin()); written() }
+        }
         val capture = now
         assertTrue(t.pcm(3, byteArrayOf(1), capture))
         now += 10_000
@@ -141,7 +231,93 @@ class DesktopAvTimelineTest {
         now += 90_000; assertTrue(sent.isEmpty()); f.written()
         assertEquals(listOf(now), sent)
         repeat(40) { now += 20_000; t.pcm(3, byteArrayOf(1), now) }
-        assertTrue(sent.size in 34..38)
+        assertEquals(39, sent.size)
+        assertTrue(t.diagnostics().contains("audioTargetMs=33"))
+    }
+    @Test fun slowCompletedReferenceRemainsDecodableAndDoesNotDelayEveryFutureGesture() {
+        var now = 1_000_000L
+        val t = DesktopAvTimeline({ now }) { _, _, _ -> }
+        t.reset(true)
+        val key = t.frame(now - 12_000, true, 30)!!
+        assertTrue(key.begin())
+        now += 850_000
+        key.written()
+        val next = t.frame(now, false, 30)!!
+        assertEquals(0L, next.readyInUs())
+        now += 46_000
+        assertTrue(next.begin())
+        next.written()
+        assertTrue(t.diagnostics().contains("staleVideo=0 lateVideoWrites=1"))
+    }
+    @Test fun warmupKeyframeDoesNotSetTheInteractiveDelayForTheEntireSession() {
+        var now = 2_000_000L
+        val sent = mutableListOf<Int>()
+        val t = DesktopAvTimeline({ now }) { _, data, _ -> sent += data[0].toInt() }
+        t.reset(true)
+        t.frame(now - 235_000, true, 30)!!.apply { assertTrue(begin()); written() }
+        listOf(38_000L, 19_000L, 28_000L).forEachIndexed { i, age ->
+            now += 30_000
+            t.pcm(3, byteArrayOf(i.toByte()), now)
+            val frame = t.frame(now - age, false, 30)!!
+            assertEquals(0L, frame.readyInUs()); assertTrue(frame.begin()); frame.written()
+        }
+        now += 20_000
+        t.drainDueAudio()
+        assertEquals(listOf(0, 1, 2), sent)
+        assertTrue(t.diagnostics().contains("audioTargetMs=19"))
+        val next = t.frame(now, false, 30)!!
+        assertEquals(19_000L, next.readyInUs())
+    }
+    @Test fun slowFirstPictureWithAStaticDesktopStillReleasesContinuousAudio() {
+        var now = 1_000_000L
+        val sent = mutableListOf<Int>()
+        val t = DesktopAvTimeline({ now }) { _, data, _ -> sent += data[0].toInt() }
+        t.reset(true)
+        t.frame(now - 240_000, true, 30)!!.apply { assertTrue(begin()); written() }
+        repeat(30) { t.pcm(3, byteArrayOf(it.toByte()), now); now += 10_000 }
+        now += 40_000; t.drainDueAudio()
+        assertEquals((0 until 30).toList(), sent)
+        assertTrue(t.diagnostics().contains("audioTargetMs=33"))
+    }
+    @Test fun drainingSeveralOldStartupPicturesDoesNotDelayFutureInput() {
+        var now = 1_000_000L
+        val t = DesktopAvTimeline({ now }) { _, _, _ -> }
+        t.reset(true)
+        t.frame(now - 320_000, true, 30)!!.apply { assertTrue(begin()); written() }
+        repeat(5) {
+            now += 30_000
+            t.frame(now - 319_000, false, 30)!!.apply { assertTrue(begin()); written() }
+        }
+        repeat(2) {
+            now += 30_000
+            t.frame(now - 25_000, false, 30)!!.apply { assertTrue(begin()); written() }
+        }
+        assertTrue(t.diagnostics().contains("audioTargetMs=25"))
+    }
+    @Test fun lateOldGopCannotInvalidateANewerQueuedKey() {
+        var now = 1_000_000L
+        val t = DesktopAvTimeline({ now }) { _, _, _ -> }
+        t.reset(true)
+        t.frame(now, true, 30)!!.apply { assertTrue(begin()); written() }
+        val old = t.frame(now, false, 30)!!
+        now += 200_000
+        val key = t.frame(now, true, 30)!!
+        assertFalse(old.begin())
+        val next = t.frame(now, false, 30)!!
+        assertTrue(key.begin()); key.written()
+        assertTrue(next.begin())
+    }
+    @Test fun aPictureCapturedBeforeTheContactCannotSatisfyTouchTiming() {
+        var now = 1_000_000L
+        val t = DesktopAvTimeline({ now }) { _, _, _ -> }
+        t.reset(true)
+        val old = t.frame(now - 12_000, true, 30)!!
+        t.touchDown()
+        now += 8_000; assertTrue(old.begin()); old.written()
+        assertTrue(t.diagnostics().contains("samples=0 pendingDownMs=8"))
+        val fresh = t.frame(now, false, 30)!!
+        now += 25_000; assertTrue(fresh.begin()); fresh.written()
+        assertTrue(t.diagnostics().contains("downToNextVideoPtsWireMsMax=33 samples=1"))
     }
     @Test fun startupDoesNotPlayASecondOfUnmatchedSoundBeforeFirstPicture() {
         var now = 2_000_000L; val heard = mutableListOf<Int>()

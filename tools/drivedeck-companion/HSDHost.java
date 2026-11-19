@@ -59,12 +59,38 @@ public final class HSDHost {
     private static final String UNIVERSAL_PROCESS = "ru.drivedeck.headswap:hsd";
     private static volatile String processHost;
 
+    public static boolean isHsdProjection() {
+        return UNIVERSAL.equals(processHost);
+    }
+
+    static boolean isHostHome(Activity activity, Intent request) {
+        return isHsdProjection() && UNIVERSAL.equals(declared(request, HostedDisplay.displayId(activity))) &&
+                Intent.ACTION_MAIN.equals(request.getAction()) && request.hasCategory(Intent.CATEGORY_LAUNCHER) &&
+                !request.getBooleanExtra("ru.drivedeck.launcher.ALL_APPS", false);
+    }
+
+    public static boolean keepLauncherOnUnavailableHost(Context context) {
+        if (!isHsdProjection()) return false;
+        boolean russian = "ru".equals(context.getResources().getConfiguration().getLocales().get(0).getLanguage());
+        android.widget.Toast.makeText(context, russian
+                ? "DriveDeck подключает экран приложения. Повторите открытие через несколько секунд."
+                : "DriveDeck is connecting the app display. Try opening the app again in a moment.",
+                android.widget.Toast.LENGTH_SHORT).show();
+        return true;
+    }
+
+    public static void attach(Activity activity) {
+        attach(activity, activity.getIntent());
+    }
+
     public static void attach(Activity activity, Intent launch) {
         String declared = declared(launch, HostedDisplay.displayId(activity));
         boolean universal = android.os.Build.VERSION.SDK_INT >= 28 &&
             UNIVERSAL_PROCESS.equals(android.app.Application.getProcessName());
         String host = universal ? UNIVERSAL : (declared == null ? onDisplay(activity) : declared);
         if (universal && declared != null && !UNIVERSAL.equals(declared)) throw new SecurityException("Unexpected desktop host");
+        if (UNIVERSAL.equals(declared) && launch.hasExtra(ProjectionHost.SESSION))
+            ProjectionMusic.attachSession(launch.getLongExtra(ProjectionHost.SESSION, 0));
         if (universal) activity.setShowWhenLocked(UNIVERSAL.equals(declared));
         if (host != null) processHost = host;
     }
@@ -80,11 +106,27 @@ public final class HSDHost {
     }
 
     static boolean supportsAppMenu(Context context) {
+        return supports(context, ProjectionHost.APP_MENU_CAPABILITY);
+    }
+
+    static boolean supportsCarMenu(Context context) {
+        return supports(context, ProjectionHost.CAR_MENU_CAPABILITY);
+    }
+
+    static void requestCarMenu(Context context) {
+        ComponentName endpoint = rendererFullscreen(context);
+        int display = HostedDisplay.displayId(context);
+        if (endpoint == null || display <= 0 || !supportsCarMenu(context)) return;
+        context.sendBroadcast(new Intent(ProjectionHost.CAR_MENU_ACTION)
+                .setPackage(endpoint.getPackageName()).putExtra(ProjectionHost.DISPLAY, display));
+    }
+
+    private static boolean supports(Context context, String capability) {
         ComponentName endpoint = rendererFullscreen(context);
         if (endpoint == null) return false;
         try {
             ActivityInfo info = context.getPackageManager().getActivityInfo(endpoint, PackageManager.GET_META_DATA);
-            return info.metaData != null && info.metaData.getBoolean(ProjectionHost.APP_MENU_CAPABILITY);
+            return info.metaData != null && info.metaData.getBoolean(capability);
         } catch (PackageManager.NameNotFoundException unavailable) {
             return false;
         }

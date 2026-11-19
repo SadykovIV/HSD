@@ -198,7 +198,7 @@ internal class PanelPlatform(private val context: Context) {
         !keyguard.isKeyguardLocked && !keyguard.isDeviceLocked && physical() == physicalId
     // Samsung releases its override; the shell restores to Android's current logical state.
     fun mayRestore(): Boolean = physical() == physicalId
-    fun acquire() { wake.acquire(); check(wake.isHeld) { "Не удалось сохранить активность рабочего стола" } }
+    fun acquire() { wake.acquire(PhonePanelLease.TIMEOUT_MS); check(wake.isHeld) { "Не удалось сохранить активность рабочего стола" } }
     fun release() { if (wake.isHeld) wake.release() }
     fun power(on: Boolean) {
         check(physical() == physicalId) { "Внутренняя панель изменилась" }
@@ -208,6 +208,7 @@ internal class PanelPlatform(private val context: Context) {
     fun refresh() {
         if (samsung != null) samsung.refresh()
         else ShellPanelClient.refresh()
+        wake.acquire(PhonePanelLease.TIMEOUT_MS)
     }
 }
 

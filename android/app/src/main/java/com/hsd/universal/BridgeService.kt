@@ -88,6 +88,7 @@ import java.util.concurrent.ScheduledExecutorService
 /** A transport endpoint runs inside the projection service and releases its session before stopping. */
 internal interface ProjectionEndpoint {
     fun start(intent: Intent?, startId: Int): Int
+    fun carMenu()
     fun stopForRouteChange()
     fun close()
 }
@@ -95,6 +96,7 @@ internal interface ProjectionEndpoint {
 open class BridgeService : Service() {
     internal open fun endpoint(route: ProjectionRoute): ProjectionEndpoint? = null
     private var projectionEndpoint: ProjectionEndpoint? = null
+    private var carMenuControl: AutoCloseable? = null
     private var restartAfterClose = false
     override fun attachBaseContext(base: Context) {
         super.attachBaseContext(AppLocale.wrap(base))
@@ -252,6 +254,13 @@ open class BridgeService : Service() {
         super.onCreate()
         alive = true
         AppLog.init(this)
+        carMenuControl = CarMenuControl.register(this) {
+            if (!restartAfterClose) {
+                val endpoint = projectionEndpoint
+                if (endpoint != null) endpoint.carMenu()
+                else if (!stopRequested) session?.goToDesktop()
+            }
+        }
         val route = ProjectionRoute.selected(this)
         DesktopTransport.activeRoute = route
         projectionEndpoint = endpoint(route)
@@ -1057,7 +1066,8 @@ open class BridgeService : Service() {
             desktopBitrateBps = dexPrefs.desktopBitrateMbps * 1_000_000,
             desktopAvc = if (desktopVideo != null && DesktopTransport.universal)
                 com.hsd.universal.aa.DesktopEncoderSupport.surfaceEncoders("video/avc", dexPrefs.desktopBitrateMbps * 1_000_000) else null,
-            receiverAudio = if (desktopVideo != null) com.hsd.universal.link.ReceiverAudioCalibration(this, transport.caps.kind) else null,
+            receiverAudio = if (desktopVideo != null) com.hsd.universal.link.ReceiverAudioCalibration(this,
+                if (transport.caps == TransportCaps.TCP6) ProjectionRoute.CARLIFE_WIFI else ProjectionRoute.CARLIFE_USB) else null,
             synchronizeAudioVideo = dexPrefs.synchronizeAudioVideo,
         )
         MetaRelay.PROGRESS_UNIT = if (aaPrefs.progressSeconds) 1 else 1000
@@ -1114,7 +1124,7 @@ open class BridgeService : Service() {
                 val carriedAudio = dexPrefs.usbPlaybackAudio && h.core.audioViaUsb && desktopAudio.hasForwardedAudio
                 main.post {
                     if (!stopRequested && session === owner)
-                        com.hsd.universal.dex.DesktopMusicPlayback.outputLost(this, owner, hadPicture && DexState.running, carriedAudio)
+                        com.hsd.universal.dex.DesktopMusicPlayback.outputLost(this, owner, hadPicture, carriedAudio)
                 }
             }
         ) { reason -> main.post { onSessionClosed(sref[0]!!, reason, accessory) } }
@@ -1124,8 +1134,7 @@ open class BridgeService : Service() {
             transport.caps.kind == TransportCaps.USB_AOA.kind,
             ready = { session === s && DexState.running && s.hasFreshDesktopVideo() },
             audioReady = { !DexPrefs(this).usbPlaybackAudio || !h.core.audioViaUsb ||
-                com.hsd.universal.dex.DesktopAudioState.running },
-            carriesAudio = { session === s && desktopAudio.hasForwardedAudio && h.core.audioViaUsb })
+                com.hsd.universal.dex.DesktopAudioState.running })
         desktopAudio.attach(h.core, desktopOutput, restartAfterCalls = true) {
             session === s && s.canCaptureDesktopAudio()
         }
@@ -1365,6 +1374,7 @@ open class BridgeService : Service() {
     private fun onSessionClosed(s: CarLifeSession, reason: String, accessory: UsbAccessory?) {
         AppLog.i("сервис: сессия завершена ($reason)")
         if (session !== s) return
+        releaseSessionWakeLock()
         stopClusterSources()
         if (!stopRequested && s.transportKind == TransportCaps.USB_AOA.kind) {
             observePhysicalUsbDetach("USB session closed and accessory absent")
@@ -1374,7 +1384,7 @@ open class BridgeService : Service() {
         phoneIdleTimer?.stop()
         phoneIdleTimer = null
         com.hsd.universal.dex.DelegatedPanelAccess.detachOutput(s)
-        com.hsd.universal.dex.DesktopMusicPlayback.linkClosed(s)
+        com.hsd.universal.dex.DesktopMusicPlayback.linkClosed(s, sessionEnded = true, hadPicture = s.closedWithDesktopPicture)
         desktopAudio.detach()
         cancelDesktopRecovery()
         session = null
@@ -1437,23 +1447,26 @@ open class BridgeService : Service() {
         }
     }
 
+    private fun releaseSessionWakeLock() {
+        wakeLock?.let { if (it.isHeld) it.release() }
+        wakeLock = null
+    }
+
     private fun finish() {
         val stopped = serviceStarts.finish(::stopSelfResult) {
             cancelDesktopRecovery()
             stopCarNet(CarNetEvent.STOP, "finish")
             CarLifeState.awaitingCarLifeUsbHandshake = false
             CarLifeState.running = false
-            try {
-                wakeLock?.let { if (it.isHeld) it.release() }
-            } catch (_: Exception) {
-            }
-            wakeLock = null
+            releaseSessionWakeLock()
             stopForeground(STOP_FOREGROUND_REMOVE)
         }
         if (!stopped) AppLog.i("сервис: завершение отложено, Android принял более новый запуск", false)
     }
 
     override fun onDestroy() {
+        carMenuControl?.close()
+        carMenuControl = null
         val endpoint = projectionEndpoint
         if (endpoint == null) closeCarLife() else endpoint.close()
         projectionEndpoint = null
@@ -1466,6 +1479,7 @@ open class BridgeService : Service() {
     }
 
     private fun closeCarLife() {
+        releaseSessionWakeLock()
         unobserveWirelessEnabled?.invoke()
         unobserveWirelessEnabled = null
         try {

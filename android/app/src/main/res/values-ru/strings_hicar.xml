@@ -1,0 +1,14 @@
+<resources>
+    <string name="hicar_usb_no_ncm">HiCar USB · за 12 с на телефоне не появился USB-интерфейс с адресом IPv4. Проверьте выбор проводного HiCar на магнитоле.</string>
+    <string name="hicar_usb_wait_ncm">HiCar USB · ожидаю USB-сеть NCM на телефоне. Выберите проводной HiCar на магнитоле.</string>
+    <string name="hicar_usb_aoa">HiCar USB · магнитола объявила USB-аксессуар %1$s. Выберите проводной HiCar на магнитоле. Выбранный в HSD режим HiCar сохранён.</string>
+    <string name="route_hicar_wireless">Huawei HiCar · Bluetooth и Wi-Fi</string>
+    <string name="route_hicar_usb">Huawei HiCar · USB (NCM)</string>
+    <string name="hicar_usb_experimental">Экспериментальный режим. Подключите кабель и включите HiCar на магнитоле. Телефон и магнитола должны поднять USB‑сеть NCM для начала соединения.</string>
+    <string name="hicar_experimental">Экспериментальный HiCar: изображение, звук и управление по Bluetooth и Wi-Fi. Выберите HiCar на магнитоле, затем сопряжённое Bluetooth-устройство. При первом подключении введите код с экрана ГУ через уведомление HSD.</string>
+    <string name="hicar_pin_title">Сопряжение HiCar</string>
+    <string name="hicar_pin_hint">Введите шестизначный код с экрана магнитолы. Открыть ввод также можно в настройках подключения HiCar.</string>
+    <string name="hicar_pin_button">Ввести код HiCar</string>
+    <string name="hicar_pin_invalid">Нужен действующий шестизначный код</string>
+    <string name="hicar_pin_wait">HiCar · введите код с экрана ГУ через уведомление или настройки подключения</string>
+</resources>

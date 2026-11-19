@@ -54,11 +54,12 @@ class DesktopModePolicyTest {
     }
 
     @Test fun driveDeckLaunchUsesAdaptedPackageAndOriginalClassWithoutPhoneHomeResolution() {
-        val command = DesktopModePolicy.homeCommand(DesktopModePolicy.DRIVEDECK, 586, app).toList()
+        val command = DesktopModePolicy.homeCommand(DesktopModePolicy.DRIVEDECK, 586, app, sessionId = 9876543210L).toList()
         assertEquals(listOf("/system/bin/am", "start", "--display", "586",
             "--windowingMode", "1", "-f", "0x34000000",
             "-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER",
             "--es", "com.hsd.projection.HOST_PACKAGE", app, "--ei", "com.hsd.projection.HOST_DISPLAY", "586",
+            "--el", "com.hsd.projection.HOST_SESSION", "9876543210",
             "-n", "ru.drivedeck.headswap/ru.drivedeck.launcher.MainActivity"), command)
         assertFalse(command.contains("android.intent.category.HOME"))
         assertFalse(command.contains("android.intent.category.SECONDARY_HOME"))

@@ -66,6 +66,8 @@ import net.prototux.aare.aap.NavStatusMsg
 import net.prototux.aare.aap.SensorMsg
 import net.prototux.aare.aap.Transport
 import net.prototux.aare.aap.cert.SelfSignedCertificate
+import java.io.DataOutputStream
+import java.io.File
 import java.io.OutputStream
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
@@ -106,7 +108,13 @@ class HeadUnitSimulator(
     val huCert: PhoneIdentity = SelfSignedCertificate.generate("AARE simulated head unit").let {
         PhoneIdentity(it.certificate, it.keyPair.private)
     },
+    private val offerGuidance: Boolean = true,
+    private val samsungAudioOffers: Boolean = false,
+    private val restrictedAudioGrants: Boolean = false,
+    val routing: com.hsd.universal.RoutingReceiver? = null,
+    private val referencePcm: File? = null,
 ) {
+    private var referenceOutput: DataOutputStream? = null
     enum class InitialFocus { IMMEDIATE, AFTER_FIRST_FRAME, NATIVE, UNCONFIRMED }
     val stoppedVideo = CountDownLatch(1)
     /** False when encoding like a proto3 head unit: fields set to 0 are not written. */
@@ -120,8 +128,16 @@ class HeadUnitSimulator(
     private val writeLock = Any()
 
     // channel ids, as a typical head unit numbers them
-    val video = 1; val mediaAudio = 2; val guidance = 3; val system = 4; val mic = 5
-    val input = 6; val sensors = 7; val navStatus = 8; val playback = 9; val radio = 10
+    val video = 1
+    val mediaAudio = if (samsungAudioOffers) 4 else 2
+    val guidance = if (samsungAudioOffers) 7 else 3
+    val system = if (samsungAudioOffers) 8 else 4
+    val mic = if (samsungAudioOffers) 9 else 5
+    val input = if (samsungAudioOffers) 2 else 6
+    val sensors = if (samsungAudioOffers) 3 else 7
+    val navStatus = if (samsungAudioOffers) 10 else 8
+    val playback = if (samsungAudioOffers) 11 else 9
+    val radio = if (samsungAudioOffers) 12 else 10
 
     val discoveryRequest = CountDownLatch(1)
     var phoneRequest: ServiceDiscoveryRequest? = null
@@ -142,6 +158,7 @@ class HeadUnitSimulator(
     @Volatile var ackAudio = true
     val pingsAnswered = AtomicInteger()
     val focusRequests = AtomicInteger()
+    val nativeMenuRequest = CountDownLatch(1)
     val sensorRequests = ConcurrentHashMap.newKeySet<SensorType>()
     val firstVideoFrame = CountDownLatch(1)
     val byeBye = CountDownLatch(1)
@@ -158,6 +175,7 @@ class HeadUnitSimulator(
     fun start() {
         Thread({
             try {
+                referenceOutput = referencePcm?.let { DataOutputStream(it.outputStream().buffered()) }
                 repeat(previousUsbFrames) {
                     val frame = if (it % 2 == 0) byteArrayOf(3, 11, 0, 4, 1, 2, 3, 4)
                         else byteArrayOf(0, 2, 0, 1, 4)
@@ -169,7 +187,7 @@ class HeadUnitSimulator(
             } catch (e: Throwable) {
                 if (byeBye.count > 0L) error = e
             } finally {
-                closed.countDown()
+                try { referenceOutput?.close() } finally { closed.countDown() }
             }
         }, "hu-sim").apply { isDaemon = true }.start()
     }
@@ -265,7 +283,6 @@ class HeadUnitSimulator(
             ControlMsg.SERVICE_DISCOVERY_REQUEST -> {
                 check(m.encrypted && !m.control && m.channel == 0) { "DISCOVERY must be encrypted on channel 0" }
                 val request = ServiceDiscoveryRequest.parseFrom(m.bodyBytes())
-                // Presentation contract seen independently in MStick and Carlinkit's phone-side sender.
                 // The protobuf fields are optional; accepting their absence hid our incomplete request.
                 for ((size, data) in listOf(32 to request.smallIcon, 64 to request.mediumIcon, 128 to request.largeIcon)) {
                     check(!data.isEmpty) { "DISCOVERY is missing the ${size}px PNG icon" }
@@ -290,8 +307,10 @@ class HeadUnitSimulator(
                 val state = when (req.audioFocusType) {
                     AudioFocusRequestType.AUDIO_FOCUS_RELEASE -> AudioFocusStateType.AUDIO_FOCUS_STATE_LOSS
                     AudioFocusRequestType.AUDIO_FOCUS_GAIN_TRANSIENT, AudioFocusRequestType.AUDIO_FOCUS_GAIN_TRANSIENT_MAY_DUCK ->
-                        AudioFocusStateType.AUDIO_FOCUS_STATE_GAIN_TRANSIENT
-                    else -> AudioFocusStateType.AUDIO_FOCUS_STATE_GAIN
+                        if (restrictedAudioGrants) AudioFocusStateType.AUDIO_FOCUS_STATE_GAIN_TRANSIENT_GUIDANCE_ONLY
+                        else AudioFocusStateType.AUDIO_FOCUS_STATE_GAIN_TRANSIENT
+                    else -> if (restrictedAudioGrants) AudioFocusStateType.AUDIO_FOCUS_STATE_GAIN_MEDIA_ONLY
+                        else AudioFocusStateType.AUDIO_FOCUS_STATE_GAIN
                 }
                 send(0, ControlMsg.AUDIO_FOCUS_NOTIFICATION, AudioFocusNotification.newBuilder().setFocusState(state).setUnsolicited(false).build())
             }
@@ -310,10 +329,18 @@ class HeadUnitSimulator(
                     .setMaxUnacked(maxUnacked).addAllConfigurationIndices(if (m.channel == video) offeredIndices else listOf(0)).build())
             }
             MediaMsg.START -> if (m.channel == video) videoStart = Start.parseFrom(m.bodyBytes())
-            MediaMsg.STOP -> if (m.channel == video) stoppedVideo.countDown() else audioStops.incrementAndGet()
+                else if (m.channel == guidance) routing?.voiceStarts?.incrementAndGet()
+            MediaMsg.STOP -> if (m.channel == video) stoppedVideo.countDown() else {
+                audioStops.incrementAndGet()
+                if (m.channel == guidance) routing?.voiceStops?.incrementAndGet()
+            }
             MediaMsg.VIDEO_FOCUS_REQUEST -> {
                 focusRequests.incrementAndGet()
                 val r = VideoFocusRequestNotification.parseFrom(m.bodyBytes())
+                if (r.mode == VideoFocusMode.VIDEO_FOCUS_NATIVE) {
+                    check(r.reason == aap_protobuf.service.media.video.message.VideoFocusReasonOuterClass.VideoFocusReason.LAUNCH_NATIVE)
+                    nativeMenuRequest.countDown()
+                }
                 if (r.mode == VideoFocusMode.VIDEO_FOCUS_PROJECTED && initialFocus != InitialFocus.IMMEDIATE) return
                 send(video, MediaMsg.VIDEO_FOCUS_NOTIFICATION, VideoFocusNotification.newBuilder()
                     .setFocus(if (r.mode == VideoFocusMode.VIDEO_FOCUS_NATIVE) VideoFocusMode.VIDEO_FOCUS_NATIVE else VideoFocusMode.VIDEO_FOCUS_PROJECTED)
@@ -351,8 +378,15 @@ class HeadUnitSimulator(
                     videoFrames.incrementAndGet()
                     firstVideoFrame.countDown()
                 } else {
+                    if (m.channel in listOf(mediaAudio,guidance)) routing?.accept(m.channel == guidance,
+                        m.body.copyOfRange(m.bodyOffset+8,m.bodyOffset+m.bodyLength))
                     audioChunks.incrementAndGet()
                     if (m.channel == mediaAudio) {
+                        referenceOutput?.let {
+                            it.writeInt(m.bodyLength)
+                            it.writeLong(System.nanoTime())
+                            it.write(m.body, m.bodyOffset, m.bodyLength)
+                        }
                         var peak = 0
                         for (i in m.bodyOffset + 8 until m.bodyOffset + m.bodyLength - 1 step 2) {
                             val value = ((m.body[i].toInt() and 255) or (m.body[i + 1].toInt() shl 8)).toShort().toInt()
@@ -459,8 +493,8 @@ class HeadUnitSimulator(
         val displayMode = VideoConfiguration.newBuilder().setCodecResolution(res).setVideoCodecType(videoCodec)
             .setFrameRate(VideoFrameRateType.VIDEO_FPS_30).setDensity(dpi)
             .apply { if (writeZeros) { setWidthMargin(0); setHeightMargin(0) } }.build()
-        fun audio(id: Int, type: AudioStreamType, rate: Int, ch: Int) = Service.newBuilder().setId(id).setMediaSinkService(
-            MediaSinkService.newBuilder().setAvailableType(MediaCodecType.MEDIA_CODEC_AUDIO_PCM).setAudioType(type)
+        fun audio(id: Int, type: AudioStreamType, rate: Int, ch: Int, codec: MediaCodecType = MediaCodecType.MEDIA_CODEC_AUDIO_PCM) = Service.newBuilder().setId(id).setMediaSinkService(
+            MediaSinkService.newBuilder().setAvailableType(codec).setAudioType(type)
                 .addAudioConfigs(AudioConfiguration.newBuilder().setSamplingRate(rate).setNumberOfBits(16).setNumberOfChannels(ch)))
         return ServiceDiscoveryResponse.newBuilder()
             .setHeadunitInfo(HeadUnitInfo.newBuilder().setMake("AARE").setModel("Simulator").setYear("2026")
@@ -473,7 +507,13 @@ class HeadUnitSimulator(
                 .addAllVideoConfigs(offeredModes ?: listOf(displayMode,
                     displayMode.toBuilder().setCodecResolution(VideoCodecResolutionType.VIDEO_720x1280).build()))))
             .addChannels(audio(mediaAudio, AudioStreamType.AUDIO_STREAM_MEDIA, 48000, 2))
-            .addChannels(audio(guidance, AudioStreamType.AUDIO_STREAM_GUIDANCE, 16000, 1))
+            .apply {
+                if (samsungAudioOffers) {
+                    addChannels(audio(5, AudioStreamType.AUDIO_STREAM_MEDIA, 48000, 2, MediaCodecType.MEDIA_CODEC_AUDIO_AAC_LC_ADTS))
+                    addChannels(audio(6, AudioStreamType.AUDIO_STREAM_GUIDANCE, 48000, 1, MediaCodecType.MEDIA_CODEC_AUDIO_AAC_LC_ADTS))
+                }
+                if (offerGuidance) addChannels(audio(guidance, AudioStreamType.AUDIO_STREAM_GUIDANCE, if (samsungAudioOffers) 48000 else 16000, 1))
+            }
             .addChannels(audio(system, AudioStreamType.AUDIO_STREAM_SYSTEM_AUDIO, 16000, 1))
             .addChannels(Service.newBuilder().setId(mic).setMediaSourceService(MediaSourceService.newBuilder()
                 .setAvailableType(MediaCodecType.MEDIA_CODEC_AUDIO_PCM)

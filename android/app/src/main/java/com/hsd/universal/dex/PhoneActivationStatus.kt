@@ -37,7 +37,9 @@ object PhoneActivationStatus {
                 (if (partial) request.optBoolean("screen") && DelegatedPanelAccess.unsupportedThisActivation
                  else !request.optBoolean("screen") || DelegatedPanelAccess.hasPermission(context))
             return if (ready) Snapshot(Phase.READY, if (partial) PhoneActivationPolicy.PANEL_MESSAGE else "Доступ включён на телефоне", started, activationBinding = binding)
-            else Snapshot(Phase.FAILED, "Доступ завершён. Включите его снова на телефоне или с компьютера.", started, activationBinding = binding)
+            else Snapshot(Phase.FAILED, context.getString(if (com.hsd.universal.CrashLog.cleanupEndedActivation)
+                com.hsd.universal.R.string.activation_interrupted_by_cleanup else com.hsd.universal.R.string.activation_session_ended),
+                started, activationBinding = binding)
         }
         if (result?.optString("phase") == "FAILED")
             return Snapshot(Phase.FAILED, result.optString("message", "Активация не завершена").take(640), started, activationBinding = binding)

@@ -19,14 +19,21 @@ class DrainMeter(private val windowMs: Long = WINDOW_MS) {
     /** Байт/с, 0 = пока не измерено. */
     @Volatile var bytesPerSec = 0.0
         private set
+    /** Capacity for new video when the desktop changes from static to moving. */
+    @Volatile var availableVideoBytesPerSec = 0.0
+        private set
 
     private var winStartMs = NEVER
     private var winVideoBytes = 0L
+    private var winVideoBusyNs = 0L
     private var winBusyNs = 0L
 
     fun onWrite(nowMs: Long, video: Boolean, bytes: Int, durNs: Long) {
         if (winStartMs == NEVER) winStartMs = nowMs
-        if (video) winVideoBytes += bytes
+        if (video) {
+            winVideoBytes += bytes
+            winVideoBusyNs += durNs
+        }
         winBusyNs += durNs
         if (nowMs - winStartMs < windowMs) return
         if (winVideoBytes > 0 && winBusyNs >= MIN_BUSY_NS) {
@@ -34,13 +41,24 @@ class DrainMeter(private val windowMs: Long = WINDOW_MS) {
             val old = bytesPerSec
             bytesPerSec = if (old <= 0) sample else ALPHA * sample + (1 - ALPHA) * old
         }
+        if (winVideoBytes >= MIN_VIDEO_SAMPLE_BYTES && winVideoBusyNs >= MIN_BUSY_NS) {
+            // Video occupies the entire endpoint during its write. Audio reserves only
+            // the fraction of wall time actually spent writing it, including on a static screen.
+            val windowNs = (nowMs - winStartMs) * 1_000_000.0
+            val reserved = ((winBusyNs - winVideoBusyNs) / windowNs).coerceIn(0.0, 1.0)
+            val capacity = winVideoBytes * 1e9 / winVideoBusyNs * (1.0 - reserved)
+            val previous = availableVideoBytesPerSec
+            availableVideoBytesPerSec = if (previous <= 0) capacity else ALPHA * capacity + (1 - ALPHA) * previous
+        }
         winStartMs = nowMs
         winVideoBytes = 0
+        winVideoBusyNs = 0
         winBusyNs = 0
     }
 
     private companion object {
         const val WINDOW_MS = 1000L
+        const val MIN_VIDEO_SAMPLE_BYTES = 16 * 1024
         const val ALPHA = 0.5
         const val MIN_BUSY_NS = 50_000_000L     // в окне почти не писали: оценка шумная, прежнюю не трогаем
         const val NEVER = Long.MIN_VALUE
@@ -90,8 +108,8 @@ class IdrThrottle(private val minIntervalMs: Long = MIN_INTERVAL_MS) {
     private var lastMs = NEVER
 
     /** true = запрос можно слать (время запоминается); false = ждём уже запрошенный или ближайший естественный IDR. */
-    fun tryRequest(nowMs: Long): Boolean {
-        if (lastMs != NEVER && nowMs - lastMs < minIntervalMs) return false
+    fun tryRequest(nowMs: Long, intervalMs: Long = minIntervalMs): Boolean {
+        if (lastMs != NEVER && nowMs - lastMs < intervalMs) return false
         lastMs = nowMs
         return true
     }
@@ -109,6 +127,6 @@ class IdrThrottle(private val minIntervalMs: Long = MIN_INTERVAL_MS) {
 /** Retry a lost native reference promptly after the transport drains, not while it is blocked. */
 internal class DesktopIdrRecovery {
     private val requests = IdrThrottle(250)
-    fun tryRequest(nowMs: Long, backlogMs: Long): Boolean =
-        backlogMs < 100 && requests.tryRequest(nowMs)
+    fun tryRequest(nowMs: Long, backlogMs: Long, encoderAgeMs: Long = 0): Boolean =
+        backlogMs < 100 && requests.tryRequest(nowMs, (2 * encoderAgeMs).coerceIn(250, IdrThrottle.MIN_INTERVAL_MS))
 }

@@ -14,6 +14,7 @@ import java.io.Closeable
 internal class RegisteredPlaybackMix private constructor(
     val records: List<AudioRecord>,
     val stems: List<PlaybackStem>,
+    val navigationState: () -> NavigationPlaybackState?,
     private val unregister: () -> Unit
 ) : Closeable {
     override fun close() {
@@ -51,7 +52,13 @@ internal class RegisteredPlaybackMix private constructor(
             // Resolve the cleanup method before registering anything on this ROM.
             val unregisterMethod = AudioManager::class.java.getMethod("unregisterAudioPolicy", policyClass)
             val createSink = policyClass.getMethod("createAudioRecordSink", mixClass)
-            val diagnostics = runCatching { PlaybackDiagnostics(context) {
+            val navigation = java.util.concurrent.atomic.AtomicReference<NavigationPlaybackState?>()
+            val diagnostics = runCatching { PlaybackDiagnostics(context, onPlayback = { tracks ->
+                val active = navigationPlaybackActive(tracks, stems)
+                if (active == null) navigation.set(null)
+                else if (navigation.get()?.active != active)
+                    navigation.set(NavigationPlaybackState(active, System.nanoTime() / 1000))
+            }) {
                 @Suppress("UNCHECKED_CAST")
                 val owners = policyClass.getMethod("getFocusStack").invoke(policy) as List<Any>
                 owners.takeLast(8).joinToString(" | ") { owner ->
@@ -76,7 +83,7 @@ internal class RegisteredPlaybackMix private constructor(
                         "Android не создал источник звука для зарегистрированного маршрута"
                     }
                 }
-                return RegisteredPlaybackMix(records, stems, unregister)
+                return RegisteredPlaybackMix(records, stems, navigation::get, unregister)
             } catch (error: Throwable) {
                 records.forEach { record -> runCatching { record.release() }.onFailure(error::addSuppressed) }
                 runCatching(unregister).onFailure(error::addSuppressed)

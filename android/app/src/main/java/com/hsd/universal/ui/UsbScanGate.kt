@@ -10,7 +10,7 @@ internal class WiredAccessorySelection {
     fun observe(selected: ProjectionRoute, available: Set<ProjectionRoute>): ProjectionRoute {
         val added = available - previous
         previous = available
-        return if (selected.wired && selected !in available) added.singleOrNull() ?: selected else selected
+        return if (selected.usesUsbAccessory && selected !in available) added.singleOrNull() ?: selected else selected
     }
 }
 

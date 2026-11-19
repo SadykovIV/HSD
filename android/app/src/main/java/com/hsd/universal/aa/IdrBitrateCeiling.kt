@@ -32,10 +32,10 @@ class IdrBitrateCeiling(
 
     /** Очередной IDR размером [size] байт. Возвращает новый битрейт, если он изменился, иначе null. */
     @Synchronized
-    fun onKeyFrame(size: Int): Int? {
-        if (size > limitBytes) {
+    fun onKeyFrame(size: Int, budget: Int = limitBytes, appliedBps: Int = current): Int? {
+        if (size > budget) {
             calm = 0
-            val target = max(minBps, (current * downFactor).roundToInt())
+            val target = max(minBps, (min(current, appliedBps) * downFactor).roundToInt())
             if (target >= current) {
                 stuckAtFloor++
                 return null
@@ -45,7 +45,7 @@ class IdrBitrateCeiling(
             return target
         }
         stuckAtFloor = 0
-        if (size >= calmBytes) {
+        if (size >= budget.toLong() * calmBytes / limitBytes) {
             calm = 0
             return null
         }

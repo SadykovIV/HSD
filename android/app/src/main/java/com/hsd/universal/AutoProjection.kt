@@ -10,6 +10,7 @@ import aap_protobuf.service.inputsource.message.InputReportOuterClass.InputRepor
 import aap_protobuf.service.inputsource.message.PointerActionOuterClass.PointerAction
 import aap_protobuf.service.inputsource.message.TouchEventOuterClass.TouchEvent
 import aap_protobuf.service.media.shared.message.MediaCodecTypeOuterClass.MediaCodecType
+import aap_protobuf.service.media.sink.message.AudioStreamTypeOuterClass.AudioStreamType
 import aap_protobuf.service.media.sink.message.VideoConfigurationOuterClass.VideoConfiguration
 import aap_protobuf.service.media.video.message.VideoFocusModeOuterClass.VideoFocusMode
 import android.content.Context
@@ -33,7 +34,9 @@ import net.prototux.aare.aap.channels.VideoChannel
 internal class AutoProjection(private val context: Context, transport: Transport, identity: PhoneIdentity,
                               private val pins: PinStore, private val peer: String, private val status: (String) -> Unit,
                               private val ended: (String) -> Unit, private val ready: () -> Unit = {},
-                              private val canReopenUsb: () -> Boolean = { false }) :
+                              private val canReopenUsb: () -> Boolean = { false },
+                              private val usbOpen: com.hsd.universal.ui.Actions.UsbOpen? = null,
+                              private val onUsbNegotiation: () -> Unit = {}) :
     ProjectionSession, AapSession.Callbacks, VideoChannel.Listener, InputChannel.Listener, DesktopProjectionOutput {
     private val cluster = AutoCluster(context)
     private val wired = transport.usbAccessory
@@ -47,7 +50,7 @@ internal class AutoProjection(private val context: Context, transport: Transport
     private val prefs = DexPrefs(context)
     private val profile = com.hsd.universal.dex.DesktopModePolicy.label(prefs.desktopMode)
     private val delivery = com.hsd.universal.dex.DesktopVideoDelivery()
-    private val calibration = com.hsd.universal.link.ReceiverAudioCalibration(context, "aap-" + com.hsd.universal.ProjectionRoute.selected(context).name.lowercase())
+    private val calibration = com.hsd.universal.link.ReceiverAudioCalibration(context, ProjectionRoute.selected(context))
     private val audioEncoder = AutoAudioEncoder()
     @Volatile private var audioEncoderFailed = false
     // Writer completions from a retired focus grant must not arm the next grant's unplug policy.
@@ -59,20 +62,22 @@ internal class AutoProjection(private val context: Context, transport: Transport
         }
     }
     @Volatile private var audioGrant: AudioGrant? = null
-    private val pcmQueue = AutoPcmQueue(calibration, prefs.synchronizeAudioVideo) { data, timestamp ->
+    private val pcmQueue = AutoPcmQueue(calibration, prefs.synchronizeAudioVideo) { data, timestamp, current ->
         val sink = playback
         val grant = audioGrant
-        if (!stopping && grant != null && sink != null) {
+        if (!stopping && grant != null && sink != null && current()) {
             val type = sink.service.mediaSinkService.availableType
+            val valid = { current() && audioGrant === grant }
             val hasSignal = !grant.delivered.get() && (10 until data.size).any { data[it] != 0.toByte() }
             if (hasSignal && grant.firstSignalUs == null) grant.firstSignalUs = timestamp
             if (type == MediaCodecType.MEDIA_CODEC_AUDIO_PCM)
-                sink.sendPcm(data, 10, data.size - 10, timestamp, if (hasSignal) grant.onWritten else null)
+                sink.sendPcm(data, 10, data.size - 10, timestamp, timestamp + AutoPcmQueue.DEFAULT_MAX_LATENESS_US,
+                    valid, if (hasSignal) grant.onWritten else null)
             else if (!audioEncoderFailed) sink.config?.let { config ->
                 try {
                     audioEncoder.offer(data, 10, timestamp, config.samplingRate, type == MediaCodecType.MEDIA_CODEC_AUDIO_AAC_LC_ADTS) { out, pts ->
                         val signal = grant.firstSignalUs
-                        sink.sendPcm(out, 10, out.size - 10, pts,
+                        sink.sendPcm(out, 10, out.size - 10, pts, pts + AutoPcmQueue.DEFAULT_MAX_LATENESS_US, valid,
                             if (!grant.delivered.get() && signal != null && pts >= signal) grant.onWritten else null)
                     }
                 } catch (error: Exception) {
@@ -101,11 +106,15 @@ internal class AutoProjection(private val context: Context, transport: Transport
                     "ageMs=${flow.queueAgeMs}/${flow.writeAgeMs}/${flow.ackAgeMs} " +
                     "lastWriteMs=${flow.lastWriteMs} lastAckMs=${flow.lastAckMs} " +
                     "ackless=${flow.ackless} dropped=${flow.dropped} expired=${flow.expired}", false)
+                playback?.let { audio -> AppLog.i("AAP AUDIO flow: ${pcmQueue.summary()} " +
+                    "receiverUnderflows=${audio.underflows} unackedDrops=${audio.droppedChunks} " +
+                    "guidanceUnderflows=${guidance?.channel?.underflows} guidanceWritten=${guidance?.writtenPackets?.get() ?: 0} " +
+                    "guidanceDrops=${guidance?.channel?.droppedChunks ?: 0}", false) }
                 lastFlowLogMs = now
             }
             lastSampleMs = now
             previousDrops = drops
-            main.postDelayed(this, 1000)
+            main.postDelayed(this, 100)
         }
     }
     private val main = Handler(Looper.getMainLooper())
@@ -126,6 +135,9 @@ internal class AutoProjection(private val context: Context, transport: Transport
     private lateinit var videoChannel: VideoChannel
     private var input: InputChannel? = null
     private var playback: AudioChannel? = null
+    private var guidance: AutoGuidanceAudio? = null
+    private var guidanceFocusRequested = false
+    private var guidanceAllowed = false
     private var audioRequested = false
     private var awaitingAudioFocus = false
     private val mediaGain = PcmGain()
@@ -150,12 +162,21 @@ internal class AutoProjection(private val context: Context, transport: Transport
     }
 
     override fun home() { source?.home() }
+    override fun carMenu() {
+        if (!stopping && ::videoChannel.isInitialized && projectionEstablished) {
+            AppLog.i("AAP: request native head unit menu", false)
+            videoChannel.requestNativeFocus()
+        }
+    }
     override fun panel(off: Boolean) { source?.setPhoneScreenOff(off) }
 
     override fun start() {
         com.hsd.universal.dex.DesktopConnectionState.attach(delivery)
         if (!wired) main.postDelayed(deadline, 55_000)
         session.start()
+    }
+    override fun onFirstUsbRead(session: AapSession) {
+        usbOpen?.log("first incoming bytes · ${session.discoveryReadProgress}")
     }
     override fun onWaitingForUsbVersion(session: AapSession) {
         main.post {
@@ -168,6 +189,7 @@ internal class AutoProjection(private val context: Context, transport: Transport
     }
 
     override fun onNegotiationStarted(session: AapSession) {
+        if (wired) onUsbNegotiation()
         if (wired) main.post {
             if (!stopping) {
                 CarLifeState.waitingForUsbVersion = false
@@ -223,13 +245,29 @@ internal class AutoProjection(private val context: Context, transport: Transport
         com.hsd.universal.CarLifeState.auth = "TLS"
         com.hsd.universal.CarLifeState.protocol = "Android Auto (AAP)"
         com.hsd.universal.CarLifeState.touch = if (input?.touchScreen != null) context.getString(R.string.desktop_touchscreen) else context.getString(R.string.desktop_no_touch_screen)
-        playback = response.channelsList.firstOrNull { ch ->
+        val audioOffers = response.channelsList.filter { it.hasMediaSinkService() && it.mediaSinkService.audioConfigsCount > 0 }
+        AppLog.i("AAP audio offers: " + audioOffers.joinToString { ch ->
             val sink = ch.mediaSinkService
-            ch.hasMediaSinkService() && sink.audioType.number == 3 &&
+            "${ch.id}/${sink.audioType}/${sink.availableType} " +
+                sink.audioConfigsList.joinToString("/") { "${it.samplingRate}x${it.numberOfChannels}x${it.numberOfBits}" }
+        }, false)
+        // Preserve receiver order within each codec. PCM avoids an extra codec and its
+        // startup delay for short prompts on receivers that offer both PCM and AAC.
+        val preferred = audioOffers.sortedBy { it.mediaSinkService.availableType != MediaCodecType.MEDIA_CODEC_AUDIO_PCM }
+        playback = preferred.firstOrNull { ch ->
+            val sink = ch.mediaSinkService
+            sink.hasAudioType() && sink.audioType == AudioStreamType.AUDIO_STREAM_MEDIA &&
                 sink.availableType in audioCodecs && sink.audioConfigsList.any(::supportsAudio)
         }?.let { AudioChannel(it, supports = ::supportsAudio) }
+        guidance = preferred.firstOrNull { ch ->
+            ch.mediaSinkService.hasAudioType() && ch.mediaSinkService.audioType == AudioStreamType.AUDIO_STREAM_GUIDANCE &&
+                ch.mediaSinkService.availableType in audioCodecs &&
+                ch.mediaSinkService.audioConfigsList.any(AutoGuidanceAudio::supports)
+        }?.let { AutoGuidanceAudio(AudioChannel(it, supports = AutoGuidanceAudio::supports), ::guidanceEnded) }
+        AppLog.i("AAP audio routes: media=${playback?.id} guidance=${guidance?.channel?.id} separateRequested=${prefs.separateNavigationAudio}", false)
         publish(context.getString(R.string.desktop_android_auto_connected_negotiating_the_display, profile))
-        return listOfNotNull(videoChannel, input, playback) + cluster.channels(response.channelsList)
+        return listOfNotNull(videoChannel, input, playback, guidance?.channel?.takeIf { prefs.separateNavigationAudio }) +
+            cluster.channels(response.channelsList)
     }
 
     private fun layoutOf(config: VideoConfiguration) = AaVideoLayout.of(config, selection.densityOverride, legacyTiles)
@@ -474,6 +512,39 @@ internal class AutoProjection(private val context: Context, transport: Transport
 
     override fun audioRate(): Int? = playback?.takeIf { it.ready && !audioEncoderFailed }?.config?.samplingRate
     override fun audioOutputAvailable() = !stopping && projectionEstablished && session.state == AapSession.State.RUNNING && audioRate() != null
+    override fun navigationAvailable(): Boolean {
+        val voice = guidance ?: return false
+        if (stopping) return false
+        session.openOptionalChannel(voice.channel)
+        return voice.available
+    }
+
+    @Synchronized override fun navigation(pcm: ByteArray, ptsUs: Long, active: Boolean): Boolean {
+        val voice = guidance ?: return false
+        if (stopping) return false
+        val wasActive = voice.active
+        if (active && !wasActive && !guidanceAllowed && !guidanceFocusRequested) {
+            guidanceFocusRequested = true
+            awaitingAudioFocus = true
+            session.requestAudioFocus(AudioFocusRequestType.AUDIO_FOCUS_GAIN_TRANSIENT_MAY_DUCK, Priority.AUDIO)
+        }
+        if (active && !guidanceAllowed && !awaitingAudioFocus) return false
+        return voice.offer(pcm, ptsUs, active)
+    }
+
+    @Synchronized private fun guidanceEnded() {
+        if (guidance?.active != true && guidanceFocusRequested && !stopping) {
+            guidanceFocusRequested = false
+            if (audioRequested) {
+                awaitingAudioFocus = true
+                session.requestAudioFocus(AudioFocusRequestType.AUDIO_FOCUS_GAIN, Priority.AUDIO)
+            } else {
+                audioGrant = null
+                awaitingAudioFocus = false
+                session.requestAudioFocus(AudioFocusRequestType.AUDIO_FOCUS_RELEASE, Priority.AUDIO)
+            }
+        }
+    }
 
     @Synchronized override fun audio(type: Int, pcm: ByteArray, ptsUs: Long): Boolean {
         val sink = playback ?: return false
@@ -483,8 +554,13 @@ internal class AutoProjection(private val context: Context, transport: Transport
                 audioGrant = null
                 pcmQueue.setPlaying(false)
                 sink.stopPlayback()
-                audioEncoder.close()
-                if (audioRequested) session.requestAudioFocus(AudioFocusRequestType.AUDIO_FOCUS_RELEASE, Priority.AUDIO)
+                pcmQueue.resetCodec(audioEncoder::close)
+                if (audioRequested) {
+                    val stillSpeaking = guidance?.active == true
+                    guidanceFocusRequested = stillSpeaking
+                    session.requestAudioFocus(if (stillSpeaking) AudioFocusRequestType.AUDIO_FOCUS_GAIN_TRANSIENT_MAY_DUCK
+                        else AudioFocusRequestType.AUDIO_FOCUS_RELEASE, Priority.AUDIO)
+                }
                 audioRequested = false
                 awaitingAudioFocus = false
             }
@@ -495,11 +571,11 @@ internal class AutoProjection(private val context: Context, transport: Transport
                 if (!audioRequested) {
                     if (pcm.all { it == 0.toByte() }) return true
                     audioRequested = true
-                    if (audioGrant == null) {
+                    if (audioGrant == null && !guidanceFocusRequested) {
                         awaitingAudioFocus = true
                         AppLog.i("AAP AUDIO requesting media focus for playback", false)
                         session.requestAudioFocus(AudioFocusRequestType.AUDIO_FOCUS_GAIN, Priority.AUDIO)
-                    } else {
+                    } else if (audioGrant != null) {
                         sink.startPlayback()
                         pcmQueue.setPlaying(true)
                     }
@@ -521,8 +597,12 @@ internal class AutoProjection(private val context: Context, transport: Transport
         AppLog.i("AAP AUDIO receiver focus=${notification.focusState}", false)
         val duck = notification.focusState == AudioFocusStateType.AUDIO_FOCUS_STATE_LOSS_TRANSIENT_CAN_DUCK
         mediaGain.target = if (duck) 0.2 else 1.0
-        if (notification.focusState in setOf(AudioFocusStateType.AUDIO_FOCUS_STATE_GAIN,
-                AudioFocusStateType.AUDIO_FOCUS_STATE_GAIN_TRANSIENT, AudioFocusStateType.AUDIO_FOCUS_STATE_GAIN_MEDIA_ONLY) || duck) {
+        val common = notification.focusState == AudioFocusStateType.AUDIO_FOCUS_STATE_GAIN ||
+            notification.focusState == AudioFocusStateType.AUDIO_FOCUS_STATE_GAIN_TRANSIENT
+        guidanceAllowed = common || notification.focusState == AudioFocusStateType.AUDIO_FOCUS_STATE_GAIN_TRANSIENT_GUIDANCE_ONLY ||
+            (duck && guidanceAllowed)
+        guidance?.focus(guidanceAllowed)
+        if (common || notification.focusState == AudioFocusStateType.AUDIO_FOCUS_STATE_GAIN_MEDIA_ONLY || (duck && audioGrant != null)) {
             if (audioGrant == null) audioGrant = AudioGrant()
             if (audioRequested) {
                 playback?.startPlayback()
@@ -532,15 +612,17 @@ internal class AutoProjection(private val context: Context, transport: Transport
             audioGrant = null
             pcmQueue.setPlaying(false)
             playback?.stopPlayback()
-            audioEncoder.close()
+            pcmQueue.resetCodec(audioEncoder::close)
         }
     }
     override fun onClosed(session: AapSession, reason: String, error: Throwable?) {
+        usbOpen?.log("closed in ${session.closedDuring}: $reason")
         val oldUsb = session.closedDuring == AapSession.State.VERSION && session.oldUsbFramesBeforeVersion > 0
         networkInterrupted = !stopping && session.closedDuring == AapSession.State.RUNNING &&
             error is java.io.IOException && error !is javax.net.ssl.SSLException
-        retryUsbOpen = wired && !stopping && error is java.io.IOException &&
-            ((!oldUsb && session.closedDuring == AapSession.State.VERSION) || networkInterrupted)
+        retryUsbOpen = wired && !stopping && (oldUsb ||
+            (error is java.io.IOException && session.closedDuring == AapSession.State.VERSION) || networkInterrupted)
+        val hadPicture = projectionEstablished
         val lostUsbPicture = wired && !stopping && error is java.io.IOException && delivery.hasPicture()
         val carriedAudio = audioGrant?.delivered?.get() == true
         val interruptedAuth = !stopping && error != null &&
@@ -551,14 +633,16 @@ internal class AutoProjection(private val context: Context, transport: Transport
             if (wired) CarLifeState.waitingForUsbVersion = false
             CarLifeState.waitingForVideoReceiver = false
             main.removeCallbacks(sample)
-            pcmQueue.close()
-            audioEncoder.close()
+            pcmQueue.close(audioEncoder::close)
+            guidance?.close()
             cluster.close()
             delivery.close()
             com.hsd.universal.dex.DesktopConnectionState.detach(delivery)
             main.removeCallbacks(deadline)
             val authorization = session.authorization
             AppLog.i("Android Auto closed · transport=$transportLabel · phase=${session.closedDuring} · version=${session.headUnitVersion?.let { "${it.first}.${it.second}" } ?: "none"} · auth=${authorization?.description ?: "none"} · cause=$reason", false)
+            if (wired && session.closedDuring == AapSession.State.VERSION)
+                AppLog.i("Android Auto USB before VERSION_REQUEST · previous-session frames=${session.oldUsbFramesBeforeVersion} · ${session.discoveryReadProgress}", false)
             if (session.closedDuring == AapSession.State.DISCOVERY) AppLog.i(
                 "AAP discovery: request=${session.discoveryRequestBytes}B written=${session.discoveryRequestWritten}; " +
                     "inbound=${session.discoveryInboundMessages} lastType=${session.discoveryLastMessage ?: "none"}; " +
@@ -587,6 +671,8 @@ internal class AutoProjection(private val context: Context, transport: Transport
                     else -> context.getString(resource, authorization.description)
                 }
             }
+            else if (wired && session.closedDuring == AapSession.State.VERSION && error is java.io.IOException)
+                context.getString(R.string.aa_usb_closed_before_version, reason)
             else if (session.closedDuring == AapSession.State.HANDSHAKE || session.closedDuring == AapSession.State.AUTH)
                 context.getString(R.string.aa_handshake_interrupted, session.closedDuring.name, reason)
             else context.getString(R.string.desktop_android_auto_is_completed, session.closedDuring, reason)
@@ -594,7 +680,7 @@ internal class AutoProjection(private val context: Context, transport: Transport
             source = null
             when {
                 retiringSource -> finishAfterRetirement = { ended(message) }
-                cleanup != null -> cleanup.close { main.post { ended(message) } }
+                cleanup != null -> cleanup.close(sessionEnded = true, hadPicture = hadPicture) { main.post { ended(message) } }
                 else -> ended(message)
             }
         }

@@ -18,7 +18,8 @@ import com.hsd.universal.AppLog
 import java.io.Closeable
 
 /** Passive evidence for player pauses. No focus requests, media commands, titles, URIs or PCM. */
-internal class PlaybackDiagnostics(private val context: Context, private val focus: () -> String) : Closeable {
+internal class PlaybackDiagnostics(private val context: Context,
+    private val onPlayback: (List<PlaybackActivity>) -> Unit = {}, private val focus: () -> String) : Closeable {
     private val thread = HandlerThread("HSD-playback-events").apply { start() }
     private val handler = Handler(thread.looper)
     private val audio = context.getSystemService(AudioManager::class.java)
@@ -35,11 +36,14 @@ internal class PlaybackDiagnostics(private val context: Context, private val foc
     }
     private val playback = object : AudioManager.AudioPlaybackCallback() {
         override fun onPlaybackConfigChanged(configs: List<AudioPlaybackConfiguration>) {
-            val value = configs.take(16).map { config ->
-                val uid = runCatching { config.javaClass.getMethod("getClientUid").invoke(config) }.getOrNull()
-                val active = runCatching { config.javaClass.getMethod("isActive").invoke(config) }.getOrNull()
-                "uid=$uid usage=${config.audioAttributes.usage} active=$active"
-            }.sorted().joinToString(" | ")
+            if (closed) return
+            val activity = configs.map { config ->
+                PlaybackActivity(config.audioAttributes.usage,
+                    runCatching { config.javaClass.getMethod("getClientUid").invoke(config) as Int }.getOrNull(),
+                    runCatching { config.javaClass.getMethod("isActive").invoke(config) as Boolean }.getOrNull())
+            }
+            onPlayback(activity)
+            val value = activity.take(16).map { "uid=${it.uid} usage=${it.usage} active=${it.active}" }.sorted().joinToString(" | ")
             if (value != lastPlayback) { lastPlayback = value; log("tracks=[$value]") }
         }
     }
@@ -57,6 +61,7 @@ internal class PlaybackDiagnostics(private val context: Context, private val foc
     init {
         try {
             audio.registerAudioPlaybackCallback(playback, handler); playbackEvents = true
+            handler.post { if (!closed) playback.onPlaybackConfigChanged(audio.activePlaybackConfigurations) }
             audio.registerAudioDeviceCallback(devices, handler); deviceEvents = true
             val filter = IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
             if (Build.VERSION.SDK_INT >= 33) context.registerReceiver(noisy, filter, null, handler, Context.RECEIVER_NOT_EXPORTED)
@@ -103,3 +108,5 @@ internal class PlaybackDiagnostics(private val context: Context, private val foc
         }
     }
 }
+
+internal data class PlaybackActivity(val usage: Int, val uid: Int?, val active: Boolean?)

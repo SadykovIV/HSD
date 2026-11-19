@@ -114,6 +114,7 @@ class CarLifeSession(
     private val bitrateProfile = if (air) BitrateProfile.WIFI else BitrateProfile.USB
     private val legacyBitratePolicy = BitratePolicy(mode.bitrate, profile = bitrateProfile)
     private val surfaceBitratePolicy: BitratePolicy by lazy { DesktopVideoQuality.bitratePolicy(bitrateProfile, cfg.desktopBitrateBps) }
+    private val desktopIdrCeiling = IdrBitrateCeiling(cfg.desktopBitrateBps)
     @Volatile private var encodingSurface = false
     // The source starts after this session is constructed. Select its independent policy
     // only when the direct Surface encoder is requested, never from an early source flag.
@@ -207,6 +208,7 @@ class CarLifeSession(
     private var touchCount = 0
     private var maxFingers = 0
     private var lastMoveFingers = 0
+    private var lastMoveLogMs = 0L
     private val rxByType = java.util.TreeMap<Int, Int>()
     private var huInfo: String? = null
     private var huStatistic: String? = null
@@ -403,11 +405,15 @@ class CarLifeSession(
 
     fun close(reason: String) = close(reason, transportLost = false)
 
+    @Volatile var closedWithDesktopPicture = false
+        private set
+
     private fun close(reason: String, transportLost: Boolean) {
         if (!closed.compareAndSet(false, true)) return
         // A USB fd or wireless channel can fail before a lifecycle event arrives. Notify before
         // stopping the encoder and releasing the audio route back to the handset speaker.
-        if (transportLost) onDesktopOutputLost(this, desktopVideoDelivery.hasPicture())
+        closedWithDesktopPicture = desktopVideoDelivery.hasPicture()
+        if (transportLost) onDesktopOutputLost(this, closedWithDesktopPicture)
         synchronized(bridge) { updateGuidanceInterest() }
         desktopAv.close()
         desktopVideoDelivery.close()
@@ -450,13 +456,26 @@ class CarLifeSession(
                 return
             }
             rxByType.merge(m.type, 1, Int::plus)
+            val touch = if (chan == Ch.TOUCH) CarlifeTouch.parse(m.type, m.body) else null
+            if (chan == Ch.TOUCH) {
+                if (cfg.desktopVideo != null && touch?.masked == 0) {
+                    desktopAv.touchDown()
+                    bridge.onDesktopTouchDown()
+                }
+                onTouch(m, touch)
+                if (touch?.masked == 2) {
+                    val now = SystemClock.elapsedRealtime()
+                    if (now - lastMoveLogMs < 1000) return
+                    lastMoveLogMs = now
+                }
+            }
             val decoded = if (m.body.isEmpty()) null else ProtocolLogPolicy.protobuf(m.body, Schemas.byType[m.type])
             val note = (if (m.truncated) " [TRUNCATED declared=${m.declaredLen}]" else "") +
                 (if (m.resv != 0) " [resv=${m.resv}]" else "") +
                 (if (Schemas.byType[m.type] == null && m.body.isNotEmpty()) " [схемы нет]" else "")
-            val quiet = m.type == Msg.TOUCH_ACTION_MOVE || (m.type == Msg.TOUCH_ACTION && touchCount > 20 && isMove(m.body))
-            AppLog.msg("RX", chan, inner.size, m.type, m.declaredLen, decoded, inner, ui = !quiet, note = note)
-            if (chan == Ch.CMD) onCmd(m) else onTouch(m)
+            val showInUi = touch?.masked != 2 || (m.type == Msg.TOUCH_ACTION && touchCount <= 20)
+            AppLog.msg("RX", chan, inner.size, m.type, m.declaredLen, decoded, inner, ui = showInUi, note = note)
+            if (chan == Ch.CMD) onCmd(m)
         } else {
             val whole = if (chan == Ch.VR) vrReassembler.feed(inner) ?: return else inner
             if (chan == Ch.VR && vrReassembler.assembled == 1 && whole !== inner) {
@@ -486,11 +505,6 @@ class CarLifeSession(
         }
         if (m.truncated || m.data.isEmpty()) return
         bridge.onCarlifeMicData(m.data)
-    }
-
-    private fun isMove(body: ByteArray): Boolean {
-        val f = PbReader.parse(body) ?: return false
-        return ((PbReader.int(f, 1) ?: -1) and 0xFF) == 2
     }
 
     // ---------------- CMD ----------------
@@ -906,6 +920,10 @@ class CarLifeSession(
     private fun startOrUpdatePlaceholder() {
         synchronized(srcLock) {
             val text = bannerText ?: return
+            // A registered desktop producer starts its own encoder at VIDEO_START. Starting
+            // a second one here blocks the USB reader and competes for the first picture.
+            // If the producer fails, stopDesktopVideo sets the error before requesting a banner.
+            if (bridge.desktopSurfaceEnabled && bridge.desktopVideoError == null) return
             val cur = source
             if (cur != null) {
                 cur.banner = text
@@ -949,9 +967,9 @@ class CarLifeSession(
         if (closed.get() || paused) return false
         synchronized(videoLock) {
             val data = withFixedSps(payload)
-            if (!admitDesktopFrame(data) || videoOverflow()) return false
+            if (!admitDesktopFrame(data) || videoOverflow() || !sendVideoData(data, presentationUs)) return false
             lastVideoTx = SystemClock.elapsedRealtime()
-            return sendVideoData(data, presentationUs)
+            return true
         }
     }
 
@@ -964,11 +982,11 @@ class CarLifeSession(
         if (closed.get() || paused) return false
         synchronized(videoLock) {
             val data = withFixedSps(payload)
-            if (!admitDesktopFrame(data) || videoOverflow()) return false
+            if (!admitDesktopFrame(data) || videoOverflow() || !sendVideoData(data, presentationUs)) return false
             // под тем же замком, что и onFrame заглушки: после AA-IDR ни один её кадр уже не уйдёт
             acceptEncoder = false
             lastVideoTx = SystemClock.elapsedRealtime()
-            return sendVideoData(data, presentationUs)
+            return true
         }
     }
 
@@ -989,7 +1007,7 @@ class CarLifeSession(
 
     private fun effectiveEncoderBitrate(): Int {
         val receiverLimit = mobisAaCeiling.current.takeIf { bridge.huMobisNx4c }
-        val target = if (cfg.desktopVideo != null) DesktopVideoQuality.encoderBitrate(bitratePolicy, receiverLimit)
+        val target = if (cfg.desktopVideo != null) minOf(DesktopVideoQuality.encoderBitrate(bitratePolicy, receiverLimit), desktopIdrCeiling.current)
             else receiverLimit ?: bitratePolicy.current
         return desktopEncoder?.let { target.coerceIn(it.minBitrate, it.maxBitrate) } ?: target
     }
@@ -1002,8 +1020,24 @@ class CarLifeSession(
 
     /** The existing Mazda compatibility path keeps one timestamp across all fragments. */
     private fun sendVideoData(data: ByteArray, presentationUs: Long? = null): Boolean {
-        val frame = if (cfg.desktopVideo != null && presentationUs != null)
-            desktopAv.frame(presentationUs, 5 in AnnexB.nalTypes(data), effectiveEncoderFps()) ?: return false else null
+        val frame = if (cfg.desktopVideo != null && presentationUs != null) {
+            val fps = effectiveEncoderFps()
+            val key = 5 in AnnexB.nalTypes(data)
+            val drainRate = transport.availableVideoBytesPerSec
+            // Synchronize delivery of the last byte of the picture with PCM playout.
+            val transferUs = if (drainRate > 0) (data.size * 1_000_000.0 / drainRate).toLong() else 0L
+            val admitted = desktopAv.frame(presentationUs, key, fps,
+                idleWireAtOutput = encodingSurface && transport.queuedVideoFrames == 0 && transport.videoQueueAgeMs == 0L,
+                transferUs = transferUs) ?: return false
+            if (key) {
+                val budget = com.hsd.universal.aa.DesktopFrameBudget.interactiveIdrBytes(drainRate, fps)
+                if (budget != null && desktopIdrCeiling.onKeyFrame(data.size, budget, effectiveEncoderBitrate()) != null) {
+                    applyEncoderBitrate()
+                    AppLog.i("DESKTOP VIDEO: IDR=${data.size}B budget=${budget}B fps=$fps target=${effectiveEncoderBitrate()}bps", false)
+                }
+            }
+            admitted
+        } else null
         fun fragment(bytes: ByteArray, last: Boolean) {
             if (frame != null) transport.sendVideoFragment(bytes, frame, last) else send(Ch.VIDEO, bytes)
         }
@@ -1019,8 +1053,9 @@ class CarLifeSession(
         val ts = videoTime(presentationUs)
         var off = 0
         while (off < data.size) {
-            val end = minOf(off + max, data.size)
-            fragment(Wire.dataInner(Msg.VIDEO_DATA, ts, data.copyOfRange(off, end)), end == data.size)
+            val count = minOf(max, data.size - off)
+            val end = off + count
+            fragment(Wire.dataInner(Msg.VIDEO_DATA, ts, data, off, count), end == data.size)
             off = end
         }
         return true
@@ -1039,6 +1074,8 @@ class CarLifeSession(
         return out
     }
 
+    private val videoDrainRate get() = if (cfg.desktopVideo == null) transport.drainBytesPerSec else transport.availableVideoBytesPerSec
+
     /**
      * Видео-очередь переполнена: уже стоящих кадров больше 30 или их байт больше ~500 мс слива (пока слив не измерен - 512 КБ).
      * Для рабочего стола также ограничиваем фактическое ожидание 150 мс: оценка по байтам не видит остановившийся транспорт.
@@ -1046,7 +1083,7 @@ class CarLifeSession(
      * и ждёт IDR (мост: outGotIdr=false; заглушка: csdPending=true), P после потерянного кадра слать нельзя.
      */
     private fun videoOverflow(): Boolean {
-        val over = VideoQueueLimit.overflow(transport.queuedVideoFrames, transport.queuedVideoBytes, transport.drainBytesPerSec) ||
+        val over = VideoQueueLimit.overflow(transport.queuedVideoFrames, transport.queuedVideoBytes, videoDrainRate) ||
             (cfg.desktopVideo != null && transport.videoQueueAgeMs >= 150)
         if (over) {
             lastOverflowMs = SystemClock.elapsedRealtime()
@@ -1057,7 +1094,7 @@ class CarLifeSession(
 
     override fun videoStats(): LinkVideoStats {
         val bytes = transport.queuedVideoBytes
-        val rate = transport.drainBytesPerSec
+        val rate = videoDrainRate
         return LinkVideoStats(rate, maxOf(transport.videoQueueAgeMs, VideoQueueLimit.backlogMs(bytes, rate)), transport.queuedVideoFrames, bytes)
     }
 
@@ -1086,23 +1123,29 @@ class CarLifeSession(
             val placeholder = if (air && !bridge.isTranscoding) source else null
             if (!bridge.isTranscoding && placeholder == null) return
             val now = SystemClock.elapsedRealtime()
-            val rate = transport.drainBytesPerSec
+            val rate = videoDrainRate
             val qf = transport.queuedVideoFrames
             if (qf > maxQueueFrames) maxQueueFrames = qf
             val real = maxOf(transport.videoQueueAgeMs, VideoQueueLimit.backlogMs(transport.queuedVideoBytes, rate))
             val sinceOverflow = lastOverflowMs.let { if (it == NEVER_MS) -1L else now - it }
             applyHuCeilings()
             val old = bitratePolicy.current
-            val backlog = VideoQueueLimit.policyBacklogMs(real, sinceOverflow)
+            val wireBacklog = VideoQueueLimit.policyBacklogMs(real, sinceOverflow)
+            var encoderBacklog = 0.0
             if (cfg.desktopVideo != null && encodingSurface) {
                 val frameAgeMs = bridge.takeFrameLatencyMs()
-                desktopFrameRate.update(now, maxOf(backlog, frameAgeMs), thermalThrottle.capFps(targetFps), sinceOverflow in 0..200)
+                // A completed slow picture no longer consumes encoder capacity. A picture
+                // still owned by the codec consumes it even when the USB queue is empty.
+                encoderBacklog = bridge.pendingEncoderAgeMs ?: frameAgeMs
+                desktopFrameRate.update(now, real.toDouble(), thermalThrottle.capFps(targetFps),
+                    overflow = sinceOverflow in 0..200,
+                    encoderAgeMs = encoderBacklog)
                     ?.let { fps ->
                         applyEncoderFps()
-                        AppLog.i("DESKTOP VIDEO: dynamic fps=$fps max=$targetFps backlog=${backlog.toInt()}ms encoder=${frameAgeMs.toInt()}ms", false)
+                        AppLog.i("DESKTOP VIDEO: dynamic fps=$fps max=$targetFps backlog=${real}ms encoder=${frameAgeMs.toInt()}ms sinceOverflow=${sinceOverflow}ms", false)
                     }
             }
-            val bps = bitratePolicy.update(now, backlog, rate) ?: return
+            val bps = bitratePolicy.update(now, maxOf(wireBacklog, encoderBacklog), rate) ?: return
             if (placeholder?.setBitrate(bitratePolicy.current) ?: applyEncoderBitrate()) {
                 val who = if (placeholder != null) "заглушки" else "энкодера"
                 AppLog.i("видео: битрейт $who ${old / 1000} -> ${bps / 1000} кбит/с (${bitratePolicy.lastReason}; потолок ${bitratePolicy.ceilingBps / 1000})")
@@ -1213,9 +1256,9 @@ class CarLifeSession(
     /** Аудио моста: канал MEDIA/TTS, заголовок 12 байт; time = millis & 0xFFFFFFFF в DATA, 0 в INIT/STOP (как Baidu). */
     override fun sendAudio(channel: Int, type: Int, payload: ByteArray): Boolean {
         if (closed.get()) return false
-        if (payload.isNotEmpty() && transport.queueSize(channel) > MAX_AUDIO_QUEUE) return false   // звук не должен душить видео в очереди
-        if (cfg.desktopVideo != null && channel == Ch.MEDIA && type != CarlifeAudio.MEDIA_DATA) desktopAv.clearAudio()
         val isData = type == CarlifeAudio.MEDIA_DATA || type == CarlifeAudio.TTS_DATA || type == CarlifeAudio.VR_DATA
+        if (isData && payload.isNotEmpty() && transport.channelBacklogged(channel, MAX_AUDIO_QUEUE)) return false
+        if (cfg.desktopVideo != null && channel == Ch.MEDIA && type != CarlifeAudio.MEDIA_DATA) desktopAv.clearAudio()
         val time = if (isData) (System.currentTimeMillis() and 0xFFFFFFFFL).toInt() else 0
         send(channel, Wire.dataInner(type, time, payload))
         return true
@@ -1435,14 +1478,17 @@ class CarLifeSession(
 
     // ---------------- TOUCH ----------------
 
-    private fun onTouch(m: CmdMsg) {
+    private fun onTouch(m: CmdMsg, touch: CarlifeTouch?) {
         if (m.type == Msg.TOUCH_CAR_HARD_KEY_CODE) {
             val code = PbReader.parse(m.body)?.let { PbReader.int(it, 1) }
             AppLog.i("== HARD KEY keycode=$code")
             if (code != null) bridge.onCarlifeHardKey(code)
             return
         }
-        val t = CarlifeTouch.parse(m.type, m.body) ?: return
+        val t = touch ?: return
+        // Deliver before log formatting or subscriber notification on the USB reader.
+        val desktopCancel = bridge.desktopInputEnabled && m.type == Msg.TOUCH_ACTION && t.masked == 3
+        if (t.masked in TOUCH_TO_AA || desktopCancel) bridge.onCarlifeTouch(t.action, t.x, t.y, t.px, t.py)
         setTouchMode(
             if (m.type == Msg.TOUCH_ACTION) "TOUCH_ACTION (прозрачный, TRANSPARENT_SEND_TOUCH_EVENT=true)"
             else "жестовый (отдельные коды 0x68002..0x6800D)"
@@ -1455,11 +1501,6 @@ class CarLifeSession(
         if (t.masked != 2 || n != lastMoveFingers) {
             AppLog.i("TOUCH action=${t.action} пальцев=$n тело=${m.body.size} байт", false)
             lastMoveFingers = if (t.masked == 2) n else 0
-        }
-        // Gesture opcodes also normalize to action 3; only raw TOUCH_ACTION means CANCEL.
-        val desktopCancel = bridge.desktopInputEnabled && m.type == Msg.TOUCH_ACTION && t.masked == 3
-        if (t.masked in TOUCH_TO_AA || desktopCancel) {
-            bridge.onCarlifeTouch(t.action, t.x, t.y, t.px, t.py)
         }
         CarLifeState.touch = "$touchMode; событий=$touchCount; пальцев макс=$maxFingers; последний act=${t.action} x=${t.x} y=${t.y}" +
             (if (n > 1) " px=${t.px} py=${t.py}" else "")
@@ -1497,30 +1538,34 @@ class CarLifeSession(
                 (m.type == Msg.NAVI_NEXT_TURN_INFO && PbReader.parse(m.body)?.let { PbReader.int(it, 1) } == 2)
             AppLog.msg("TX", chan, inner.size, m.type, m.declaredLen, decoded, inner, ui = !quiet)
         } else {
-            val m = Wire.parseData(inner) ?: return
-            desktopVideoDelivery.writeCompleted(chan, m.type, m.data.size, SystemClock.elapsedRealtime())
+            if (inner.size < 12) return
+            // All outgoing data headers are constructed locally. Inspect the original
+            // payload in place so the writer can move on to pending input feedback/audio.
+            val type = Wire.u32(inner, 8)
+            val size = inner.size - 12
+            desktopVideoDelivery.writeCompleted(chan, type, size, SystemClock.elapsedRealtime())
             if (chan != Ch.VIDEO) { // аудио моста: INIT/STOP всегда, DATA - первые и каждый 200-й
                 audioTx++
-                if (m.type == CarlifeAudio.TTS_INIT) ttsTxSinceInit = 0
-                val ttsHead = m.type == CarlifeAudio.TTS_DATA && ++ttsTxSinceInit <= TTS_TX_LOGGED
-                if (m.data.size <= 16 || audioTx <= 3 || audioTx % 200 == 0L || ttsHead) {
-                    AppLog.msg("TX", chan, inner.size, m.type, m.data.size, null, inner, ui = false)
+                if (type == CarlifeAudio.TTS_INIT) ttsTxSinceInit = 0
+                val ttsHead = type == CarlifeAudio.TTS_DATA && ++ttsTxSinceInit <= TTS_TX_LOGGED
+                if (size <= 16 || audioTx <= 3 || audioTx % 200 == 0L || ttsHead) {
+                    AppLog.msg("TX", chan, inner.size, type, size, null, inner, ui = false)
                 }
                 return
             }
-            if (m.data.isEmpty()) { // keepalive на PAUSE: пустой VIDEO_DATA (Desay) или VIDEO_HEARTBEAT (VW 20082120)
+            if (size == 0) { // keepalive на PAUSE: пустой VIDEO_DATA (Desay) или VIDEO_HEARTBEAT (VW 20082120)
                 vBeats++
-                if (vBeats <= 3) AppLog.msg("TX", chan, inner.size, m.type, m.declaredLen, null, inner)
+                if (vBeats <= 3) AppLog.msg("TX", chan, inner.size, type, size, null, inner)
                 return
             }
             vFrames++
-            vBytes += m.data.size
-            if (vFrames == 1L) WLog.ev(WLog.HS, "first-video", "bytes" to m.data.size)
-            val key = AnnexB.nalTypes(m.data).contains(5)
+            vBytes += size
+            if (vFrames == 1L) WLog.ev(WLog.HS, "first-video", "bytes" to size)
+            val nals = AnnexB.units(inner, 12, inner.size).map { it.type(inner) }.filter { it >= 0 }
+            val key = 5 in nals
             if (key) vKeys++
-            val nals = AnnexB.nalTypes(m.data)
             if (vFrames <= 5 || key) {
-                AppLog.msg("TX", chan, inner.size, m.type, m.declaredLen, "nal=$nals", inner, ui = vFrames <= 5)
+                AppLog.msg("TX", chan, inner.size, type, size, "nal=$nals", inner, ui = vFrames <= 5)
             }
         }
     }

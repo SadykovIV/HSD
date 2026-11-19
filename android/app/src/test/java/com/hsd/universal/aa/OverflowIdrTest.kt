@@ -7,6 +7,14 @@ import org.junit.Test
 
 /** Запросы IDR у энкодера при отказе очереди CarLife: не чаще раза в 1.5 с, поток продолжается с IDR. */
 class OverflowIdrTest {
+    @Test fun slowEncoderGetsOneRecoveryRequestWhileProducingItsKeyFrame() {
+        val recovery = DesktopIdrRecovery()
+        assertTrue(recovery.tryRequest(1000, 0, 700))
+        assertEquals(false, recovery.tryRequest(1300, 0, 710))
+        assertEquals(false, recovery.tryRequest(2000, 0, 680))
+        assertTrue(recovery.tryRequest(2500, 0, 650))
+        assertTrue(recovery.tryRequest(2800, 0, 18))
+    }
     private val aaCfg = Golden.hex("00000001 67 42c01f da0140") + Golden.hex("00000001 68 ce3c80")
     private val aaIdr = Golden.hex("00000001 65") + ByteArray(100) { (it + 1).toByte() }
     private val encCfg = Golden.hex("00000001 67 42001f ab 00000001 68 ce06e2")

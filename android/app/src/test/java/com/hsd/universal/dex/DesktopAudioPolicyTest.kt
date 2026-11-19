@@ -4,6 +4,16 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DesktopAudioPolicyTest {
+    @Test fun warnsBeforeAnAudibleRecorderRunsOutOfRoom() {
+        val budget = PlaybackReadBudget(64_000)
+        assertFalse(budget.underPressure(100_000, 20_000, 20_000, true))
+        assertFalse(budget.underPressure(150_000, 50_000, 20_000, true))
+        assertTrue(budget.underPressure(200_000, 50_000, 20_000, true))
+        assertTrue(budget.underPressure(280_000, 80_000, 20_000, false))
+        assertFalse(budget.underPressure(400_000, 120_000, 20_000, false))
+        assertFalse(budget.underPressure(450_000, 50_000, 20_000, true))
+        assertFalse(budget.underPressure(1_850_000, 50_000, 20_000, true))
+    }
     @Test fun captureRequiresEveryIndependentOptInAndLiveRoute() {
         assertTrue(DesktopAudioPolicy.mayCapture(true, true, true, true, true, true, true))
         for (missing in 0..6) {

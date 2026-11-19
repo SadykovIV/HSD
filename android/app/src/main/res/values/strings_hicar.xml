@@ -1,0 +1,14 @@
+<resources>
+    <string name="hicar_usb_no_ncm">HiCar USB · no USB interface with an IPv4 address appeared within 12 seconds. Check that wired HiCar is selected on the head unit.</string>
+    <string name="hicar_usb_wait_ncm">HiCar USB · waiting for the phone’s USB NCM network. Select wired HiCar on the head unit.</string>
+    <string name="hicar_usb_aoa">HiCar USB · the head unit advertised the %1$s USB accessory. Select wired HiCar on the head unit. HSD has kept your HiCar selection.</string>
+    <string name="route_hicar_wireless">Huawei HiCar · Bluetooth and Wi-Fi</string>
+    <string name="route_hicar_usb">Huawei HiCar · USB (NCM)</string>
+    <string name="hicar_usb_experimental">Experimental mode. Connect the cable and select HiCar on the head unit. The phone and head unit must establish a USB NCM network before connecting.</string>
+    <string name="hicar_experimental">Experimental HiCar: video, audio and controls over Bluetooth and Wi-Fi. Select HiCar on the head unit, then its paired Bluetooth device. Enter the code shown by the head unit through the HSD notification when pairing.</string>
+    <string name="hicar_pin_title">HiCar pairing</string>
+    <string name="hicar_pin_hint">Enter the six-digit code shown by the head unit. You can also open this dialog in HiCar connection settings.</string>
+    <string name="hicar_pin_button">Enter HiCar code</string>
+    <string name="hicar_pin_invalid">A valid six-digit code is required</string>
+    <string name="hicar_pin_wait">HiCar · enter the head unit code through the notification or connection settings</string>
+</resources>

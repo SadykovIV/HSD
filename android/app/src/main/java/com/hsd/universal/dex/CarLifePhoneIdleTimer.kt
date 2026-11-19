@@ -38,6 +38,7 @@ internal class CarLifePhoneIdleTimer(
     private var reading = false
     private var generation = 0L
     private var armedAt: Long? = null
+    private var requestedForActivity: Long? = null
     private var nextProbe = 0L
     private var systemTimeout = 0L
     private var selectedTimeout: PhoneIdleTimeout? = null
@@ -56,9 +57,12 @@ internal class CarLifePhoneIdleTimer(
         if (!active) return
         active = false
         main.removeCallbacks(tick)
-        context.contentResolver.unregisterContentObserver(observer)
-        disarm()
-        worker.shutdownNow()
+        try {
+            context.contentResolver.unregisterContentObserver(observer)
+        } finally {
+            disarm()
+            worker.shutdownNow()
+        }
     }
 
     private fun readTimeout() {
@@ -67,7 +71,7 @@ internal class CarLifePhoneIdleTimer(
         nextProbe = 0
     }
 
-    private fun eligible(): Boolean = !prefs.useSystemScreenTimeout && prefs.phoneIdleMode == PhoneIdleMode.PANEL && prefs.useDelegated &&
+    private fun eligible(): Boolean = prefs.phoneIdleMode == PhoneIdleMode.PANEL && prefs.useDelegated &&
         prefs.desktopPanelControl && DelegatedDesktopAccess.isReady(context) && DelegatedPanelAccess.hasPermission(context) &&
         sessionReady() && power.isInteractive && !keyguard.isKeyguardLocked && !keyguard.isDeviceLocked &&
         timeout in 1..Int.MAX_VALUE.toLong()
@@ -81,6 +85,7 @@ internal class CarLifePhoneIdleTimer(
         if (selected != selectedTimeout) {
             // Start a full interval without dropping the live session's guard.
             generation++
+            requestedForActivity = null
             if (armedAt != null) armedAt = now
             clockFailures = 0
             selectedTimeout = selected
@@ -88,14 +93,15 @@ internal class CarLifePhoneIdleTimer(
             nextProbe = 0
         }
         if (eligible()) {
-            // The request is asynchronous: "busy" can last several seconds before the
-            // panel lease acquires its own wake lock. Keep the unlocked USB session awake
-            // throughout the handoff, recovery and clock retries.
-            if (clockFailures == 0) guard.acquire(5_000)
-            if (DexState.phoneScreenOff || DexState.phoneScreenBusy) {
+            // The panel controller owns its own timed lock after a successful handoff.
+            // An unreadable clock or an unanswered request must allow Android to sleep.
+            if (DexState.phoneScreenOff) {
+                requestedForActivity = null
+                releaseGuard()
                 armedAt = now
                 nextProbe = now + timeout
-            } else {
+            } else if (!DexState.phoneScreenBusy) {
+                if (owned && !reading && clockFailures == 0 && requestedForActivity == null) guard.acquire(5_000)
                 if (armedAt == null) { armedAt = now; nextProbe = now }
                 if (!reading && now >= nextProbe) probe()
             }
@@ -135,14 +141,20 @@ internal class CarLifePhoneIdleTimer(
                     clockOwner = this
                     AppLog.i("DESKTOP PANEL TIMER: observing physical display idle during USB session", false)
                 }
+                if (requestedForActivity == activity) {
+                    nextProbe = now + 1_000
+                    return@post
+                }
+                requestedForActivity = null
                 val remaining = PhoneIdleDeadline.remaining(now, armedAt ?: now, activity, timeout) ?: return@post
                 if (remaining > 0 || now - before > 1_500) {
                     nextProbe = now + maxOf(remaining, 250)
                 } else if (!DexState.phoneScreenOff && !DexState.phoneScreenBusy) {
                     // Recheck the USB session and lock above, then use the same token-scoped panel command as the UI.
-                    armedAt = now
-                    nextProbe = now + timeout
-                    requestOff()
+                    requestedForActivity = activity
+                    nextProbe = now + 1_000
+                    guard.acquire(5_000)
+                    if (!requestOff()) releaseGuard()
                 }
                 refresh()
             }
@@ -153,6 +165,7 @@ internal class CarLifePhoneIdleTimer(
     private fun disarm() {
         if (armedAt != null) generation++
         armedAt = null
+        requestedForActivity = null
         clockFailures = 0
         if (clockOwner === this) clockOwner = null
         owned = false

@@ -26,7 +26,7 @@ def run(*args):
 decoded=work/'decoded';framework=work/'framework'
 run(java,'-jar',tool,'d',a.original,'-f','-o',decoded,'-p',framework)
 run(sys.executable,'-m','unittest','discover','-s',base/'tests','-p','test_*.py')
-run(sys.executable,base/profile.patch,decoded)
+run(sys.executable,base/profile.patch,decoded, *([profile.upstream_code] if profile.symbols is None else []))
 classes=work/'helper-classes';dex=work/'helper-dex'
 for folder in (classes,dex):
     if folder.exists():shutil.rmtree(folder)
@@ -36,7 +36,8 @@ if generated.exists():shutil.rmtree(generated)
 generated.mkdir()
 if profile.symbols is None:
     # Native renderer and its typed Binder client are supplied by the author's HeadSwap APK.
-    host_sources = [base/'HostedDisplay.java', base/'HSDHost.java', base/'ProjectionSettings.java',
+    host_sources = [base/'HostedDisplay.java', base/'HSDHost.java', base/'ProjectionSettings.java', base/'CarMenuButton.java',
+                    base/'ProjectionMusic.java',
                     base/'shared/com/hsd/universal/shared/ProjectionHost.java',
                     base/'shared/com/hsd/universal/shared/DesktopRenderPolicy.java',
                     base/'shared/com/hsd/universal/shared/EmbeddedTaskRestore.java']
@@ -94,7 +95,11 @@ for host in ([host_package, 'com.hsd.aa', 'com.hsd.universal'] if profile.code >
 if profile.symbols is None:
     with zipfile.ZipFile(final) as checked:
         assert b'com.headswap.desk.embed.IEmbeddedDisplayGateway' in checked.read('classes.dex')
-        assert b'com.hsd.universal' in checked.read('classes2.dex')
+        helper = checked.read('classes2.dex')
+        assert b'com.hsd.universal' in helper
+        if profile.upstream_code == 360:
+            assert b'Lru/drivedeck/hsd/ProjectionMusic;\0' in helper
+            assert all(name in helper for name in (b'resume\0', b'setMusicContent\0', b'returnToLauncher\0'))
     entries = {activity.get(android_name): activity for activity in manifest_root.find('application').findall('activity')}
     assert 'ru.drivedeck.launcher.MainActivity' in entries
     entry = entries['ru.drivedeck.launcher.HsdActivity']

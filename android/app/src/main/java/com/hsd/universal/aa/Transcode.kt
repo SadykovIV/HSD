@@ -75,6 +75,9 @@ interface VideoTranscoder {
 
     /** Peak source-to-encoder age since the previous control sample, independent of log sampling. */
     fun takeFrameLatencyMs(): Double = 0.0
+    /** Age of an input the encoder still owns. Null when this path cannot track its inputs. */
+    val pendingEncoderAgeMs: Double? get() = null
+    fun onDesktopTouchDown() {}
 
     /** Текущий битрейт энкодера, бит/с (0 = неизвестен). */
     val currentBitrate: Int get() = 0

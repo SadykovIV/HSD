@@ -2,10 +2,12 @@ package com.hsd.universal.link
 
 import com.hsd.universal.Ch
 import com.hsd.universal.CarLifeSession
+import com.hsd.universal.FrameParser
 import com.hsd.universal.Msg
 import com.hsd.universal.SessionConfig
 import com.hsd.universal.Wire
 import com.hsd.universal.aa.AaBridgeCore
+import com.hsd.universal.aa.CarlifeAudio
 import com.hsd.universal.link.diag.WLog
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -43,6 +45,40 @@ class TransportTest {
     }
 
     // ---------------- StreamTransport: то, что уходит в USB, не меняется ни на байт ----------------
+
+    @Test fun unrelatedBacklogCannotDropSpeechOrMusicConfiguration() {
+        val wire = ByteArrayOutputStream()
+        val transport = StreamTransport(BlockingIn(), wire, TransportCaps.USB_AOA, "queued", clock = clock)
+        val session = CarLifeSession(transport, SessionConfig(), AaBridgeCore(log = { _, _ -> }), onClosed = {})
+        val pcm = byteArrayOf(1, 2)
+        try {
+            repeat(181) { transport.send(Ch.VIDEO, pcm) }
+            assertTrue(session.sendAudio(Ch.MEDIA, CarlifeAudio.MEDIA_DATA, pcm))
+            repeat(180) { transport.send(Ch.MEDIA, pcm) }
+            assertFalse(session.sendAudio(Ch.MEDIA, CarlifeAudio.MEDIA_DATA, pcm))
+            assertTrue(session.sendAudio(Ch.MEDIA, CarlifeAudio.MEDIA_INIT, pcm))
+            assertTrue(session.sendAudio(Ch.TTS, CarlifeAudio.TTS_INIT, pcm))
+            assertTrue(session.sendAudio(Ch.TTS, CarlifeAudio.TTS_DATA, pcm))
+
+            val expected = setOf(Ch.MEDIA to CarlifeAudio.MEDIA_DATA, Ch.MEDIA to CarlifeAudio.MEDIA_INIT,
+                Ch.TTS to CarlifeAudio.TTS_INIT, Ch.TTS to CarlifeAudio.TTS_DATA)
+            val sent = CountDownLatch(expected.size)
+            transport.start({ _, _ -> }, { _, inner -> if (inner.size >= 12) sent.countDown() }, {})
+            assertTrue("Timed out writing both audio channels", sent.await(3, TimeUnit.SECONDS))
+            val bytes = wire.toByteArray()
+            val received = mutableListOf<Pair<Int, Int>>()
+            FrameParser().feed(bytes, 0, bytes.size) { channel, inner ->
+                Wire.parseData(inner)?.let { packet ->
+                    received += channel to packet.type
+                    assertArrayEquals(pcm, packet.data)
+                }
+            }
+            assertEquals(expected.size, received.size)
+            assertEquals(expected, received.toSet())
+        } finally {
+            session.close("test")
+        }
+    }
 
     /** Пишет каждый write() отдельной записью, flush отмечает отдельно. */
     private class RecordingOut : OutputStream() {
@@ -87,7 +123,9 @@ class TransportTest {
         assertEquals(Ch.VIDEO, written.poll(5, TimeUnit.SECONDS))
         t.send(Ch.MEDIA, media)
         assertEquals(Ch.MEDIA, written.poll(5, TimeUnit.SECONDS))
-        val expected = Wire.writeSequence(Ch.CMD, cmd) + Wire.writeSequence(Ch.VIDEO, video) + Wire.writeSequence(Ch.MEDIA, media)
+        val expected = listOf(Wire.outerHeader(Ch.CMD, cmd.size), cmd, Wire.outerHeader(Ch.VIDEO, video.size),
+            video.copyOfRange(0, 16384), video.copyOfRange(16384, 32768), video.copyOfRange(32768, video.size),
+            Wire.outerHeader(Ch.MEDIA, media.size), media)
         assertEquals("число write()", expected.size, out.calls.size)
         for (i in expected.indices) assertArrayEquals("write #$i", expected[i], out.calls[i])
         assertEquals("flush на сообщение", 3, out.flushes)

@@ -47,13 +47,16 @@ internal object ComponentPackages {
         check(it.longVersionCode >= spec.minCode) { "Обновите ${spec.title} до кода ${spec.minCode} или новее." }
     }
 
-    fun requireDriveDeck(ctx: Context) {
+    fun requireDriveDeck(ctx: Context): PackageInfo {
         val spec = DesktopComponent.DRIVEDECK
-        checkNotNull(trustedInstalled(ctx, spec)) { "Установите ${spec.title} (код ${spec.minCode} или новее)." }
+        val installed = checkNotNull(trustedInstalled(ctx, spec)) {
+            ctx.getString(com.hsd.universal.R.string.desktop_for_the_selected_desktop_install_drivedeck_it_shows_the, BuildConfig.BRAND)
+        }
         val component = ComponentName(spec.pkg, DesktopModePolicy.driveDeckHome(ctx))
         val activity = try { ctx.packageManager.getActivityInfo(component, 0) }
             catch (_: PackageManager.NameNotFoundException) { error("В установленном DriveDeck отсутствует рабочий стол.") }
         check(activity.exported && activity.enabled && activity.applicationInfo.enabled) { "Рабочий стол DriveDeck отключён." }
+        return installed
     }
 
     private fun dir(ctx: Context) = File(ctx.cacheDir, "verified-components").apply { mkdirs() }

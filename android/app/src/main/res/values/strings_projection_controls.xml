@@ -1,12 +1,27 @@
 <resources>
+    <string name="usb_reconnect_waiting">Waiting for the head unit</string>
+    <string name="activation_interrupted_by_cleanup">Android stopped HSD while clearing apps and ended desktop access. Reactivate using the selected method.</string>
+    <string name="activation_session_ended">Desktop access has ended. Activate again on the phone or from a computer.</string>
+    <string name="drivedeck_update_button">Update DriveDeck</string>
+    <string name="drivedeck_playback_update">Update DriveDeck to build 359 or later to prevent the launcher from pausing other music players.</string>
+    <string name="drivedeck_playback_local_apk">The published build predates the playback fix. Choose “Install from file” and select the DriveDeck APK supplied with HSD (build 359 or later).</string>
+    <string name="audio_timing_defaults">Default for head units</string>
+    <string name="audio_timing_unnamed_receiver">Head unit</string>
+    <string name="audio_timing_question">Play a video with speech or a hand clap. When do you hear it through the car speakers?</string>
+    <string name="audio_timing_matches">Sound and picture match</string>
+    <string name="audio_timing_early">I hear the sound before I see the movement</string>
+    <string name="audio_timing_late">I see the movement before I hear the sound</string>
+    <string name="audio_timing_amount">Difference in milliseconds (1–%1$d)</string>
+    <string name="audio_timing_auto_help">HSD aligns the streams automatically. The manual adjustment is zero.</string>
+    <string name="audio_timing_early_help">HSD delays audio by this amount. If you hear the clap 0.2 seconds early, enter 200.</string>
+    <string name="audio_timing_late_help">HSD reduces its audio wait down to immediate sending. If sound is 0.1 seconds late, enter 100. The head unit may add its own delay.</string>
+    <string name="audio_timing_applies">Applies on the next Android Auto or CarLife connection with audio through HSD. The head unit controls timing for direct Bluetooth playback.</string>
+    <string name="audio_timing_enable_save">Enable and save</string>
     <string name="desktop_fps_limit">Frame rate limit</string>
     <string name="desktop_fps_limit_value">Frame rate limit: %1$s</string>
     <string name="desktop_fps_limit_help">Limits the actual video frame rate. The head unit, connection or phone temperature may lower it further. Applies on the next connection.</string>
     <string name="desktop_av_sync_enabled">Synchronize audio with video</string>
     <string name="desktop_av_sync_help">Aligns audio with video in CarLife and Android Auto. Turn off to remove the additional synchronization delay; sound may then precede the picture. Applies on the next connection.</string>
-    <string name="desktop_av_sync_disabled">Audio/video synchronization is off. The saved delay correction will apply after synchronization is enabled.</string>
-    <string name="desktop_system_sleep">Use Android screen timeout and lock</string>
-    <string name="desktop_system_sleep_help">HSD does not keep the phone screen awake: Android controls screen timeout and locking. On some Android versions, head unit touches also extend this timeout. Manual panel blanking remains a separate action and does not lock the phone.</string>
     <string name="usb_background_setup">Open HSD to complete or restore activation. USB will start in the background when access is ready.</string>
     <string name="usb_background_permission">Open HSD to allow USB access.</string>
 </resources>

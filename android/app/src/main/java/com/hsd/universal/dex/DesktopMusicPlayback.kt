@@ -28,7 +28,6 @@ internal object DesktopMusicPlayback {
     private val link = DesktopMusicOutputLink(BridgeHost.GRACE_MS)
     private var ready: (() -> Boolean)? = null
     private var audioReady: (() -> Boolean)? = null
-    private var carriesAudio: (() -> Boolean)? = null
     private var autoplayAttempted = false
     private var wiredOutput = false
     private var observingUsb = false
@@ -57,8 +56,7 @@ internal object DesktopMusicPlayback {
     }
 
     fun attach(context: Context, serviceOwner: Any, owner: Any, isUsb: Boolean,
-        ready: () -> Boolean, audioReady: () -> Boolean, carriesAudio: () -> Boolean) = onMain {
-        if (!isUsb && !allowed(context)) { clear("unsupported link"); return@onMain }
+        ready: () -> Boolean, audioReady: () -> Boolean) = onMain {
         this.context = context.applicationContext
         wiredOutput = isUsb
         if (isUsb && !observingUsb) {
@@ -76,7 +74,6 @@ internal object DesktopMusicPlayback {
         link.attach(serviceOwner, owner, SystemClock.elapsedRealtime())
         this.ready = ready
         this.audioReady = audioReady
-        this.carriesAudio = carriesAudio
         autoplayAttempted = false
         main.removeCallbacks(tick)
         tick.run()
@@ -100,15 +97,15 @@ internal object DesktopMusicPlayback {
     }
 
     /** An old session cannot retire a replacement session. Physical detach may be reported later. */
-    fun linkClosed(owner: Any) = onMain {
-        if (!wiredOutput && link.owner === owner) link.serviceOwner?.let { service ->
-            outputLost(service, owner, receivingVideo(),
-                runCatching { carriesAudio?.invoke() == true }.getOrDefault(false))
+    fun linkClosed(owner: Any, sessionEnded: Boolean = false, hadPicture: Boolean = false) = onMain {
+        if (hadPicture && link.owner === owner) link.markReady()
+        if (sessionEnded && !wiredOutput) link.serviceOwner?.let { service ->
+            if (link.consumeDisconnect(service, owner, hadPicture || receivingVideo()))
+                context?.let { pauseCurrentPlayer(it, "wireless disconnect") }
         }
         if (!link.close(owner, SystemClock.elapsedRealtime())) return@onMain
         ready = null
         audioReady = null
-        carriesAudio = null
         scheduleNext()
     }
 
@@ -155,7 +152,7 @@ internal object DesktopMusicPlayback {
                     it.playbackInfo?.playbackType == MediaController.PlaybackInfo.PLAYBACK_TYPE_LOCAL &&
                     it.playbackInfo?.audioAttributes?.usage == AudioAttributes.USAGE_MEDIA
             }
-            val target = if (keySession == null) players.singleOrNull() else players.firstOrNull { it.sessionToken == keySession }
+            val target = players.firstOrNull { it.sessionToken == keySession } ?: players.singleOrNull()
             target ?: return
             selected = target.sessionToken
             if (retryToken != null && selected != retryToken) return
@@ -216,7 +213,7 @@ internal object DesktopMusicPlayback {
 
     fun serviceDestroyed(serviceOwner: Any, physicallyDetached: Boolean) = onMain {
         if (link.serviceOwner !== serviceOwner) return@onMain
-        link.owner?.let(::linkClosed)
+        link.owner?.let { linkClosed(it, sessionEnded = true) }
         // A failed reconnect may end its own service before new frames arrive.
         if (policy.hasPending) {
             link.clear()
@@ -234,14 +231,13 @@ internal object DesktopMusicPlayback {
 
     /** Also called when Stop is pressed after the foreground service has already left its grace. */
     fun stop(reason: String) = onMain {
-        // Stop is a loss of the proven audio output too. Pause before releasing the capture
+        // Stop ends a proven projection. Pause before releasing the capture
         // route, then discard any automatic-resume claim because this was an explicit stop.
         val app = context
         val owner = link.owner
         val service = link.serviceOwner
-        val audio = runCatching { carriesAudio?.invoke() == true }.getOrDefault(false)
         if (app != null && owner != null && service != null &&
-            link.consumeTransportLoss(service, owner, receivingVideo(), audio)) pauseCurrentPlayer(app, reason)
+            link.consumeDisconnect(service, owner, receivingVideo())) pauseCurrentPlayer(app, reason)
         clear(reason)
     }
 
@@ -331,7 +327,7 @@ internal object DesktopMusicPlayback {
     private fun clear(reason: String) {
         main.removeCallbacks(tick)
         cancelPending(reason)
-        link.clear(); ready = null; audioReady = null; carriesAudio = null; context = null; wiredOutput = false
+        link.clear(); ready = null; audioReady = null; context = null; wiredOutput = false
         main.removeCallbacks(tick)
     }
     private fun onMain(action: () -> Unit) {

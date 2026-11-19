@@ -4,4 +4,6 @@
 
     <string name="lang_title">Язык</string>
     <string name="lang_system">Системный</string>
+    <string name="projection_separate_navigation">Отдельный канал навигации</string>
+    <string name="projection_separate_navigation_help">Передавать подсказки через речевой канал магнитолы, если доступен совместимый канал. Иначе подсказки останутся в общем звуке. Применяется после переподключения.</string>
 </resources>

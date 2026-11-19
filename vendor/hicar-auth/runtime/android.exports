@@ -1,0 +1,4 @@
+{
+    global: Java_com_hsd_universal_hicar_HiCarNativeAuth_*;
+    local: *;
+};

@@ -33,34 +33,44 @@ internal object AudioQueueAdmission {
 
     fun offer(queue: BlockingQueue<QueuedTransportPacket>, packet: QueuedTransportPacket,
         nowMs: Long, expired: (Long) -> Unit, overflow: (Long) -> Unit) = synchronized(queue) {
-        if (packet.deadlineMs == Long.MAX_VALUE) {
+        if (packet.deadlineMs == Long.MAX_VALUE || (packet.inner.size <= MAX_PENDING_PCM_BYTES && queue.isEmpty())) {
             queue.offer(packet)
             return@synchronized
         }
         var old = 0L
+        var bytes = 0L
+        var count = 0
         // Expire at admission as well as at dequeue. Relying only on the writer permits an
         // unbounded PCM queue when e.g. MEDIA stalls while the independent VIDEO socket drains.
         for (queued in queue) {
-            if (queued.deadlineMs != Long.MAX_VALUE && nowMs >= queued.deadlineMs && queue.remove(queued)) old++
+            if (queued.deadlineMs == Long.MAX_VALUE) continue
+            if (nowMs >= queued.deadlineMs) {
+                if (queue.remove(queued)) old++
+            } else if (queued.chan == packet.chan) {
+                bytes += queued.inner.size
+                count++
+            }
         }
         if (old > 0) expired(old)
         if (packet.inner.size > MAX_PENDING_PCM_BYTES) {
             overflow(1)
             return@synchronized
         }
-        val same = queue.filter { it.chan == packet.chan && it.deadlineMs != Long.MAX_VALUE }.sortedBy { it.sequence }
-        var bytes = same.sumOf { it.inner.size.toLong() }
-        var count = same.size
-        var evicted = 0L
-        for (queued in same) {
-            if (bytes + packet.inner.size <= MAX_PENDING_PCM_BYTES && count < MAX_PENDING_PCM_PACKETS) break
-            // A concurrent take may already have removed this packet. Either way it no longer
-            // contributes to the waiting budget; count a discard only when we actually remove it.
-            if (queue.remove(queued)) evicted++
-            bytes -= queued.inner.size
-            count--
+        if (bytes + packet.inner.size > MAX_PENDING_PCM_BYTES || count >= MAX_PENDING_PCM_PACKETS) {
+            // The writer may have drained packets since the scan. Recount a new snapshot
+            // before evicting, and preserve FIFO even for queues whose iterator is unordered.
+            val same = queue.filter { it.chan == packet.chan && it.deadlineMs != Long.MAX_VALUE }.sortedBy { it.sequence }
+            bytes = same.sumOf { it.inner.size.toLong() }
+            count = same.size
+            var evicted = 0L
+            for (queued in same) {
+                if (bytes + packet.inner.size <= MAX_PENDING_PCM_BYTES && count < MAX_PENDING_PCM_PACKETS) break
+                if (queue.remove(queued)) evicted++
+                bytes -= queued.inner.size
+                count--
+            }
+            if (evicted > 0) overflow(evicted)
         }
-        if (evicted > 0) overflow(evicted)
         queue.offer(packet)
     }
 }

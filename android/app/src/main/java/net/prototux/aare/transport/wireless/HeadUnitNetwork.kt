@@ -27,6 +27,7 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CancellationException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * The head unit's Wi-Fi network for one session: joined with a [WifiNetworkSpecifier] request,
@@ -65,7 +66,7 @@ internal class HeadUnitNetwork(
     @Volatile private var released = false
 
     /** Blocks until the phone has an IPv4 address on the head unit's network, or fails. */
-    fun join(credentials: WifiCredentials): JoinResult {
+    fun join(credentials: WifiCredentials, directedScan: Boolean = false): JoinResult {
         if (released) return JoinResult.Failed(WppStatus.WIFI_NETWORK_UNAVAILABLE, "cancelled")
         val radio = ProjectionWifi.read(context)
         if (radio.needsEnable) {
@@ -75,7 +76,7 @@ internal class HeadUnitNetwork(
         findExisting(credentials)?.let { return it }
 
         val specifier = try {
-            specifier(credentials)
+            specifier(credentials, directedScan)
         } catch (e: IllegalArgumentException) {
             return JoinResult.Failed(WppStatus.WIFI_INCORRECT_CREDENTIALS, "unusable credentials: ${e.message}")
         }
@@ -86,41 +87,56 @@ internal class HeadUnitNetwork(
             .setNetworkSpecifier(specifier)
             .build()
         val result = CompletableFuture<Pair<Network, LinkProperties>?>()
+        val attempt = nextAttempt.incrementAndGet()
+        val failureReason = CompletableFuture<Int>()
         pending = result
         val cb = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(n: Network) {
-                log.i("wireless: \"${credentials.ssid}\" available as $n")
+                log.i("wireless[$attempt]: Wi-Fi available; waiting for a local address")
                 if (!released) network = n
             }
 
             // onAvailable can come before DHCP results are visible; wait for an IPv4 address.
             override fun onLinkPropertiesChanged(n: Network, lp: LinkProperties) {
-                if (n == network && localAddress(lp) != null) result.complete(n to lp)
+                if (n == network && localAddress(lp) != null && result.complete(n to lp))
+                    log.i("wireless[$attempt]: local address acquired")
             }
 
             // Not found within the timeout, or the user declined the dialog.
             override fun onUnavailable() {
+                log.w("wireless[$attempt]: Android marked the local Wi-Fi request unavailable")
                 result.complete(null)
             }
 
             override fun onLost(n: Network) {
                 if (n != network) return
-                log.w("wireless: lost the head unit's network \"${credentials.ssid}\"")
+                log.w("wireless[$attempt]: lost the head unit's Wi-Fi network")
                 network = null
-                if (!result.complete(null)) onLost?.invoke()
+                if (!result.completeExceptionally(IOException(context.getString(R.string.projection_wifi_lost)))) onLost?.invoke()
             }
         }
         callback = cb
-        log.i("wireless: requesting network \"${credentials.ssid}\" (${credentials.security}); Android may ask the user to approve")
-        connectivity.requestNetwork(request, cb, timeoutMs.toInt())
-        if (released) { // raced with release()
-            runCatching { connectivity.unregisterNetworkCallback(cb) }
-            return JoinResult.Failed(WppStatus.WIFI_NETWORK_UNAVAILABLE, "cancelled")
-        }
+        val stopDiagnostics = if (Build.VERSION.SDK_INT >= 34) observeFailures(specifier) { reason ->
+            log.w("wireless[$attempt]: ${failureDetail(reason)}")
+            failureReason.complete(reason)
+        } else null
+        log.i("wireless[$attempt]: requesting exact SSID (${credentials.security}, directedScan=$directedScan, failureListener=${stopDiagnostics != null})")
         return try {
-            val (target, properties) = result.get(timeoutMs + 5_000, TimeUnit.MILLISECONDS)
-                ?: return JoinResult.Failed(WppStatus.WIFI_NETWORK_UNAVAILABLE,
-                    context.getString(R.string.projection_wifi_unavailable))
+            connectivity.requestNetwork(request, cb, timeoutMs.toInt())
+            if (released) {
+                runCatching { connectivity.unregisterNetworkCallback(cb) }
+                return JoinResult.Failed(WppStatus.WIFI_NETWORK_UNAVAILABLE, "cancelled")
+            }
+            val link = result.get(timeoutMs + 5_000, TimeUnit.MILLISECONDS)
+            if (link == null) {
+                // Connectivity and Wi-Fi report the same attempt on different callback queues.
+                val detail = if (stopDiagnostics != null && !released) try {
+                    failureDetail(failureReason.get(FAILURE_DETAIL_WAIT_MS, TimeUnit.MILLISECONDS))
+                } catch (_: TimeoutException) { null } else null
+                return JoinResult.Failed(WppStatus.WIFI_NETWORK_UNAVAILABLE,
+                    detail ?: context.getString(R.string.projection_wifi_unavailable))
+            }
+            val (target, properties) = link
             // The callback and DHCP do not grant this UID permission to bind. Verify before
             // telling the head unit SUCCESS, using the same socket operation as projection.
             access.socket(target).use { }
@@ -128,11 +144,13 @@ internal class HeadUnitNetwork(
             else JoinResult.Failed(WppStatus.WIFI_NETWORK_UNAVAILABLE, context.getString(R.string.projection_wifi_lost))
         } catch (error: IOException) {
             JoinResult.Failed(WppStatus.WIFI_NETWORK_UNAVAILABLE, error.message.orEmpty())
+        } catch (error: java.util.concurrent.ExecutionException) {
+            JoinResult.Failed(WppStatus.WIFI_NETWORK_UNAVAILABLE, error.cause?.message.orEmpty())
         } catch (_: CancellationException) {
             JoinResult.Failed(WppStatus.WIFI_NETWORK_UNAVAILABLE, "cancelled")
         } catch (e: TimeoutException) {
-            JoinResult.Failed(WppStatus.WIFI_NETWORK_UNAVAILABLE, "no address on \"${credentials.ssid}\" after ${timeoutMs / 1000} s")
-        }
+            JoinResult.Failed(WppStatus.WIFI_NETWORK_UNAVAILABLE, "no Wi-Fi address after ${timeoutMs / 1000} s")
+        } finally { stopDiagnostics?.invoke() }
     }
 
     /** Drops the network request (Android then disconnects from the head unit). Idempotent. */
@@ -144,8 +162,30 @@ internal class HeadUnitNetwork(
         network = null
     }
 
-    private fun specifier(c: WifiCredentials): WifiNetworkSpecifier {
-        val builder = WifiNetworkSpecifier.Builder().setSsid(c.ssid)
+    @android.annotation.TargetApi(34)
+    private fun observeFailures(specifier: WifiNetworkSpecifier, report: (Int) -> Unit): (() -> Unit)? {
+        val manager = wifi ?: return null
+        val listener = WifiManager.LocalOnlyConnectionFailureListener { failed, reason ->
+            if (failed == specifier && !released) report(reason)
+        }
+        try { manager.addLocalOnlyConnectionFailureListener(context.mainExecutor, listener) }
+        catch (_: SecurityException) { return null }
+        catch (_: UnsupportedOperationException) { return null }
+        return { try { manager.removeLocalOnlyConnectionFailureListener(listener) } catch (_: RuntimeException) {} }
+    }
+
+    private fun failureDetail(reason: Int): String = context.getString(when (reason) {
+        WifiManager.STATUS_LOCAL_ONLY_CONNECTION_FAILURE_NOT_FOUND -> R.string.projection_wifi_not_found
+        WifiManager.STATUS_LOCAL_ONLY_CONNECTION_FAILURE_NO_RESPONSE -> R.string.projection_wifi_no_response
+        WifiManager.STATUS_LOCAL_ONLY_CONNECTION_FAILURE_ASSOCIATION -> R.string.projection_wifi_association
+        WifiManager.STATUS_LOCAL_ONLY_CONNECTION_FAILURE_AUTHENTICATION -> R.string.projection_wifi_authentication
+        WifiManager.STATUS_LOCAL_ONLY_CONNECTION_FAILURE_IP_PROVISIONING -> R.string.projection_wifi_no_address
+        WifiManager.STATUS_LOCAL_ONLY_CONNECTION_FAILURE_USER_REJECT -> R.string.projection_wifi_declined
+        else -> R.string.projection_wifi_unavailable
+    })
+
+    private fun specifier(c: WifiCredentials, directedScan: Boolean): WifiNetworkSpecifier {
+        val builder = WifiNetworkSpecifier.Builder().setSsid(c.ssid).setIsHiddenSsid(directedScan)
         val bssid = c.bssid
         if (matchBssid && bssid != null) builder.setBssid(MacAddress.fromString(bssid))
         when (c.security) {
@@ -222,7 +262,7 @@ internal class HeadUnitNetwork(
             log.i("wireless: existing Wi-Fi could not be bound (${error.javaClass.simpleName}); requesting a session network")
             return null
         }
-        log.i("wireless: already connected to \"$ssid\", using that network")
+        log.i("wireless: reusing matching Wi-Fi network")
         network = n
         callback = cb
         if (released || connectivity.getLinkProperties(n) == null) {
@@ -235,7 +275,7 @@ internal class HeadUnitNetwork(
 
     private fun onExistingLost(n: Network, found: CompletableFuture<Network>) {
         if (n != network || !found.isDone) return
-        log.w("wireless: lost the head unit's network \"$ssid\"")
+        log.w("wireless: lost the head unit's Wi-Fi network")
         network = null
         onLost?.invoke()
     }
@@ -260,5 +300,7 @@ internal class HeadUnitNetwork(
 
     private companion object {
         const val EXISTING_LOOKUP_MS = 700L
+        const val FAILURE_DETAIL_WAIT_MS = 750L
+        val nextAttempt = AtomicLong()
     }
 }

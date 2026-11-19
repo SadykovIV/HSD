@@ -4,7 +4,6 @@ import androidx.core.view.WindowCompat
 import com.hsd.universal.compat.safeInsets
 
 import com.hsd.universal.R
-import com.hsd.universal.BuildConfig
 
 import com.hsd.universal.DesktopTransport
 
@@ -20,7 +19,6 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import com.hsd.universal.update.ComponentUpdatesActivity
 import com.hsd.universal.update.ComponentPackages
-import com.hsd.universal.update.DesktopComponent
 import com.hsd.universal.component.DesktopComponents
 import com.hsd.universal.CarLifeState
 
@@ -81,8 +79,7 @@ class DesktopOnboardingActivity : Activity() {
             1 -> permissions(body)
             else -> return
         }
-        if (step < 2) ui.button(body, getString(R.string.desktop_next)) { moveTo(step + 1) }
-            .isEnabled = step != 0 || profileAvailable()
+        ui.button(body, getString(R.string.desktop_next)) { moveTo(step + 1) }
         if (step == 0 && packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_USB_HOST)) {
             ui.button(body, getString(R.string.usb_helper_title)) { startActivity(Intent(this, UsbActivationActivity::class.java)) }
         }
@@ -104,18 +101,20 @@ class DesktopOnboardingActivity : Activity() {
         }
         ui.text(card, getString(R.string.desktop_desktop_32f4, name), 18f, true)
         ui.text(card, when (prefs.desktopMode) {
-            DesktopModePolicy.DRIVEDECK -> getString(R.string.desktop_for_the_selected_desktop_install_drivedeck_it_shows_the, BuildConfig.BRAND)
+            DesktopModePolicy.DRIVEDECK -> runCatching { ComponentPackages.requireDriveDeck(this) }.fold(
+                onSuccess = { getString(R.string.desktop_installed_build, it.versionName.orEmpty(), it.longVersionCode) },
+                onFailure = { it.message ?: getString(R.string.desktop_open_the_profile_list_again_and_check_the_package) }
+            )
             DesktopModePolicy.SAMSUNG_DEX -> getString(R.string.desktop_it_uses_a_samsung_desktop_which_does_not_require)
             else -> if (selected != null) getString(R.string.desktop_the_installed_compatible_component_is_selected_and_its_updates)
                 else getString(R.string.desktop_android_desktop_is_already_built_in_you_don_t)
         })
         ui.button(card, getString(R.string.desktop_components, DesktopTransport.appName)) { startActivity(Intent(this, ComponentUpdatesActivity::class.java)) }
         ui.button(card, getString(R.string.desktop_choose_desktop)) { chooseProfile() }
-        ui.text(card, if (profileAvailable()) getString(R.string.desktop_desktop_ready_for_setup)
-            else getString(R.string.desktop_install_the_selected_component_or_select_the_built_in), 14f)
+        if (prefs.desktopMode == DesktopModePolicy.SAMSUNG_DEX && !SamsungDexCapability.isAvailable(this)) {
+            ui.text(card, getString(R.string.desktop_install_the_selected_component_or_select_the_built_in), 14f)
+        }
     }
-
-    private fun profileAvailable() = profileAvailable(this, prefs)
 
     private fun choiceUnlocked(): Boolean = !CarLifeState.running && !PhonePairingService.active && !DexState.running
 
@@ -170,7 +169,7 @@ class DesktopOnboardingActivity : Activity() {
 
     companion object {
         internal fun profileAvailable(context: Context, prefs: DexPrefs): Boolean = when (prefs.desktopMode) {
-            DesktopModePolicy.DRIVEDECK -> runCatching { ComponentPackages.trustedInstalled(context, DesktopComponent.DRIVEDECK) != null }.getOrDefault(false)
+            DesktopModePolicy.DRIVEDECK -> runCatching { ComponentPackages.requireDriveDeck(context) }.isSuccess
             DesktopModePolicy.SAMSUNG_DEX -> SamsungDexCapability.isAvailable(context)
             else -> true
         }

@@ -136,6 +136,9 @@ class ComponentUpdatesActivity : Activity() {
         fun refresh() {
             val current = ComponentPackages.installed(this@ComponentUpdatesActivity, spec)
             version.text = if (current == null) getString(R.string.desktop_not_installed) else getString(R.string.desktop_installed_build, current.versionName, current.longVersionCode)
+            if (spec.needsPlaybackUpdate(current?.longVersionCode)) {
+                version.append("\n" + getString(R.string.drivedeck_playback_update))
+            }
             val next = available?.takeIf { current == null || it.code > current.longVersionCode }
             remote.text = getString(R.string.desktop_build_5760, if (current == null) getString(R.string.apps_download) else getString(R.string.desktop_update_to), next?.version, next?.code)
             remote.visibility = if (next != null) View.VISIBLE else View.GONE
@@ -173,6 +176,8 @@ class ComponentUpdatesActivity : Activity() {
                 available = newest
                 val current = ComponentPackages.installed(this@ComponentUpdatesActivity, spec)
                 status.text = when {
+                    spec.needsPlaybackUpdate(newest?.code) && (current == null || spec.needsPlaybackUpdate(current.longVersionCode)) ->
+                        getString(R.string.drivedeck_playback_local_apk)
                     newest == null -> getString(R.string.desktop_compatible_release_of_the_component_was_not_found)
                     current == null -> getString(R.string.desktop_available_to_install)
                     current.longVersionCode >= newest.code -> getString(R.string.desktop_up_to_date)

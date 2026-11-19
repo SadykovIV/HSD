@@ -28,10 +28,13 @@ object DesktopEncoderSupport {
         return surfaceEncoders(mime, ceiling)(width, height, fps)?.takeIf { it.maxFps >= fps }
     }
 
+    private fun encodersFor(mime: String) = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
+        .filter { it.isEncoder && it.supportedTypes.any { type -> type.equals(mime, true) } }
+        .sortedByDescending { it.isHardwareAccelerated }
+
     /** Snapshot the available Surface encoders once for an entire negotiation. */
     internal fun surfaceEncoders(mime: String, ceiling: Int): (Int, Int, Int) -> Encoding? {
-        val encoders = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.mapNotNull { info ->
-            if (!info.isEncoder || info.supportedTypes.none { it.equals(mime, true) }) return@mapNotNull null
+        val encoders = encodersFor(mime).mapNotNull { info ->
             runCatching {
                 val caps = info.getCapabilitiesForType(mime)
                 val video = caps.videoCapabilities
@@ -55,9 +58,7 @@ object DesktopEncoderSupport {
     }
 
     internal fun encoderName(width: Int, height: Int, fps: Int, bitrate: Int, mime: String = MIME): String = select(
-        MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.filter {
-            it.isEncoder && it.supportedTypes.any { type -> type.equals(mime, ignoreCase = true) }
-        }.map { info -> Candidate(info.name) { w, h, rate, bps -> supports(info, w, h, rate, bps, mime) } },
+        encodersFor(mime).map { info -> Candidate(info.name) { w, h, rate, bps -> supports(info, w, h, rate, bps, mime) } },
         width, height, fps, bitrate,
     )
 

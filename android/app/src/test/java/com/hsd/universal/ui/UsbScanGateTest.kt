@@ -5,6 +5,17 @@ import org.junit.Test
 import com.hsd.universal.ProjectionRoute
 
 class UsbScanGateTest {
+    @Test fun hicarUsbKeepsItsSelectionWhenAoaAppearsOrReenumerates() {
+        val policy = WiredAccessorySelection()
+        val hicar = ProjectionRoute.HICAR_USB
+        val baidu = checkNotNull(UsbAccessoryPolicy.route("Baidu", "CarLife"))
+        val aa = checkNotNull(UsbAccessoryPolicy.route("Android", "Android Auto"))
+        for (visible in listOf(emptySet(), setOf(baidu), emptySet(), setOf(aa), setOf(baidu, aa))) {
+            assertEquals(hicar, policy.observe(hicar, visible))
+        }
+        assertEquals(setOf(aa, baidu), ProjectionRoute.entries.filter { it.usesUsbAccessory }.toSet())
+    }
+
     @Test fun delayedEnumerationSelectsTheNewWiredRouteOnlyOnce() {
         val routes = WiredAccessorySelection()
         val aa = ProjectionRoute.USB

@@ -33,6 +33,10 @@ internal class CarPlayProjection(
     private val delivery = DesktopVideoDelivery()
     private var desktop: DesktopProjectionSource? = null
     @Volatile private var air: CarPlayAirSession? = null
+    private var mediaOutput: com.hsd.universal.carplay.CarPlayQueuedAudio? = null
+    private var navigationOutput: com.hsd.universal.carplay.CarPlayQueuedAudio? = null
+    private var navigationConverter: com.hsd.universal.dex.ProjectionPcmConverter? = null
+    private var navigationActive = false
     private var display: CarPlayAirSession.Display? = null
     private class Controls(val descriptor: ByteArray) {
         val touch = CarPlayTouchLayout.parse(descriptor)
@@ -50,19 +54,25 @@ internal class CarPlayProjection(
             try {
                 val endpoint = CarPlayBootstrap(context, lifetime, status).connect()
                 status(context.getString(R.string.desktop_carplay_checking_airplay_pairing))
-                val session = CarPlayAirSession(context, endpoint, lifetime, ::input, ::linkEnded)
+                val session = CarPlayAirSession(context, endpoint, lifetime, ::input, ::linkEnded, ::screenFocus)
                 val geometry = session.start()
                 main.post {
                     if (!closing.get()) {
                         try {
                             display = geometry
                             air = session
+                            mediaOutput = session.audio?.let {
+                                com.hsd.universal.carplay.CarPlayQueuedAudio(it, ::linkEnded).also { output -> lifetime.own(output::close) }
+                            }
+                            navigationOutput = session.navigationAudio?.let {
+                                com.hsd.universal.carplay.CarPlayQueuedAudio(it, ::linkEnded).also { output -> lifetime.own(output::close) }
+                            }
                             CarLifeState.auth = "iAP2 · Pair Verify"
                             CarLifeState.protocol = "CarPlay"
                             val source = DesktopProjectionSource(context, this, false, false, ::stop)
                             desktop = source
                             delivery.start(SystemClock.elapsedRealtime())
-                            main.postDelayed(frameTimeout, 55_000)
+                            if (session.screenProjected) main.postDelayed(frameTimeout, 55_000)
                             source.open(geometry.width, geometry.height, geometry.fps)
                         } catch (e: Exception) {
                             stop(e.message ?: context.getString(R.string.desktop_could_not_open_the_desktop))
@@ -79,7 +89,7 @@ internal class CarPlayProjection(
         val session = air ?: return false
         if (closing.get()) return false
         return try {
-            val written = session.video.send(payload, ptsUs)
+            val written = session.sendVideo(payload, ptsUs)
             if (written) {
                 delivery.frameWritten(SystemClock.elapsedRealtime())
                 if (first.compareAndSet(true, false)) {
@@ -100,11 +110,10 @@ internal class CarPlayProjection(
     }
 
     override fun audio(type: Int, pcm: ByteArray, ptsUs: Long): Boolean {
-        val sender = air?.audio ?: return false
+        val sender = mediaOutput ?: return false
         if (closing.get()) return false
         return try {
-            if (type == CarlifeAudio.MEDIA_DATA) sender.offer(pcm, ptsUs)
-            true
+            type != CarlifeAudio.MEDIA_DATA || sender.offer(pcm, ptsUs)
         } catch (e: Exception) {
             linkEnded(e)
             false
@@ -114,7 +123,44 @@ internal class CarPlayProjection(
     override fun audioRate() = air?.audio?.rate
     override fun audioOutputAvailable() = !closing.get() && !first.get() && air?.audio != null
 
-    override fun freshVideo() = !closing.get() && delivery.isFlowing(SystemClock.elapsedRealtime())
+    override fun navigationAvailable() = !closing.get() && air?.navigationAudio != null
+
+    override fun navigation(pcm: ByteArray, ptsUs: Long, active: Boolean): Boolean {
+        val sender = air?.navigationAudio ?: return false
+        val output = navigationOutput ?: return false
+        if (closing.get()) return false
+        return try {
+            if (active) {
+                if (!navigationActive) navigationConverter = com.hsd.universal.dex.ProjectionPcmConverter(sender.rate, sender.channels)
+                val converted = checkNotNull(navigationConverter).convert(pcm)
+                if (converted.isNotEmpty() && !output.offer(converted, ptsUs)) return false
+            } else if (navigationActive) output.endSegment()
+            navigationActive = active
+            true
+        } catch (e: Exception) {
+            linkEnded(e)
+            false
+        }
+    }
+
+    override val repeatAvcParameterSets = true
+    override fun freshVideo() = !closing.get() && air?.screenProjected == true && delivery.isFlowing(SystemClock.elapsedRealtime())
+
+    private fun screenFocus(projected: Boolean) {
+        main.post {
+            if (closing.get()) return@post
+            main.removeCallbacks(frameTimeout)
+            if (projected) {
+                delivery.start(SystemClock.elapsedRealtime())
+                desktop?.requestKeyFrame()
+                if (first.get()) main.postDelayed(frameTimeout, 55_000)
+            } else {
+                desktop?.cancelTouch()
+                fingers.clear()
+                delivery.pause()
+            }
+        }
+    }
 
     private fun input(command: Map<*, *>) {
         if (command["type"] != "hidSendReport") return
@@ -122,7 +168,7 @@ internal class CarPlayProjection(
         val report = params["hidReport"] as? ByteArray ?: return
         val id = params["uuid"]?.toString() ?: return
         main.post {
-            if (closing.get()) return@post
+            if (closing.get() || air?.screenProjected != true) return@post
             val g = display ?: return@post
             val descriptor = (params["descriptor"] as? ByteArray) ?: g.hid[id]
             val device = descriptor?.let { desc ->
@@ -171,6 +217,8 @@ internal class CarPlayProjection(
         desktop?.home()
     }
 
+    override fun carMenu() { if (!closing.get()) air?.requestCarMenu() }
+
     override fun panel(off: Boolean) {
         desktop?.setPhoneScreenOff(off)
     }
@@ -195,7 +243,7 @@ internal class CarPlayProjection(
             val source = desktop
             desktop = null
             air = null
-            if (source == null) ended(message) else source.close { ended(message) }
+            if (source == null) ended(message) else source.close(sessionEnded = true, hadPicture = firstFrameAt != null) { ended(message) }
         }
     }
 }

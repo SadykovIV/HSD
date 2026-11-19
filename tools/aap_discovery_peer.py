@@ -195,5 +195,5 @@ if __name__ == '__main__':
     args = parser.parse_args()
     CERTIFICATE, PRIVATE_KEY, RESULTS = args.certificate, args.key, args.results
     with Server(('127.0.0.1', args.port), Peer) as server:
-        print(f'Independent OpenSSL receiver listening on loopback:{args.port}', flush=True)
+        print(f'Independent OpenSSL receiver listening on loopback:{server.server_address[1]}', flush=True)
         server.serve_forever()

@@ -8,6 +8,8 @@ internal interface ProjectionSession {
 
     fun home()
 
+    fun carMenu()
+
     fun panel(off: Boolean)
 
     fun stop(message: String)

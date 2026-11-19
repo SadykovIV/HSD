@@ -16,6 +16,32 @@ import java.security.SecureRandom
 class AirPlayPairingTest {
     private val random = SecureRandom()
 
+    @Test fun savedKeyVerifiesTwoIndependentSessionsWithoutRepeatingSetup() {
+        val receiver = CarPlayTestPeer()
+        val io = TlvTransport(receiver::handle)
+        val keys = AirPlayCrypto.ed25519Generate()
+        val id = ControllerIdentity("controller", keys.privateKey, keys.publicKey)
+        val pinned = PairSetupClient(id, io) {}.run()!!.publicKey
+        repeat(2) {
+            val session = PairVerifyClient(id, io) {}.run(pinned)
+            assertArrayEquals(receiver.lastReadKey, session.phoneWriteKey)
+        }
+    }
+
+    @Test fun correctFinalStateWithAnErrorCannotAuthorizeAControlSession() {
+        val receiver = CarPlayTestPeer()
+        val keys = AirPlayCrypto.ed25519Generate()
+        val id = ControllerIdentity("controller", keys.privateKey, keys.publicKey)
+        val pinned = PairSetupClient(id, TlvTransport(receiver::handle)) {}.run()!!.publicKey
+        val io = TlvTransport { path, request ->
+            val result = receiver.handle(path, request)
+            if (Tlv8.decode(result)[Tlv8.TYPE_STATE]!!.single().toInt() == 4)
+                result + Tlv8.encode(listOf(Tlv8.Item(Tlv8.TYPE_ERROR, byteArrayOf(2))))
+            else result
+        }
+        org.junit.Assert.assertThrows(java.net.ProtocolException::class.java) { PairVerifyClient(id, io) {}.run(pinned) }
+    }
+
     @Test
     fun pairSetupThenPairVerifyAgainstCarPlayTestPeer() {
         val receiver = CarPlayTestPeer()

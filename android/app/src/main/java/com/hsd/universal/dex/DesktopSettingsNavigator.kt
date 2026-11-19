@@ -41,7 +41,7 @@ internal class DesktopSettingsNavigator(
         content = ui.group(container)
     }
 
-    fun block(title: String): LinearLayout = ui.section(index, title)
+    fun block(title: String? = null): LinearLayout = ui.section(index, title)
 
     fun subpage(id: String, title: String, summary: String): LinearLayout {
         check(id.isNotEmpty() && id !in pages)

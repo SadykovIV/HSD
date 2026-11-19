@@ -538,6 +538,9 @@ class AudioChannel(service: Service, private val listener: Listener? = null,
         get() = selectedIndex?.let { service.mediaSinkService.getAudioConfigs(it) }
     @Volatile var droppedChunks = 0L
         private set
+    private val receiverWindow = Object()
+
+    override fun onAcked() = synchronized(receiverWindow) { receiverWindow.notifyAll() }
 
     override fun onConfig(cfg: Config) {
         val formats = service.mediaSinkService.audioConfigsList
@@ -548,12 +551,21 @@ class AudioChannel(service: Service, private val listener: Listener? = null,
     }
 
     /** Opens a playback session on the head unit (call when sound starts). */
-    fun startPlayback() {
+    fun startPlayback() = synchronized(receiverWindow) {
         if (ready && !started) selectedIndex?.let(::startStream)
+        Unit
     }
 
     /** Closes the session (call after a short silence, so the head unit can restore its own audio). */
-    fun stopPlayback() = stopStream()
+    fun stopPlayback() = synchronized(receiverWindow) {
+        stopStream()
+        receiverWindow.notifyAll()
+    }
+
+    override fun onClosed() = synchronized(receiverWindow) {
+        super.onClosed()
+        receiverWindow.notifyAll()
+    }
 
     /**
      * Sends a PCM chunk (10 bytes of headroom before [offset]). Returns false, dropping the chunk,
@@ -563,11 +575,34 @@ class AudioChannel(service: Service, private val listener: Listener? = null,
     val hasRoom: Boolean get() = started && (ackless || unacked.get() < maxUnacked + SLACK)
 
     @JvmOverloads
-    fun sendPcm(buf: ByteArray, offset: Int, length: Int, timestampUs: Long, onSent: (() -> Unit)? = null): Boolean {
-        if (!started) return false
-        if (!ackless && unacked.get() >= maxUnacked + SLACK) { droppedChunks++; noteAttempt(); return false }
-        sendData(buf, offset, length, timestampUs, Priority.AUDIO, onSent)
-        return true
+    fun sendPcm(buf: ByteArray, offset: Int, length: Int, timestampUs: Long, onSent: (() -> Unit)? = null): Boolean =
+        sendPcm(buf, offset, length, timestampUs, 0, { true }, onSent)
+
+    /** The PCM worker may use the packet's remaining playout budget to wait for a burst ACK. */
+    fun sendPcm(buf: ByteArray, offset: Int, length: Int, timestampUs: Long, deadlineUs: Long,
+                current: () -> Boolean, onSent: (() -> Unit)? = null): Boolean = synchronized(receiverWindow) {
+        val stream = mediaSession
+        var waited = false
+        while (started && stream == mediaSession && current()) {
+            val remaining = deadlineUs - System.nanoTime() / 1000
+            if (hasRoom && (!waited || remaining > 0)) {
+                sendData(buf, offset, length, timestampUs, Priority.AUDIO, onSent)
+                return true
+            }
+            if (remaining <= 0 || deadlineUs == 0L) {
+                droppedChunks++
+                if (!hasRoom) noteAttempt()
+                return false
+            }
+            try {
+                waited = true
+                java.util.concurrent.TimeUnit.MICROSECONDS.timedWait(receiverWindow, remaining)
+            } catch (interrupted: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return false
+            }
+        }
+        false
     }
 
     companion object {

@@ -37,7 +37,6 @@ internal class ProjectionIdentity(private val context: Context, private val cloc
     private val legacyKeys = mutableMapOf<String, String>()
     private val usbNames = mutableMapOf<String, String>()
     private var usedAlias: String? = null
-    private var automaticSource: String? = null
 
     fun usbPeer(a: UsbAccessory): String {
         val descriptors = listOf(a.manufacturer, a.model, a.description, a.version)
@@ -96,7 +95,7 @@ internal class ProjectionIdentity(private val context: Context, private val cloc
     fun phone(id: String): PhoneIdentity = synchronized(lock) {
         loadPhone(id).let { identity ->
             val now = clock.instant()
-            val source = automaticSource ?: if (usedAlias == null) "HSD" else "Android KeyChain"
+            val source = if (usedAlias == null) "HSD" else "Android KeyChain"
             val chain = listOf(identity.certificate) + identity.chain
             AppLog.i("AA phone TLS · source=$source · reference=${references.identify(chain, now)} · SHA-256=${fingerprint(identity.certificate)}", false)
             chain.forEachIndexed { index, certificate ->
@@ -122,7 +121,6 @@ internal class ProjectionIdentity(private val context: Context, private val cloc
     private fun loadPhone(id: String): PhoneIdentity {
         val alias = assignedAlias(id) ?: defaultAlias
         usedAlias = null
-        automaticSource = null
         if (!alias.isNullOrEmpty()) {
             try {
                 val key = KeyChain.getPrivateKey(context, alias) ?: error(context.getString(R.string.aa_key_unavailable))
@@ -136,30 +134,6 @@ internal class ProjectionIdentity(private val context: Context, private val cloc
             } catch (e: Exception) {
                 throw IllegalStateException(context.getString(R.string.aa_reselect_key), e)
             }
-        }
-        if (alias == null) {
-            val now = clock.instant()
-            val providers = listOf(
-                "HSD bundled Android Auto" to {
-                    context.assets.open("projection/phone.p12").use { AutomaticAaIdentity.readStore(it, references, now) }
-                },
-                "Downloaded Android Auto" to { AaIdentityUpdates.load(context, references, now) },
-                "Installed Android Auto" to { InstalledAaIdentity(context, references).load(now) },
-            )
-            fun choose() = AutomaticAaIdentity.choose(providers) { source, error ->
-                AppLog.i("AA phone identity unavailable · source=$source · ${error.javaClass.simpleName}", false)
-            }
-            var selected = choose()
-            // This is already a connection worker. A valid offline identity never waits for HTTP.
-            if (selected == null && AaIdentityUpdates.enabled(context)) {
-                AaIdentityUpdates.refresh(context, force = AaIdentityUpdates.lastSucceeded(context), waitForRunning = true)
-                selected = choose()
-            }
-            val available = selected
-                ?: throw IllegalStateException(context.getString(R.string.aa_auto_identity_unavailable))
-            AaIdentityUpdates.maybeCheck(context)
-            automaticSource = available.source
-            return available.identity
         }
         val store = KeyStore.getInstance("PKCS12")
         val password = CharArray(0)

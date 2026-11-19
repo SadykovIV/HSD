@@ -1014,7 +1014,9 @@ class AaBridgeCore(
             log("BRIDGE тач: прореживание MOVE ${if (every > 1) "×$every" else "выкл"} (настройка)", true)
         }
         touchDecimator.onTouch(action, x, y, px, py, every)
-        onHuTouch(action and 0xFF)                                            // вне touchLock: вложенных блокировок нет
+        // The passthrough watchdog shares the encoder monitor. A desktop input
+        // stream has its own lock and must remain usable during video work.
+        if (!desktopInputEnabled && huHonda20772121) onHuTouch(action and 0xFF)
     }
 
     /** Выход прореживателя: на Delphi через пейсер пачек, на остальных ГУ сразу в AA. */
@@ -1066,7 +1068,7 @@ class AaBridgeCore(
 
     /** h295: IDR, которого ждали после тача, уходит с SPS/PPS из CODEC_CONFIG, если в кадре их нет. Иначе кадр как есть. */
     private fun h295Prepare(b: ByteArray, types: List<Int>): ByteArray {
-        if (h295TouchAt == NEVER || 5 !in types || (AnnexB.startsWithSps(b) && 8 in types)) return b
+        if (h295TouchAt == NEVER || 5 !in types || (types.firstOrNull() == 7 && 8 in types)) return b
         val cfg = aaConfig ?: return b
         return AnnexB.glue(cfg, b)
     }
@@ -1230,11 +1232,9 @@ class AaBridgeCore(
             val (ax, ay) = mode.mapTouch(f.x, f.y)
             TouchPoint(f.id, ax, ay)
         }
-        if (act == AapMessages.TOUCH_MOVE) {
-            // MOVE can arrive at trackpad sampling rate. The input diagnostics already aggregate it.
-            sendProjectionTouch(act, index, points)
-            return
-        }
+        // Deliver contact boundaries before logcat, formatting or the UI log monitor.
+        sendProjectionTouch(act, index, points)
+        if (act == AapMessages.TOUCH_MOVE) return
         if (points.size == 1) {
             val f = fingers[0]
             val a = points[0]
@@ -1245,7 +1245,6 @@ class AaBridgeCore(
             val aa = points.joinToString(" ") { "#${it.id} ${it.x},${it.y}" }
             log("BRIDGE тач $name[$index] пальцев ${points.size}: ГУ $gu -> AA $aa (${mode.label})", true)
         }
-        sendProjectionTouch(act, index, points)
     }
 
     /** TOUCH_CAR_HARD_KEY_CODE ГУ (кнопки руля) -> AA: нажатие Android KeyEvent по [HARD_KEY_TO_ANDROID]. */
@@ -2045,7 +2044,7 @@ class AaBridgeCore(
                 drop("P-кадр до IDR nal=$types")
                 return
             }
-            val payload = spsCrop(if (AnnexB.startsWithSps(b) && 8 in types) b else {
+            val payload = spsCrop(if (types.firstOrNull() == 7 && 8 in types) b else {
                 val cfg = aaConfig
                 if (cfg == null) {
                     drop("IDR без SPS/PPS и без CODEC_CONFIG")
@@ -2756,7 +2755,7 @@ class AaBridgeCore(
                 drop("P-кадр до IDR (декодер ждёт) nal=$types")
                 return
             }
-            val payload = if (AnnexB.startsWithSps(b) && 8 in types) b else {
+            val payload = if (types.firstOrNull() == 7 && 8 in types) b else {
                 val cfg = aaConfig
                 if (cfg == null) {
                     drop("IDR без SPS/PPS и без CODEC_CONFIG")
@@ -2856,7 +2855,7 @@ class AaBridgeCore(
                 if (desktopSurfaceEnabled && link.videoExpectedSinceNanos != null) {
                     // A sync frame can arrive before the virtual display or CSD is ready.
                     noteFirstFrameWait("random access", data, key)
-                    requestIdrOnOverflow()
+                    requestIdrOnOverflow(presentationUs)
                 }
                 return
             }
@@ -2864,7 +2863,7 @@ class AaBridgeCore(
             if (!(if (takeover) link.sendVideoTakeoverAt(payload, presentationUs) else link.sendVideoAt(payload, presentationUs))) {
                 encDropped++
                 noteFirstFrameWait("receiver", data, key)
-                requestIdrOnOverflow()
+                requestIdrOnOverflow(presentationUs)
                 return
             }
             outGotIdr = true
@@ -2897,7 +2896,7 @@ class AaBridgeCore(
             // кадр не принят (очередь CarLife переполнена): дальше P нельзя, до следующего IDR всё выбрасывается выше
             outGotIdr = false
             encDropped++
-            requestIdrOnOverflow()
+            requestIdrOnOverflow(presentationUs)
             return
         }
         sent++
@@ -2923,11 +2922,12 @@ class AaBridgeCore(
      * IDR у энкодера после отказа очереди CarLife - не чаще раза в 1.5 с (IdrThrottle). Иначе большие IDR (30-160 КБ)
      * сами забивают медленный канал. Отказали - ждём уже запрошенный или ближайший естественный IDR (интервал 1 с).
      */
-    private fun requestIdrOnOverflow() {
+    private fun requestIdrOnOverflow(presentationUs: Long?) {
         val t = transcoder ?: return
-        val permitted = if (desktopSurfaceEnabled)
-            desktopIdrRecovery.tryRequest(clockMs(), link.videoStats()?.backlogMs ?: 0L)
-        else idrThrottle.tryRequest(clockMs())
+        val permitted = if (desktopSurfaceEnabled) {
+            val ageMs = presentationUs?.let { (System.nanoTime() / 1000 - it) / 1000 }?.takeIf { it in 0..30_000 } ?: 0L
+            desktopIdrRecovery.tryRequest(clockMs(), link.videoStats()?.backlogMs ?: 0L, ageMs)
+        } else idrThrottle.tryRequest(clockMs())
         if (!permitted) return
         overflowIdrRequests++
         t.requestSyncFrame()
@@ -2951,6 +2951,8 @@ class AaBridgeCore(
 
     @Synchronized
     fun takeFrameLatencyMs(): Double = transcoder?.takeFrameLatencyMs() ?: 0.0
+    val pendingEncoderAgeMs get() = transcoder?.pendingEncoderAgeMs
+    fun onDesktopTouchDown() { transcoder?.onDesktopTouchDown() }
 
     /** Sample current policies only after owning the encoder, and ignore an obsolete link's timer. */
     @Synchronized

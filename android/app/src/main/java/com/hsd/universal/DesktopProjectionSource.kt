@@ -21,6 +21,7 @@ internal class DesktopProjectionSource(private val context: Context, private val
     private val framePolicy = DesktopFrameRatePolicy()
     private var bitrate = BitratePolicy(prefs.desktopBitrateMbps * 1_000_000)
     private val thermal = ThermalThrottle()
+    private var nextThermalSampleMs = 0L
     private val phoneThermal = com.hsd.universal.PhoneThermal(context)
     private var fps = 30
     private val power = DesktopPowerDiagnostics(context)
@@ -34,11 +35,13 @@ internal class DesktopProjectionSource(private val context: Context, private val
     private var selectedEncoder: DesktopEncoderSupport.Encoding? = null
 
     fun open(width: Int, height: Int, frameRate: Int, layout: AaVideoLayout? = null,
-             encoding: DesktopEncoderSupport.Encoding? = null) {
+             encoding: DesktopEncoderSupport.Encoding? = null, density: Int? = null, bitrateLimit: Int? = null) {
         frameWidth = layout?.mode?.width ?: width
         frameHeight = layout?.mode?.height ?: height
         viewport = layout?.content
         selectedEncoder = encoding
+        if (bitrateLimit != null) bitrate = BitratePolicy(minOf(prefs.desktopBitrateMbps * 1_000_000, bitrateLimit),
+            minOf(BitratePolicy.FLOOR_BPS, bitrateLimit))
         if (encoding != null) bitrate = BitratePolicy(encoding.maxBitrate, maxOf(BitratePolicy.FLOOR_BPS, encoding.minBitrate))
 
         check(!prefs.useDesktopService || DesktopAccess.isReady(context)) {
@@ -49,7 +52,7 @@ internal class DesktopProjectionSource(private val context: Context, private val
         core.videoMode = NativeDesktopGeometry(width, height)
         core.desktopEncoderGeometry = NativeDesktopGeometry(frameWidth, frameHeight)
         com.hsd.universal.CarLifeState.videoMode = core.videoMode
-        core.densityOverride = layout?.density ?: prefs.desktopVideoSelection().densityFor(core.videoMode)
+        core.densityOverride = density ?: layout?.density ?: prefs.desktopVideoSelection().densityFor(core.videoMode)
         com.hsd.universal.CarLifeState.densityOverride = core.densityOverride
         core.mapHomeKey = true
         core.touchDecimationProvider = { AaPrefs(context).touchDecimation }
@@ -69,11 +72,10 @@ internal class DesktopProjectionSource(private val context: Context, private val
         core.onCarlifeStart()
         power.start()
         idle.start()
-        capture.attach(core, true) { !closed && output.audioOutputAvailable() && DexState.running }
+        capture.attach(core, true, sink = ProjectionCapturedPlayback(output)) { !closed && output.audioOutputAvailable() && DexState.running }
         DelegatedPanelAccess.attachOutput(this) { !closed && output.freshVideo() }
-        DesktopMusicPlayback.attach(context, context, this, wired, { !closed && DexState.running && output.audioOutputAvailable() },
-            { !prefs.usbPlaybackAudio || !core.audioViaUsb || DesktopAudioState.running },
-            { prefs.usbPlaybackAudio && core.audioViaUsb && capture.hasForwardedAudio })
+        DesktopMusicPlayback.attach(context, context, this, wired, { !closed && DexState.running && output.freshVideo() },
+            { output.audioOutputAvailable() && (!prefs.usbPlaybackAudio || !core.audioViaUsb || DesktopAudioState.running) })
     }
 
     override fun createTranscoder(out: TranscodeOutput) = createEncoder(out, false)
@@ -98,6 +100,7 @@ internal class DesktopProjectionSource(private val context: Context, private val
         }
     }
     override fun sendVideo(payload: ByteArray) = sendVideoAt(payload, null)
+    override val repeatAvcParameterSets get() = output.repeatAvcParameterSets
     override val videoExpectedSinceNanos get() = output.videoExpectedSinceNanos
     override fun sendVideoAt(payload: ByteArray, presentationUs: Long?) =
         !closed && output.video(payload, presentationUs ?: System.nanoTime() / 1000)
@@ -111,19 +114,24 @@ internal class DesktopProjectionSource(private val context: Context, private val
 
     fun tune(nowMs: Long, backlogMs: Double, bytesPerSecond: Double, overflow: Boolean) {
         if (closed || !prefs.useDesktopService) return
-        val changed = thermal.update(nowMs, phoneThermal.status(), phoneThermal.headroom())
-        val capped = changed != null && bitrate.setThermalCap(thermal.capBitrate(bitrate.ceilingBps))
+        val capped = if (nowMs >= nextThermalSampleMs) {
+            nextThermalSampleMs = nowMs + 1000
+            thermal.update(nowMs, phoneThermal.status(), phoneThermal.headroom()) != null &&
+                bitrate.setThermalCap(thermal.capBitrate(bitrate.ceilingBps))
+        } else false
         val bps = bitrate.update(nowMs, backlogMs, bytesPerSecond)
         if (bps != null || capped) core.setEncoderBitrate(bitrate.current)
         val frameAgeMs = core.takeFrameLatencyMs()
-        framePolicy.update(nowMs, maxOf(backlogMs, frameAgeMs), thermal.capFps(fps), overflow)?.let {
+        val audioOverrun = capture.takeOverrun()
+        framePolicy.update(nowMs, backlogMs, thermal.capFps(fps), overflow, encoderAgeMs = frameAgeMs,
+            audioOverrun = audioOverrun)?.let {
             core.setTargetFps(it)
-            AppLog.i("DESKTOP VIDEO: dynamic fps=$it max=$fps transport=${backlogMs.toInt()}ms encoder=${frameAgeMs.toInt()}ms", false)
+            AppLog.i("DESKTOP VIDEO: dynamic fps=$it max=$fps transport=${backlogMs.toInt()}ms encoder=${frameAgeMs.toInt()}ms audioOverrun=$audioOverrun", false)
         }
     }
 
     fun outputLost(hadPicture: Boolean, carriedAudio: Boolean) {
-        if (!closed) DesktopMusicPlayback.outputLost(context, this, hadPicture && DexState.running,
+        if (!closed) DesktopMusicPlayback.outputLost(context, this, hadPicture,
             carriedAudio = carriedAudio && prefs.usbPlaybackAudio && core.audioViaUsb)
     }
 
@@ -140,12 +148,12 @@ internal class DesktopProjectionSource(private val context: Context, private val
 
     fun home() { if (!closed) (source as? DesktopNavigation)?.showDesktop() }
 
-    fun close(done: () -> Unit) {
+    fun close(sessionEnded: Boolean = false, hadPicture: Boolean = false, done: () -> Unit) {
         if (closed) return
         closed = true
         idle.stop()
         power.stop()
-        DesktopMusicPlayback.linkClosed(this)
+        DesktopMusicPlayback.linkClosed(this, sessionEnded, hadPicture)
         capture.close()
         DelegatedPanelAccess.detachOutput(this)
         core.onCarlifeClosed(this)
@@ -155,11 +163,15 @@ internal class DesktopProjectionSource(private val context: Context, private val
 }
 
 internal interface DesktopProjectionOutput {
+    val repeatAvcParameterSets: Boolean get() = false
     /** Null while the receiver explicitly owns the screen. Zero means no earlier suspension. */
     val videoExpectedSinceNanos: Long? get() = 0L
     fun video(payload: ByteArray, ptsUs: Long): Boolean
     fun audio(type: Int, pcm: ByteArray, ptsUs: Long): Boolean
     fun audioRate(): Int?
+    fun navigationAvailable(): Boolean = false
+    /** Stereo PCM16, 48 kHz; each protocol negotiates its own speech format. */
+    fun navigation(pcm: ByteArray, ptsUs: Long, active: Boolean): Boolean = false
     /** Media transport lifetime is independent of who currently owns the receiver's screen. */
     fun audioOutputAvailable(): Boolean
     fun freshVideo(): Boolean

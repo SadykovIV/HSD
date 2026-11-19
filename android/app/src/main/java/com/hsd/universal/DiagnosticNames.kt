@@ -4,7 +4,7 @@ import com.hsd.universal.dex.DesktopModePolicy
 
 /** Format identifiers supplied by other installed apps only at the diagnostic output boundary. */
 internal object DiagnosticNames {
-    private val formerName = Regex("headswap(?:[ -]?desktop|desk)?", RegexOption.IGNORE_CASE)
+    private val formerName = Regex("headswap(?:[ _-]?(?:desktop|desk|dex)\\b)?", RegexOption.IGNORE_CASE)
     private val formerProjection = Regex("\\bHSD[ _-]+AA\\b", RegexOption.IGNORE_CASE)
 
     fun format(message: String): String {
