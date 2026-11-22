@@ -1,5 +1,27 @@
 # Изменения / Changelog
 
+## [HSD 0.8.1](https://github.com/SadykovIV/HSD/releases/tag/v0.8.1) · 2026-11-14
+
+### English
+
+- **CarLife** restores the picture after a decoder reset without unplugging the cable. Fixed desktop freezes when the phone screen turns off. On Android 10–12, locked-screen behavior depends on the firmware and app.
+- Fixed duplicate touches that interrupted map dragging and pinch-to-zoom.
+- **DriveDeck 0.7.0 (356)** brings back Back and the app menu in fullscreen. Double-tap Back to return home. You can remove the gap between windows and hide the bottom bars.
+- **Android Auto** waits for the head unit to start the USB session. Certificate settings remain available after a connection failure. **Wireless CarPlay** now completes Bluetooth pairing before switching to Wi-Fi.
+- **Activation** on Android 10 now works over USB OTG from a second Android phone running HSD. Android 11 and later can reuse a saved Wi-Fi pairing.
+
+**Updating from 0.8.0?** Install both APKs over the existing apps to keep your settings.
+
+### Русский
+
+- **CarLife** восстанавливает картинку после сброса видеодекодера без переподключения кабеля. Исправили зависание рабочего стола при выключении экрана телефона. На Android 10–12 работа при блокировке зависит от прошивки и приложения.
+- Исправили повторные касания, из-за которых прерывалось перемещение и масштабирование карты.
+- В **DriveDeck 0.7.0 (356)** вернули «Назад» и меню приложений в полноэкранном режиме. Двойное нажатие «Назад» возвращает на рабочий стол. Зазор между окнами и нижние полоски можно убрать.
+- **Android Auto** ждёт начала USB-сеанса со стороны магнитолы и сохраняет доступ к настройкам сертификатов при ошибке. **Беспроводной CarPlay** завершает сопряжение по Bluetooth перед переходом на Wi-Fi.
+- **Активация на Android 10** теперь доступна со второго Android-телефона с HSD по USB-OTG. На Android 11 и новее можно повторно использовать сохранённое сопряжение по Wi-Fi.
+
+**Переходите с 0.8.0?** Установите оба APK поверх текущих приложений. Настройки сохранятся.
+
 ## [HSD 0.8.0](https://github.com/SadykovIV/HSD/releases/tag/v0.8.0) · 2026-11-13
 
 ### English
