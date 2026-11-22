@@ -1,5 +1,29 @@
 # Изменения / Changelog
 
+## [HSD 0.8.0](https://github.com/SadykovIV/HSD/releases/tag/v0.8.0) · 2026-11-13
+
+### English
+
+- HSD now supports **Android 10 and later**. On Android 10, activate from a computer over USB. Android 11 and 12 also support Wi-Fi pairing with a six-digit code. On Android 10–12, DriveDeck’s split view depends on secondary-display support in the firmware and in each app. If the phone restricts audio capture, use Bluetooth for music.
+- Updated **DriveDeck to 0.7.0 (350)** and fixed a crash when opening the launcher settings. Video encoding has also improved on older phones.
+- Android Auto handles head units that split connection data across packets. HSD shows certificate errors and flags Wi-Fi access restrictions when a VPN is active. Wireless CarPlay improves discovery over Bluetooth and Wi-Fi, including connections initiated by the head unit.
+- CarLife adapts video to slow transfers to reduce lag during touch gestures. Unplugging the USB cable pauses playback.
+
+**Upgrading from 0.7.3 or earlier requires a fresh install.** The signing key changed for both APKs. Uninstall the old HSD and DriveDeck-HSD, install both APKs below and activate HSD again. Uninstalling clears their local settings.
+
+**Already on HSD 0.8.0?** Install DriveDeck build 350 over build 349. Your layout and HSD activation carry over.
+
+### Русский
+
+- HSD теперь поддерживает **Android 10 и новее**. На Android 10 активируйте HSD с компьютера по USB. На Android 11 и 12 доступна также активация по Wi-Fi с шестизначным кодом. На Android 10–12 для двух окон DriveDeck нужна поддержка второго экрана в прошивке и в самих приложениях. Если телефон ограничивает захват звука, выводите музыку по Bluetooth.
+- Обновлён **DriveDeck до 0.7.0 (350)**. Исправлен вылет при открытии настроек лаунчера. Улучшено кодирование видео на старых телефонах.
+- Исправлено подключение Android Auto к магнитолам, которые передают данные по частям. HSD показывает ошибки сертификата и подсказывает, если при включённом VPN закрыт доступ к Wi-Fi магнитолы. В беспроводном CarPlay улучшен поиск по Bluetooth и Wi-Fi, в том числе когда подключение начинает магнитола.
+- CarLife подстраивает передачу видео под скорость соединения, чтобы экран быстрее реагировал на касания. При отключении USB-кабеля музыка ставится на паузу.
+
+**При переходе с 0.7.3 или более ранней версии нужна переустановка.** У обоих APK сменился ключ подписи. Удалите прежние HSD и DriveDeck-HSD, установите оба APK из релиза и заново активируйте HSD. При удалении локальные настройки сбросятся.
+
+**Если уже стоит HSD 0.8.0**, установите только DriveDeck 350 поверх сборки 349. Раскладка и активация HSD сохранятся.
+
 ## [HSD 0.7.3](https://github.com/SadykovIV/HSD/releases/tag/v0.7.3) · 2026-11-13
 
 ### English
