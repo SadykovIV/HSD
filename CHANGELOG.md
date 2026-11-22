@@ -1,5 +1,21 @@
 # Изменения / Changelog
 
+## [HSD 0.7.2](https://github.com/SadykovIV/HSD/releases/tag/v0.7.2) · 2026-11-13
+
+### English
+
+- Wireless CarPlay now detects the phone’s Bluetooth address automatically, scales touch coordinates to the head unit’s display and supports AAC-LC audio.
+- CarPlay keeps streaming when the head unit delays its feedback and reconnects after brief Wi-Fi interruptions.
+- Android Auto now retries audio frames when the AAC encoder is briefly busy.
+- DriveDeck gives Shizuku more time to start before reporting a connection error.
+
+### Русский
+
+- Беспроводной CarPlay автоматически определяет Bluetooth-адрес телефона, масштабирует координаты касаний под экран магнитолы и поддерживает звук AAC-LC.
+- CarPlay продолжает передачу при задержке ответа магнитолы и восстанавливает соединение после короткого обрыва Wi-Fi.
+- Android Auto повторно передаёт аудиокадры, если кодировщик AAC занят.
+- DriveDeck дольше ожидает запуска Shizuku.
+
 ## [HSD 0.7.0](https://github.com/SadykovIV/HSD/releases/tag/v0.7.0) · 2026-11-12
 
 ### English
