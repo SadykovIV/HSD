@@ -1,5 +1,19 @@
 # Изменения / Changelog
 
+## [HSD 0.7.3](https://github.com/SadykovIV/HSD/releases/tag/v0.7.3) · 2026-11-13
+
+### English
+
+- Added an English interface.
+- Fixed Samsung DeX startup when the phone switches to the head unit’s Wi-Fi.
+- CarLife keeps music playing during map zoom and preserves Bluetooth playback when returning from a camera. Turn guidance now includes the street name when the navigation app provides it.
+
+### Русский
+
+- Добавлен английский интерфейс.
+- Исправлен запуск Samsung DeX при переходе телефона в сеть Wi-Fi магнитолы.
+- В CarLife музыка продолжает играть при масштабировании карты и по Bluetooth при возврате с камеры. Вместе со стрелкой поворота на приборку передаётся название улицы, если его сообщает навигатор.
+
 ## [HSD 0.7.2](https://github.com/SadykovIV/HSD/releases/tag/v0.7.2) · 2026-11-13
 
 ### English
