@@ -1,5 +1,45 @@
 # Изменения / Changelog
 
+## [HSD 0.8.3](https://github.com/SadykovIV/HSD/releases/tag/v0.8.3) · 2026-11-19
+
+В релизе два APK — **HSD 0.8.3 (115)** и **DriveDeck HSD 0.7.0 (362)**. DriveDeck можно установить поверх версии из официального релиза 0.8.2 с сохранением настроек. [Скачать HSD](https://github.com/SadykovIV/HSD/releases/download/v0.8.3/HSD-0.8.3-code115.apk) · [Скачать DriveDeck для Android](https://github.com/SadykovIV/HSD/releases/download/v0.8.3/DriveDeck-HSD-0.7.0-code362.apk)
+
+### Что изменилось с 0.8.2
+
+1. **Музыка и подсказки по разным каналам.** В Android Auto, CarLife и CarPlay можно передавать стереомузыку в медиаканал магнитолы, а голос навигатора — в штатный канал подсказок. Если магнитола поддерживает только один канал, HSD смешивает звук. Для Android Auto и CarLife можно сохранить поправку синхронизации звука и изображения.
+2. **Касания и повторное подключение.** После обрыва соединения посреди жеста сенсор снова принимает касания при подключении. Пропущенное касание больше не прерывает проекцию. HSD повторно ищет USB-магнитолу, если Android обнаруживает её с задержкой. Улучшено восстановление беспроводного CarPlay с ранее подключённой магнитолой.
+3. **Новый протокол Huawei HiCar.** Добавлены два экспериментальных режима подключения — по Bluetooth и Wi-Fi и по кабелю USB. HSD запоминает выбор HiCar на магнитолах, которые также предлагают CarLife.
+4. **DriveDeck и штатное меню.** В Android Auto, CarLife и CarPlay кнопка в DriveDeck открывает меню автомобиля. Чтобы вернуться, выберите проекцию на магнитоле. Обновление музыкальной карточки больше не ставит другие плееры на паузу. При отключении телефона воспроизведение ставится на паузу.
+5. **Сон телефона.** При управлении с магнитолы телефон может погасить экран и заблокироваться по системному тайм-ауту. После отключения HSD освобождает блокировку сна. Если Android завершил сеанс доступа, повторную активацию можно открыть из уведомления о подключении USB.
+6. **Размер приложения.** Оптимизирована упаковка ресурсов HSD. Сохранена поддержка ARM и x86, включая 32- и 64-битные устройства.
+
+#### Ограничения
+
+- Для Android Auto магнитола должна принимать профиль телефона. При необходимости его можно выбрать в системном хранилище Android.
+- Проводной HiCar требует поддержки USB NCM со стороны магнитолы. CarPlay в HSD работает по беспроводному соединению.
+- При высокой нагрузке в CarLife возможны короткие перебои звука. При программном кодировании видео первые касания могут отображаться с задержкой.
+- На Android 10–12 работа приложений при заблокированном телефоне зависит от прошивки. Защищённое видео может отображаться чёрным экраном. Для автоблокировки при питании по USB отключите в параметрах разработчика Android настройку «Не выключать экран при зарядке».
+
+### English
+
+This release includes two APKs, **HSD 0.8.3 (115)** and **DriveDeck HSD 0.7.0 (362)**. Install DriveDeck over the version supplied with the official 0.8.2 release to keep your settings. [Download HSD](https://github.com/SadykovIV/HSD/releases/download/v0.8.3/HSD-0.8.3-code115.apk) · [Download DriveDeck for Android](https://github.com/SadykovIV/HSD/releases/download/v0.8.3/DriveDeck-HSD-0.7.0-code362.apk)
+
+#### Changes since 0.8.2
+
+1. **Separate channels for music and directions.** Android Auto, CarLife and CarPlay can send stereo music to the head unit’s media channel and spoken directions to its guidance channel. HSD mixes the two when the head unit supports a single channel. Android Auto and CarLife can also save an audio sync adjustment for your head unit.
+2. **Touch input and reconnection.** If a connection drops mid-gesture, the touchscreen accepts input again when you reconnect. A missed touch no longer ends projection. HSD retries USB discovery when Android takes time to report the head unit. Wireless CarPlay reconnects more reliably to a previously paired head unit.
+3. **Huawei HiCar support.** Two experimental connection modes are available — wireless over Bluetooth and Wi-Fi, and wired over USB. HSD remembers your HiCar selection on head units that also offer CarLife.
+4. **DriveDeck and the car menu.** A DriveDeck button opens the car’s built-in menu in Android Auto, CarLife and CarPlay. Select projection on the head unit to return. Refreshing the music card no longer pauses other players. Playback pauses when the phone disconnects.
+5. **Phone sleep.** The phone screen can turn off and lock on its normal timeout while you use the head unit. HSD releases its wake lock after disconnection. If Android ends desktop access, you can open the activation screen from the USB notification.
+6. **App size.** HSD packages its resources more efficiently and retains support for 32-bit and 64-bit ARM and x86 devices.
+
+#### Limitations
+
+- Android Auto requires a phone profile accepted by the head unit. You can select a profile from Android storage when needed.
+- Wired HiCar requires a head unit that supports USB NCM. HSD uses a wireless connection for CarPlay.
+- Under heavy load, CarLife audio may briefly cut out. When video uses a software encoder, the first touches can take longer to appear.
+- On Android 10–12, app behavior while the phone is locked depends on its firmware. Android may show protected video as a black screen. To use the normal lock timeout while charging over USB, turn off **Stay awake** in Android’s developer options.
+
 ## [HSD 0.8.2](https://github.com/SadykovIV/HSD/releases/tag/v0.8.2) · 2026-11-17
 
 ### Русский
