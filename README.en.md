@@ -1,4 +1,4 @@
-# HSD · HeadSwap Desktop
+# HSD
 
 [Русский](README.md) · [Download HSD and DriveDeck](https://github.com/SadykovIV/HSD/releases/latest) · [4PDA discussion](https://4pda.to/forum/index.php?showtopic=1129468) · [Telegram group](https://t.me/+H2QUrHMGm-g3ODhi) · [Support via CloudTips](https://pay.cloudtips.ru/p/41f6ecdd)
 
