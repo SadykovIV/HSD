@@ -1,5 +1,37 @@
 # Изменения / Changelog
 
+## [HSD 0.8.4](https://github.com/SadykovIV/HSD/releases/tag/v0.8.4) · 2026-11-26
+
+**HSD 0.8.4 (167) и DriveDeck-HSD 0.7.4 (374)** для Android 11 и новее. Стабильная версия на основе RC46.
+
+**Для работы Android Auto (AA) требуются действительные сертификаты AA, которые принимает магнитола.** Установите выданный вам ZIP в **Настройки → Сертификаты → Установить из ZIP**. Выберите профиль в режиме Android Auto и нажмите **Сохранить**.
+
+### Что изменилось с 0.8.3
+
+- **Подключение.** Добавлены WeLink по USB, CarbitLink / EasyConnection по USB и Wi-Fi и экспериментальный ICCOA Carlink. У ICCOA на проводном стенде проверены изображение и касания, по Wi-Fi — поиск и сопряжение. Проводной CarPlay и HiCar также остаются экспериментальными.
+- **Возврат к рабочему столу.** Android Auto восстанавливает изображение после штатного меню и камеры, когда магнитола возвращает управление. В CarbitLink кнопка с машинкой сохраняет сеанс и музыку. После звонка магнитола может снова открыть тот же рабочий стол.
+- **Звук и касания.** Улучшен отклик проводного CarLife под нагрузкой. В CarPlay исправлены пропуски при нерегулярной подаче звука телефоном. Для разговоров появилась отдельная настройка громкой связи через Bluetooth или совместимое двустороннее USB-аудиоустройство на Android 12 и новее.
+- **Звонки и уведомления.** На экране магнитолы доступны карточки вызовов и всплывающие уведомления. Свайп от верхней кромки открывает шторку. Уведомления можно раскрывать и использовать действия, которые предлагает приложение.
+- **DriveDeck 0.7.4.** Обновлены телефонная книга и музыкальный виджет. Обложка открывает играющий плеер, кнопка «Домой» возвращает из звонилки на рабочий стол. На совместимых устройствах можно выбрать клавиатуру на телефоне или магнитоле. Настраивается порог предупреждения о превышении скорости.
+- **Настройка HSD.** Мастер запрашивает разрешения по очереди. У параметров изображения, звука и экрана телефона появились короткие пояснения. Исправлен сброс затемнения телефона при касании экрана магнитолы.
+
+**Обновление.** Установите оба APK поверх официальной 0.8.3 или тестовой 0.8.4. Если уже установлен DriveDeck 0.7.4 (374) из RC46, достаточно обновить HSD. На эмуляторе Android 14 проверены обновления с официальной 0.8.3 и с RC46 с сохранением настроек обоих приложений. Для Android 10 доступен [предыдущий стабильный выпуск 0.8.3](https://github.com/SadykovIV/HSD/releases/tag/v0.8.3).
+
+### English
+
+**HSD 0.8.4 (167) and DriveDeck-HSD 0.7.4 (374)** for Android 11 and later. This stable release is based on RC46.
+
+**Android Auto (AA) requires valid AA certificates accepted by the head unit.** Install your issued ZIP under **Settings → Certificates → Install from ZIP**, select the profile in Android Auto mode, then tap **Save**.
+
+- **Connections.** Added wired WeLink, USB and Wi-Fi CarbitLink / EasyConnection, and experimental ICCOA Carlink. ICCOA video and touch were tested on a wired bench receiver. Wireless discovery and pairing were tested separately. Wired CarPlay and HiCar also remain experimental.
+- **Returning to projection.** Android Auto restores the picture when the head unit returns control after its native menu and camera. The car button in CarbitLink keeps the session and music running. After a call, the receiver can reopen the same desktop.
+- **Audio and touch.** Wired CarLife touch response improved under load. CarPlay handles brief delays in the phone’s audio stream. On Android 12 and later, call audio can use a car’s Bluetooth hands-free profile or a compatible two-way USB audio device independently of music.
+- **Calls and notifications.** Call cards and notification pop-ups appear on the head unit. Swipe down from the top edge to open the shade. Expand a notification to use the actions provided by its app.
+- **DriveDeck 0.7.4.** Updated the contacts and music widgets. Album art opens the active player, and Home returns to the desktop from the dialer. Supported phones can show the keyboard on either display. The speed warning threshold is adjustable.
+- **Setup.** The wizard requests permissions in sequence. Picture, audio and phone-screen settings show short descriptions. Touching the head unit now preserves HSD’s phone-screen dimming.
+
+**Upgrade.** Install both APKs over official 0.8.3 or a 0.8.4 test build. If DriveDeck 0.7.4 (374) from RC46 is already installed, update HSD only. Both upgrade paths were tested on an Android 14 emulator with settings retained in both apps. Android 10 users can use [the previous stable release, 0.8.3](https://github.com/SadykovIV/HSD/releases/tag/v0.8.3).
+
 ## [HSD 0.8.3](https://github.com/SadykovIV/HSD/releases/tag/v0.8.3) · 2026-11-19
 
 В релизе два APK — **HSD 0.8.3 (115)** и **DriveDeck HSD 0.7.0 (362)**. DriveDeck можно установить поверх версии из официального релиза 0.8.2 с сохранением настроек. [Скачать HSD](https://github.com/SadykovIV/HSD/releases/download/v0.8.3/HSD-0.8.3-code115.apk) · [Скачать DriveDeck для Android](https://github.com/SadykovIV/HSD/releases/download/v0.8.3/DriveDeck-HSD-0.7.0-code362.apk)
