@@ -1,80 +1,101 @@
-# HSD
+# HSD 0.8.4
 
-[Русский](README.md) · [Download HSD and DriveDeck](https://github.com/SadykovIV/HSD/releases/latest) · [4PDA discussion](https://4pda.to/forum/index.php?showtopic=1129468) · [Telegram group](https://t.me/+H2QUrHMGm-g3ODhi) · [Support via CloudTips](https://pay.cloudtips.ru/p/41f6ecdd)
+[Русский](README.md) · [What changed](#changes) · [Protocols](#connections) · [Setup](#setup)
 
-HSD brings **DriveDeck, a full car launcher**, to your head unit. Launch apps installed on your Android phone directly on the car screen, including apps outside the Android Auto catalog. Open an app full screen or keep navigation and a music player side by side. Control them using the head unit’s touchscreen.
+HSD runs your Android phone’s apps on the car’s built-in display. Open the navigator you already use, switch to your favourite player, or launch an app that is missing from the Android Auto catalogue. Apps and their data stay on the phone. Use the head unit’s touchscreen to control them.
 
-**Download for Android 11 and later** · [HSD 0.8.4 (167) APK](https://github.com/SadykovIV/HSD/releases/download/v0.8.4/HSD-0.8.4-code167.apk) · [DriveDeck-HSD 0.7.4 (374) APK](https://github.com/SadykovIV/HSD/releases/download/v0.8.4/DriveDeck-HSD-0.7.4-code374.apk)
+**Android 11 or later** · [Download HSD 0.8.4 (167)](https://github.com/SadykovIV/HSD/releases/download/v0.8.4/HSD-0.8.4-code167.apk) · [Download DriveDeck-HSD 0.7.4 (374)](https://github.com/SadykovIV/HSD/releases/download/v0.8.4/DriveDeck-HSD-0.7.4-code374.apk)
 
-**Android Auto (AA) requires valid AA certificates accepted by the head unit.** Install your issued ZIP under **Settings → Certificates → Install from ZIP**, select the profile in Android Auto mode, then tap **Save**.
+**Android Auto (AA) requires valid AA certificates accepted by the head unit.** Install the ZIP issued to you under **Settings → Certificates → Install from ZIP**. Select the installed profile in Android Auto mode and tap **Save**.
 
-## Supported protocols
+**Choose your desktop.** DriveDeck has a dock for favourite apps and a two-window layout so you can keep your map next to your player. Android Desktop provides a separate display for phone apps. Samsung DeX is available on compatible Samsung phones. The CarBridge profile requires a compatible dashboard app installed separately.
 
-The table compares stable releases 0.8.3 (115) and 0.8.4 (167). Android 10 users can keep [HSD 0.8.3](https://github.com/SadykovIV/HSD/releases/tag/v0.8.3).
+<a id="gallery"></a>
 
-| Head unit protocol | HSD 0.8.3 | HSD 0.8.4 |
-| --- | --- | --- |
-| Android Auto | USB, Bluetooth + Wi-Fi, local network | USB, Bluetooth + Wi-Fi, local network |
-| Baidu CarLife | USB, Wi-Fi | USB, Wi-Fi |
-| Apple CarPlay | Bluetooth + Wi-Fi | Bluetooth + Wi-Fi, USB¹ |
-| Huawei HiCar¹ | Bluetooth + Wi-Fi, USB (NCM) | Bluetooth + Wi-Fi, USB (NCM) |
-| CarbitLink / EasyConnection¹ | — | USB, Wi-Fi |
-| WeLink (Mapbar A1) | — | USB |
-| ICCOA Carlink¹ | — | USB, car hotspot, Wi-Fi Direct |
+## The car screen and the phone
 
-¹ Experimental mode. Wired CarPlay and CarbitLink have been tested on a bench. CarbitLink uses the car’s Bluetooth for music. Wired HiCar requires a head unit with USB NCM. A Honda SN‑3 owner confirmed wired WeLink on HSD 0.8.4 RC21 with an updated receiver. ICCOA wired video and touch were tested on a bench. Wireless discovery and pairing were tested. Compatibility with factory ICCOA head units is under evaluation.
+The first images are 1280 × 720 video frames decoded by a software head unit over wireless CarLife. The phone screenshots below show HSD on Android 14. Both APKs came from this release. Select an image to see it at full size.
 
-On a local network, either the phone or the head unit can act as the Android Auto server.
-
-## DriveDeck on the car display
-
-DriveDeck 0.7.2 (370) on a test display. The split view shows Android Settings on the left and Clock on the right. This frame was captured over wireless Android Auto with HSD 0.8.4 RC26.
-
-| Phone apps in DriveDeck | Two apps side by side |
+| Two phone apps side by side | DriveDeck app drawer |
 | --- | --- |
-| [![The DriveDeck 0.7.2 app drawer and side dock](docs/images/drivedeck-0.7.2-en-apps.png)](docs/images/drivedeck-0.7.2-en-apps.png) | [![Android Settings and Clock running in separate DriveDeck windows](docs/images/drivedeck-0.7.2.png)](docs/images/drivedeck-0.7.2.png) |
+| [![Two phone apps side by side](docs/images/0.8.4/drivedeck-0.7.4-en-split.png)](docs/images/0.8.4/drivedeck-0.7.4-en-split.png) | [![DriveDeck app drawer](docs/images/0.8.4/drivedeck-0.7.4-en-apps.png)](docs/images/0.8.4/drivedeck-0.7.4-en-apps.png) |
 
 <details>
-<summary>See DriveDeck installed in a car</summary>
+<summary>View the built-in DriveDeck phone</summary>
 
-![DriveDeck on the author’s factory head unit](docs/images/hsd-head-unit.jpg)
-
-*Illustration based on the author’s photo, processed with AI.*
+| DriveDeck’s built-in phone |
+| --- |
+| [![DriveDeck’s built-in phone](docs/images/0.8.4/drivedeck-0.7.4-en-phone.png)](docs/images/0.8.4/drivedeck-0.7.4-en-phone.png) |
 
 </details>
 
-## HSD on the phone
-
-These screenshots show HSD 0.8.4 RC26 with DriveDeck 0.7.2 on an Android 15 emulator. The home screen shows both app versions. Settings lets you adjust the picture and sound.
-
-| Home | Connection type | Settings |
+| Connected to the head unit | Choosing a connection | Settings overview |
 | --- | --- | --- |
-| [![HSD home screen with the DriveDeck profile](docs/images/hsd-rc26-en-home.png)](docs/images/hsd-rc26-en-home.png) | [![Android Auto, CarLife and CarPlay connection options](docs/images/hsd-rc26-en-protocols.png)](docs/images/hsd-rc26-en-protocols.png) | [![HSD picture and audio settings](docs/images/hsd-rc26-en-settings.png)](docs/images/hsd-rc26-en-settings.png) |
+| [![Connected to the head unit](docs/images/0.8.4/hsd-0.8.4-en-home.png)](docs/images/0.8.4/hsd-0.8.4-en-home.png) | [![Choosing a connection](docs/images/0.8.4/hsd-0.8.4-en-connections.png)](docs/images/0.8.4/hsd-0.8.4-en-connections.png) | [![Settings overview](docs/images/0.8.4/hsd-0.8.4-en-settings.png)](docs/images/0.8.4/hsd-0.8.4-en-settings.png) |
 
 <details>
-<summary>More connection types — HiCar, CarbitLink, WeLink and Android Auto over LAN</summary>
+<summary>View picture and audio settings</summary>
 
-<a href="docs/images/hsd-rc26-en-more-protocols.png"><img src="docs/images/hsd-rc26-en-more-protocols.png" width="360" alt="The rest of the connection list in HSD 0.8.4 RC26"></a>
+| Picture settings | Music and hands-free calls |
+| --- | --- |
+| [![Picture settings](docs/images/0.8.4/hsd-0.8.4-en-picture.png)](docs/images/0.8.4/hsd-0.8.4-en-picture.png) | [![Music and hands-free calls](docs/images/0.8.4/hsd-0.8.4-en-audio.png)](docs/images/0.8.4/hsd-0.8.4-en-audio.png) |
 
 </details>
 
-On a fresh 0.8.4 install, calls and notifications on the head unit, audio through HSD, separate navigation prompts and phone screen control start enabled. The setup wizard requests the required Android permissions in turn. Reactivating uses your saved choices, including Bluetooth for music.
+<a id="changes"></a>
 
-With Android Desktop or DriveDeck, you can turn the phone screen off or let it time out. On Android 11–12, the phone firmware and each app determine which windows stay active while locked. If an app on the head unit stops updating, unlock the phone to resume it. If Android asks for access to app audio, open **Settings → Audio → Share app audio**. Permission lasts for one session. Samsung DeX is available on compatible Samsung phones.
+## What changed in HSD 0.8.4 and DriveDeck 0.7.4
 
-## Connect your phone
+1. **More ways to connect**. Wired WeLink, USB and Wi-Fi CarbitLink / EasyConnection, and experimental ICCOA Carlink are now available. DriveDeck can use these modes on head units that offer them. Wired ICCOA tests covered video, touch, cover art and instrument cluster directions. Wireless tests covered discovery and pairing.
+2. **Android Auto restores the picture after the camera**. Audio could keep playing while the screen stayed black after the car menu or reversing camera. When the head unit gives the display back to Android Auto, HSD now restores the desktop in the same session.
+3. **Calls from the car screen**. DriveDeck’s Phone screen offers a keypad, contacts, favourites and recent calls when the phone is unlocked and Android grants access. Accept or decline an incoming call on the head unit. For messenger calls, the available controls depend on the actions the app supplies to Android.
+4. **Notifications you can act on**. New messages appear in the centre. Swipe down anywhere along the top edge to open the shade where the gesture began. Expand a notification, use the app’s actions or reply inline if the app supports it. The handle can be moved or hidden.
+5. **Reconnecting wired Android Auto**. Android Auto distinguishes an unplugged cable from a temporary switch to the car menu. If the connection is lost, HSD sends the player a pause command. When the cable is plugged back in, HSD reopens the connection and checks whether Android has already granted USB access.
+6. **Hands-free calls independently of music**. Audio settings now have a separate call-audio switch. On Android 12 and later, calls can use the car’s Bluetooth hands-free profile or a USB device that Android recognises as having both a microphone and speakers. Music can use a different output.
+7. **Music and spoken directions**. CarPlay handles the brief delays in phone audio that caused gaps in music and guidance. When Bluetooth is selected for music, HSD no longer requests a music channel from the CarPlay receiver. Wired CarLife sends the player a pause command as soon as the cable is unplugged.
+8. **More responsive maps**. On the wired CarLife bench, median touch-to-picture latency under load was 147 ms after this change, down from 161 ms in the same test. In WeLink, bench tests covered pinch-to-zoom followed by a one-finger drag. Android Auto touch mapping at the edges of the display was also reworked.
+9. **CarbitLink after a call and at the start of a trip**. The car button sends projection to the background and keeps music playing. After a call the head unit can reopen the same desktop and resume touch. For Wi-Fi, select the car’s Bluetooth device. When it connects, HSD waits up to five minutes for EasyConnection and can request a hotspot on Android 16 and later if the system allows it.
+10. **Reopening wired CarbitLink**. If the head unit sends data from the previous USB connection on re-entry, HSD retries. A compatible receiver can now reopen the desktop from its own menu with the cable still plugged in.
+11. **Picture recovery in CarLife**. After a video restart, the receiver gets a fresh full frame even on a stationary map. A wireless CarLife receiver can also reopen an interrupted channel.
+12. **Wireless CarPlay at the start of a trip**. HSD can start connecting when the phone joins the car’s selected Bluetooth device. Enable this for your car. If Android restricts background launches, tap the notification to continue.
+13. **Picture size and interface scale**. The HSD home screen shows the actual CarLife session resolution. You can adjust resolution, interface scale, frame rate and bitrate manually. This lets you change button size independently of picture sharpness, within the head unit’s capabilities.
+14. **Directions and music on the instrument cluster**. Android Auto now handles the distance to a manoeuvre alongside the arrow and street name more reliably. CarLife handles cover art that arrives shortly after the track title. The car determines what its instrument cluster or head-up display can show.
+15. **DriveDeck widgets and navigation**. Tapping the cover opens the active player when that option is enabled. NavRadio+ can show the station name, frequency and logo. Pinned dock apps launch correctly, the optional Home button works inside the dialer, and you can hide the car button.
+16. **Keyboard and phone-screen dimming**. DriveDeck’s Display → Keyboard setting lets you choose the phone or head unit for text entry. Reconnect to apply the change. The head unit’s on-screen keyboard requires support from Android. Touching the head unit now preserves HSD’s phone-screen dimming.
+17. **Installing Android Auto certificates**. HSD has one place to install an issued ZIP manually. Android Auto mode lists installed profiles and shows which is selected. You can inspect certificate details and assign a separate profile to each head unit.
+18. **First-time setup and settings**. The wizard guides you through desktop selection, permissions and activation. Wi-Fi activation can reuse an existing pairing. Picture, audio, phone screen and maintenance settings now include short explanations below their names.
+19. **Speed warnings and OBD in DriveDeck**. Choose how far over the speed limit you can go before a warning sounds, from 0 to 20 km/h. If another DriveDeck process is using the OBD adapter, the app explains the wait and retries.
+20. **Less repeated work on the phone**. HSD processes fewer duplicate frames when the picture is still and makes fewer temporary copies of audio and video data. In-car battery life was not measured.
 
-1. Install **both APKs from the same release** on your phone. [Download HSD and DriveDeck](https://github.com/SadykovIV/HSD/releases/latest)
-2. Open HSD, select **DriveDeck** and follow the setup wizard to grant permissions and activate HSD.
-3. On the home screen, open **Connection type** and select a mode your head unit supports. Open that mode on the head unit. For a wired connection, use its projection USB port. If Android asks which app should handle wired Android Auto or CarLife, choose **HSD**.
-4. For wired HiCar, select **Huawei HiCar · USB (NCM)**, save your choice, plug in the cable and tap **Connect**.
+<a id="connections"></a>
 
-Each saved Android Auto head unit can use its own installed certificate. Reopen the certificate list to change the assignment.
+## Head unit compatibility
 
-**Upgrading from 0.7.3 or earlier?** Uninstall the old HSD and DriveDeck-HSD before installing the new versions. The signing key has changed. Uninstalling clears local settings, and you will need to activate HSD again.
+| Head unit mode | How to connect | What to know |
+| --- | --- | --- |
+| Android Auto (AA) | USB, Bluetooth + Wi-Fi, or LAN | Requires a valid AA certificate. The phone or the head unit can act as the LAN server. |
+| Baidu CarLife | USB or Wi-Fi | Choose the wired or wireless CarLife mode offered by your head unit. |
+| Apple CarPlay | Bluetooth + Wi-Fi or USB | Wired mode is experimental. It requires the correct USB role, iAP2 and USB NCM networking on the head unit. |
+| WeLink (Mapbar A1) | USB | Requires a compatible WeLink receiver. |
+| CarbitLink / EasyConnection | USB or Wi-Fi | Experimental. Join the head unit’s Wi-Fi or use the phone’s hotspot. Music uses the car’s Bluetooth connection. |
+| Huawei HiCar | Bluetooth + Wi-Fi or USB (NCM) | Experimental. Wired use requires a head unit that supports USB NCM. |
+| ICCOA Carlink | USB, car hotspot or Wi-Fi Direct | Experimental. Wired video and touch, and wireless discovery and pairing, were verified on the bench. Wireless projection on a factory head unit still needs confirmation. |
 
-[Changes in 0.8.4 and compatibility notes](https://github.com/SadykovIV/HSD/releases/tag/v0.8.4) · [All releases and APKs](https://github.com/SadykovIV/HSD/releases)
+<a id="setup"></a>
 
-## Credits
+## First connection
+
+1. Install HSD and DriveDeck-HSD from this release on the phone.
+2. Open HSD, choose a desktop and follow the wizard. It requests permissions in order and shows the available activation methods.
+3. Under **Connection type**, select a mode offered by your head unit. For Android Auto, install and select a valid AA certificate.
+4. Open the matching mode on the head unit. Use its projection USB port for wired connections, or follow the selected mode’s wireless setup. Tap **Connect**. If Android asks which app should open the USB device, select **HSD**.
+
+**Updating an existing install.** Install both official APKs over the installed apps. Packages signed with the same key retain their settings. If Android reports a signature conflict, save any data you need before removing the old install. Run activation again after the update if HSD prompts you.
+
+On Android 11–12, touch control while the phone is locked depends on its firmware and the app. The **Phone screen → Dim screen** option is available. Players that need Android’s permission to share audio can use **Settings → Audio → Share app audio** for the current session.
+
+## Community and credits
 
 Thanks to YegorkaPomidorka for the Baidu CarLife implementation, RotkivKiv for DriveDeck, and the Android Auto and CarPlay contributors.
+
+[4PDA discussion](https://4pda.to/forum/index.php?showtopic=1129468) · [Telegram community](https://t.me/+H2QUrHMGm-g3ODhi) · [Support the project](https://pay.cloudtips.ru/p/41f6ecdd)
